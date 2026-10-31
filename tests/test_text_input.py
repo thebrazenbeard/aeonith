@@ -29,14 +29,15 @@ class TextInputTests(unittest.TestCase):
         submitted = "Écho\nA bell…\n"
         completed = subprocess.run(
             [sys.executable, str(MODULE_PATH), "--input", "-", "--title", "L’écho"],
-            input=submitted,
-            text=True,
+            # Supplying bytes avoids Windows text-mode pipe translation of
+            # LF into CRLF, and avoids a locale-specific input encoding.
+            input=submitted.encode("utf-8"),
             capture_output=True,
             check=False,
             timeout=10,
         )
         self.assertEqual(completed.returncode, 0, completed.stderr)
-        obj = json.loads(completed.stdout)
+        obj = json.loads(completed.stdout.decode("utf-8"))
         self.assertEqual(obj["work"]["text"], submitted)
         self.assertEqual(obj["work"]["title"], "L’écho")
 

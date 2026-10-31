@@ -118,6 +118,18 @@ For longer writing, `python3 -m aeonith.longform --input book.md` plans bounded 
 
 Review output is **advice**, not an authoritative rewrite or a command to change manuscripts, lore, memory, or other ecosystem state. The invocation envelope's `request_id` is a correlation value, not consent, authentication, durable replay protection, or provider attestation.
 
+## Checkpoint-scoped source planning (v0.4 candidate)
+
+For manuscripts containing a single author-controlled reading marker such as `[ps]`, Aeonith can plan **only the text after that marker** without exposing previous prose in segment requests:
+
+```bash
+python3 -m aeonith.checkpoint --input draft.md --marker "[ps]" > private_plan.json
+```
+
+This metadata-only command never invokes a model or modifies the manuscript. The Python API verifies the whole-source fingerprint again before returning a requested excerpt. See [checkpoint boundary documentation](docs/CHECKPOINT_BOUNDARIES.md) for scope, limitations, and disclosure controls. This does not mean that the model has examined earlier text or that generated reviews will automatically be spoiler-safe.
+
+The optional bounded long-form batch runner (docs/BOOK_REVIEW_BATCH.md) invokes an explicitly supplied provider for each canonical excerpt and reports attempted versus completed source coverage. It never synthesizes whole-book literary verdicts and makes no model call without a provider.
+
 ## Current boundaries
 
 The original GPT has broader configurations than this repository implements. The repository currently **does not** provide:

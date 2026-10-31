@@ -22,6 +22,19 @@ def collected(text, plan):
 
 
 class PlanningTests(unittest.TestCase):
+
+    def test_canto_headings_are_source_sections_without_title_disclosure(self):
+        source = (
+            "Canto I: A private revelation\nAn opening scene.\n\n"
+            "Canto II: The Return\nA later scene.\n"
+        )
+        plan = plan_longform(source)
+        self.assertEqual(len(plan["sections"]), 2)
+        self.assertEqual(plan["sections"][0]["label"], "Section 1")
+        self.assertEqual(plan["sections"][1]["label"], "Section 2")
+        self.assertEqual(collected(source, plan), source)
+        self.assertNotIn("private revelation", str(plan).lower())
+
     def test_plan_metadata_never_contains_raw_headings(self):
         canary = "SECRET_CANARY_MEDICAL_NOTE_739"
         plan = plan_longform(f"# {canary}\nA paragraph.", max_chunk_chars=40)
