@@ -2,7 +2,7 @@ name: Aeonith contract tests
 
 on:
   push:
-    branches: [main, "build/**"]
+    branches: [main, "build/**", "deploy/**"]
   pull_request:
 
 jobs:
@@ -19,6 +19,8 @@ jobs:
           python-version: ${{ matrix.python-version }}
       - name: Run contract and adversarial tests
         run: python -m unittest discover -s tests -v
+      - name: Require service and browser security gates
+        run: python -m unittest tests.test_live_service tests.test_service_security tests.test_web_ui_contract -v
       - name: Validate JSON schemas
         run: |
           python -m json.tool aeonith/schemas/capability-envelope-v1.schema.json > /dev/null
@@ -27,12 +29,20 @@ jobs:
           python -m json.tool evaluation/original_cases.json > /dev/null
           python -m json.tool evaluation/human_study_bundle.schema.json > /dev/null
           python -m json.tool evaluation/study_annotation.schema.json > /dev/null
+          python -m json.tool vercel.json > /dev/null
       - name: Compile source
-        run: python -m compileall -q aeonith capability_adapter.py evaluation integrations
+        run: python -m compileall -q aeonith api scripts capability_adapter.py evaluation integrations
+      - name: Validate HTTP entrypoints
+        run: |
+          python -c "from api.review import handler as review; from api.health import handler as health; assert callable(review) and callable(health)"
+      - name: Parse browser JavaScript
+        run: node --check public/app.js
       - name: Build wheel and smoke-test installed package
         run: |
           python -m pip wheel --no-deps . --wheel-dir wheelhouse
-          python -m pip install --no-deps --force-reinstall wheelhouse/aeonith-0.3.0-py3-none-any.whl
+          WHEEL_PATH="$(python -c 'import pathlib, tomllib; v=tomllib.loads(pathlib.Path("pyproject.toml").read_text(encoding="utf-8"))["project"]["version"]; print(pathlib.Path("wheelhouse") / f"aeonith-{v}-py3-none-any.whl")')"
+          test -f "$WHEEL_PATH"
+          python -m pip install --no-deps --force-reinstall "$WHEEL_PATH"
           python evaluation/quality_eval.py --help
           cd "$RUNNER_TEMP"
           python -c "import aeonith; assert 'site-packages' in aeonith.__file__, aeonith.__file__"
