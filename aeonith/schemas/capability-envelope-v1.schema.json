@@ -1,0 +1,17 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+    "$id": "https://github.com/thebrazenbeard/aeonith/blob/main/aeonith/schemas/capability-envelope-v1.schema.json",
+  "title": "Aeonith review capability invocation",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["kind", "request_id", "capability", "payload"],
+  "properties": {
+    "kind": {"const": "capability.invoke.v1"},
+    "request_id": {"type": "string", "minLength": 1, "maxLength": 128, "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$"},
+    "capability": {"const": "aeonith.review.v1"},
+    "payload": {
+      "type": "object",
+      "description": "Request accepted by aeonith.core.critique; validation remains authoritative in core."
+    }
+  }
+}
