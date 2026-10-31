@@ -1,0 +1,24 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "aeonith"
+version = "0.1.0"
+description = "Evidence-aware, provider-neutral literary critique engine"
+readme = "README.md"
+requires-python = ">=3.11"
+dependencies = []
+
+[project.scripts]
+aeonith = "aeonith.__main__:main"
+
+[tool.setuptools]
+py-modules = ["capability_adapter"]
+
+[tool.setuptools.packages.find]
+where = ["."]
+include = ["aeonith*"]
+
+[tool.setuptools.package-data]
+aeonith = ["schemas/*.json"]
