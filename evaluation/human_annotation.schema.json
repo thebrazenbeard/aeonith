@@ -1,0 +1,38 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/thebrazenbeard/aeonith/evaluation/human_annotation.schema.json",
+  "title": "Aeonith blinded literary critique annotation",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schema_version", "pair_id", "reviewer_pseudonym", "dimensions", "preference", "rationale"],
+  "properties": {
+    "schema_version": {"const": "aeonith.human_annotation.v1"},
+    "pair_id": {"type": "string", "minLength": 1},
+    "reviewer_pseudonym": {"type": "string", "minLength": 1, "maxLength": 80},
+    "dimensions": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["textual_accuracy", "lens_distinctness", "critical_depth", "calibration", "actionability", "synthesis"],
+      "properties": {
+        "textual_accuracy": {"$ref": "#/$defs/scores"},
+        "lens_distinctness": {"$ref": "#/$defs/scores"},
+        "critical_depth": {"$ref": "#/$defs/scores"},
+        "calibration": {"$ref": "#/$defs/scores"},
+        "actionability": {"$ref": "#/$defs/scores"},
+        "synthesis": {"$ref": "#/$defs/scores"}
+      }
+    },
+    "preference": {"enum": ["A", "B", "tie", "incomparable"]},
+    "rationale": {"type": "string", "minLength": 20, "maxLength": 4000}
+  },
+  "$defs": {
+    "scores": {
+      "type": "object", "additionalProperties": false,
+      "required": ["A", "B"],
+      "properties": {
+        "A": {"type": "integer", "enum": [0, 1, 2]},
+        "B": {"type": "integer", "enum": [0, 1, 2]}
+      }
+    }
+  }
+}

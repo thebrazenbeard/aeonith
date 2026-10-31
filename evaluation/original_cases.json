@@ -1,0 +1,42 @@
+{
+  "schema_version": "aeonith.original_cases.v1",
+  "license_status": "OWNER_DECISION_PENDING; newly authored examples, no published redistribution grant",
+  "cases": [
+    {
+      "id": "compass-metaphor",
+      "genre": "microfiction",
+      "work": "At dawn, Mara put the broken compass on the table. 'North,' she said, but the needle pointed home.",
+      "phenomena_for_human_review": ["symbolic ambiguity", "direction versus belonging", "genre-specific restraint"],
+      "ambiguities": ["Whether the compass literally points to a home is unresolved"]
+    },
+    {
+      "id": "borrowed-weather",
+      "genre": "poetry",
+      "work": "Rain ran across the red roof. / I called it borrowed weather; / by noon the street had paid it back.",
+      "phenomena_for_human_review": ["alliteration", "metaphor", "economic lexical field"],
+      "ambiguities": ["The implied debtor is not specified"]
+    },
+    {
+      "id": "night-ledger",
+      "genre": "dialogue",
+      "work": "'Who changed the ledger?' Jo asked. 'Nobody,' Ari said, closing the ink bottle. Outside, the bell rang twice.",
+      "phenomena_for_human_review": ["subtext", "possibly unreliable speech", "indirect characterization"],
+      "ambiguities": ["Ink bottle handling is suspicious but not proof of wrongdoing"]
+    },
+    {
+      "id": "one-line-limits",
+      "genre": "fragment",
+      "work": "The door stayed open.",
+      "phenomena_for_human_review": ["epistemic restraint", "insufficient information for historical context", "multiple possible meanings"],
+      "ambiguities": ["No actor, period, or setting is established"]
+    },
+    {
+      "id": "unreliable-calendar",
+      "genre": "microfiction",
+      "work": "The town calendar marked three Thursdays in a row. Neri crossed out the middle one and still missed the train.",
+      "phenomena_for_human_review": ["temporal anomaly", "narrative causality", "literal versus speculative reading"],
+      "ambiguities": ["The calendar may be mistaken, symbolic, or part of a fantastical world"]
+    }
+  ],
+  "ground_truth_policy": "Tags indicate plausible questions, not correct required interpretations; human annotators adjudicate."
+}

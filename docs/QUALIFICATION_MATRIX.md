@@ -20,7 +20,11 @@ Source: owner-authenticated inspection of the existing Aeonith GPT editor on 202
 | Evidence types are not laundered | `DOC`, `MODEL_REVIEW`, `TEST` never silently become `FORMAL_VERIFY` or `RUNTIME_PROBE` | Deterministic audit tests and provenance review | Pass for tested input audit; source verification not performed |
 | Model unavailable does not fabricate criticism | Null assessment, empty generated critique/synthesis, structured error | `test_core_contract.py` with no provider | Pass |
 | Invalid provider output rejected | Missing/duplicate lens, fabricated quote/reference, invalid schema rejected | Provider stub contract tests | Pass for tested malformed outputs |
-| New design does not claim GPT parity without real checks | README and status identify in-scope engine, missing UI/tools/knowledge, tested provider(s) | Source/README review + end-to-end runtime test | Pending integration |
+| New design does not claim GPT parity without real checks | README and status identify in-scope engine, missing UI/tools/knowledge and untested live provider(s) | Source/README review + local no-provider pipeline | Pass for truthful source-only boundary; real model/GPT parity remains pending |
+| Readable standalone manuscript workflow | UTF-8 text/Markdown preparation, explicit model review, escaped Markdown report | Converter/renderer tests + wheel smoke | Pass locally; no web service is deployed |
+| Quote source offsets | Exact Unicode offsets, duplicate occurrence ambiguity, fingerprint | Sidecar tests, repeated-source cache regression | Pass for literal location only; interpretations unverified |
+| Blinded evaluation process | Stable candidate IDs despite input order, separated private key, human rubric | Adversarial A/B and file-mode tests | Pass for tested source tooling; no human pilot completed |
+| Host authorization | Host-owned identity, consent, durable replay and provider metering | Source-only port + threat tests | **Not deployed; no actual authority or trust anchor** |
 
 ## Quality rubric for future human or independent-model review
 
@@ -44,4 +48,4 @@ Run from the repository root:
 python -m unittest discover -s tests -v
 ```
 
-Last integrated execution (2026-10-31): **75/75 tests passed** on the assembled public source tree, Python 3.12, exit 0. This included core, independent adversarial, capability, and loopback HTTP transport tests. The harness uses Python standard library only and deterministic fixtures. It proves structural/failure invariants, not actual GPT equivalence or model output quality. The literary oracle strings in fixtures are reviewer instructions, not automated expected completions. No uploaded GPT knowledge-file content is included.
+Latest v0.2 candidate execution (2026-10-31): **156/156 tests passed** on the assembled source tree, Python 3.12, exit 0. The earlier merged v0.1 release had 75/75. The expanded candidate includes core contracts, local HTTP transport, evidence offsets, Markdown/plain-text UX, offline evaluation, and a conditional host-boundary prototype. Tests use the Python standard library and deterministic fixtures, proving tested structural/failure invariants—not actual GPT equivalence, literary quality, host authentication or paid model compatibility. The literary fixture tags indicate questions for human interpretation, not a ground-truth oracle. No private GPT knowledge-file content is included.
