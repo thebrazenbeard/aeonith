@@ -37,6 +37,11 @@ python evaluation/quality_eval.py blind \
   --seed experiment-001
 python evaluation/quality_eval.py validate-annotation \
   --pair blinded_pair.json --annotation human_annotation.json
+python evaluation/quality_eval.py bind-annotation \
+  --pair blinded_pair.json --annotation human_annotation.json \
+  --out private_bound_annotation.json
+python evaluation/quality_eval.py aggregate \
+  --study local_human_study.json --out private_study_summary.json
 python evaluation/quality_eval.py manifest \
   --request request.json --review model_a.json \
   --provider-id provider-name --model-id model-version \
@@ -59,6 +64,61 @@ reproducibility control, not a secret or proof of randomness.
 `manifest` also creates a new file without overwriting. Its parameter JSON
 should contain only non-secret scalar settings such as `temperature` or
 `max_output_tokens`; never credentials, manuscript text, or raw prompts.
+`aggregate --out` likewise creates an owner-only (0600 on POSIX), exclusive
+summary file. Directing stdout with shell `>` may instead create a
+world-readable file under the shell's umask.
+
+### Offline human-study aggregation
+
+`aggregate` consumes one private JSON study bundle:
+
+```json
+{
+  "schema_version": "aeonith.human_study_bundle.v1",
+  "records": [
+    {
+      "pair": {"schema_version": "aeonith.blind_pair.v1", "pair_id": "...",
+               "request": {}, "A": {}, "B": {}, "directions": "..."},
+      "annotations": [{
+        "schema_version": "aeonith.study_annotation.v1",
+        "display_sha256": "<sha256 of canonical A/B display JSON>",
+        "annotation": {"schema_version": "aeonith.human_annotation.v1",
+                       "pair_id": "...", "reviewer_pseudonym": "...",
+                       "dimensions": {}, "preference": "tie", "rationale": "..."}
+      }]
+    }
+  ]
+}
+```
+
+The example shows the shape only; use the complete `blind` display and
+`human_annotation.schema.json`-validated annotations in a real bundle.
+`human_study_bundle.schema.json` documents the outer structure; the Python
+aggregator also rejects duplicate pair IDs, duplicate reviewer pseudonyms
+within a pair, mismatched annotations, and malformed ratings. The
+`study_annotation.schema.json` receipt is required: generate it with
+`bind-annotation` at annotation collection time, using **the same A/B display
+JSON content** the reviewer was given. The hash covers canonicalized JSON
+content; it does not prove which presentation bytes were rendered or viewed.
+Two opposite A/B orientations can share a `pair_id`
+because the ID identifies the underlying comparison, so the display SHA-256
+is necessary to catch accidental annotation mixing across orientations.
+This content hash is not a signed viewing receipt; the study operator
+must still preserve a trustworthy association between a reviewer's
+record and the screen they saw.
+
+The result contains per-pair rating **sums and counts**, preference counts,
+and a simple disagreement indicator when at least two comparable judgments
+exist. It omits manuscript text, candidate identities, reviewer pseudonyms,
+and free-form rationales. Records are sorted by pair ID so input-file order
+cannot change the output. An empty study reports `no_data` (CLI exit 3).
+Pair IDs and display hashes are still linkable content fingerprints, so keep
+even the summary private if membership or equality of a sensitive work matters.
+No confidence intervals, statistical significance, model ranking, or truth
+claims are computed. **A/B are presentation positions, not candidate IDs**;
+never treat more `A` votes as proof that a model won. The operator remains
+responsible for author/reviewer permission, genuine independence, and keeping
+the raw study bundle and separate identity key in a restricted location.
 
 The original cases in `original_cases.json` are newly authored, short texts
 created for this benchmark, not copies of third-party literary works. The
@@ -124,5 +184,6 @@ a public repository or telemetry system.
   avoid correlated order effects and test both orientations.
 - Manifest hashes prove byte-level consistency for the provided JSON values,
   not provider authenticity or that a model performed the critique.
-- No scoring aggregation or statistical significance is automated: sample
-  selection and literary-validity choices belong to the research protocol.
+- Descriptive score totals, counts and basic disagreement are automated;
+  statistical significance, verified reviewer independence and literary
+  validity are **not**. Sample selection remains a human research decision.

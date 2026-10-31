@@ -14,11 +14,16 @@ from evaluation.quality_eval import (
     AUDIT_SCHEMA,
     CANONICAL_LENSES,
     DIMENSIONS,
+    STUDY_SCHEMA,
+    STUDY_SUMMARY_SCHEMA,
+    STUDY_ANNOTATION_SCHEMA,
     PAIR_SCHEMA,
     audit_review,
     build_blind_pair,
+    bind_annotation_to_display,
     digest,
     make_manifest,
+    summarize_study,
     validate_annotation,
 )
 
@@ -160,8 +165,13 @@ class AuditTests(unittest.TestCase):
 
     def test_challenge_text_over_limit_is_rejected(self):
         result = completed()
-        result["challenges"] = [{"text": "A" * 2001, "support": []}]
+        result["challenges"] = [{"text": "A" * 3001, "support": []}]
         self.assertEqual(audit_review(request(), result)["structural_status"], "fail")
+
+    def test_challenge_text_matches_core_three_thousand_character_limit(self):
+        result = completed()
+        result["challenges"] = [{"text": "A" * 3000, "support": []}]
+        self.assertEqual(audit_review(request(), result)["structural_status"], "pass")
 
     def test_insufficient_text_requires_explanation_not_fabrication(self):
         result = completed()
@@ -184,6 +194,19 @@ class AuditTests(unittest.TestCase):
         result = completed()
         result["assessment"] = {"verified_by": "imaginary-authority"}
         self.assertEqual(audit_review(request(), result)["structural_status"], "fail")
+
+    def test_nonproposition_assessment_is_not_blinded_as_a_verdict(self):
+        result = completed()
+        result["assessment"] = "SURVIVES"
+        self.assertEqual(audit_review(request(), result)["structural_status"], "fail")
+        with self.assertRaises(ValueError):
+            build_blind_pair(request(), result, completed(), "A", "B")
+
+    def test_wrong_request_schema_is_rejected_from_study(self):
+        req = request()
+        req["schema_version"] = "forged.v9"
+        with self.assertRaises(ValueError):
+            audit_review(req, completed())
 
 
 class BlindAnnotationTests(unittest.TestCase):
@@ -321,6 +344,171 @@ class CommandLineTests(unittest.TestCase):
             written = json.loads((root / "run_manifest.json").read_text(encoding="utf-8"))
             self.assertEqual(written["input_sha256"], digest(request()))
             self.assertNotIn(WORK, json.dumps(written))
+
+
+class StudyAggregationTests(unittest.TestCase):
+    def setUp(self):
+        self.first = completed()
+        self.second = copy.deepcopy(self.first)
+        self.second["synthesis"] = "A second interpretation offers a different consequence."
+        self.pair, self.key = build_blind_pair(request(), self.first, self.second,
+                                              "provider-A", "provider-B", seed="pilot")
+
+    def bundle(self, annotations, *, pair=None):
+        chosen = self.pair if pair is None else pair
+        return {
+            "schema_version": STUDY_SCHEMA,
+            "records": [{"pair": chosen,
+                         "annotations": [bind_annotation_to_display(a, chosen) for a in annotations]}],
+        }
+
+    def test_empty_study_or_empty_annotations_is_no_data_not_failure_or_winner(self):
+        for study in ({"schema_version": STUDY_SCHEMA, "records": []},
+                      self.bundle([])):
+            summary = summarize_study(study)
+            self.assertEqual(summary["schema_version"], STUDY_SUMMARY_SCHEMA)
+            self.assertEqual(summary["status"], "no_data")
+            self.assertEqual(summary["total_annotations"], 0)
+            self.assertNotIn("winner", json.dumps(summary).casefold())
+
+    def test_dissenting_raters_report_counts_disagreement_without_semantic_truth(self):
+        a = valid_annotation(self.pair)
+        a["reviewer_pseudonym"] = "rater-one"
+        a["preference"] = "A"
+        b = copy.deepcopy(a)
+        b["reviewer_pseudonym"] = "rater-two"
+        b["preference"] = "B"
+        b["dimensions"]["critical_depth"] = {"A": 2, "B": 0}
+        summary = summarize_study(self.bundle([a, b]))
+        record = summary["pair_summaries"][0]
+        self.assertEqual(summary["status"], "summarized")
+        self.assertEqual(summary["total_annotations"], 2)
+        self.assertEqual(record["preference_counts"], {"A": 1, "B": 1, "tie": 0, "incomparable": 0})
+        self.assertIs(record["rater_disagreement"], True)
+        self.assertEqual(record["dimension_scores"]["critical_depth"]["A"]["sum"], 3)
+        self.assertEqual(record["dimension_scores"]["critical_depth"]["B"]["sum"], 2)
+        self.assertEqual(record["dimension_scores"]["critical_depth"]["A"]["count"], 2)
+        serialized = json.dumps(summary)
+        self.assertNotIn(WORK, serialized)
+        self.assertNotIn("rater-one", serialized)
+        self.assertNotIn("rater-two", serialized)
+        self.assertNotIn("rationale", serialized)
+        self.assertNotIn("provider-A", serialized)
+        self.assertEqual(summary["semantic_quality"], "UNASSESSED")
+
+    def test_incomparables_and_single_rater_do_not_create_false_agreement(self):
+        a = valid_annotation(self.pair)
+        a["preference"] = "incomparable"
+        record = summarize_study(self.bundle([a]))["pair_summaries"][0]
+        self.assertEqual(record["comparable_preference_count"], 0)
+        self.assertIsNone(record["rater_disagreement"])
+        self.assertEqual(record["preference_counts"]["incomparable"], 1)
+
+    def test_duplicates_or_invalid_annotation_are_rejected(self):
+        a = valid_annotation(self.pair)
+        b = copy.deepcopy(a)
+        b["reviewer_pseudonym"] = a["reviewer_pseudonym"].upper()
+        with self.assertRaises(ValueError):
+            summarize_study(self.bundle([a, b]))
+        bad = copy.deepcopy(a)
+        bad["dimensions"]["synthesis"]["A"] = True
+        with self.assertRaises(ValueError):
+            summarize_study(self.bundle([bad]))
+
+    def test_duplicate_pair_ids_and_malformed_pair_are_rejected(self):
+        a = valid_annotation(self.pair)
+        study = self.bundle([a])
+        study["records"].append(copy.deepcopy(study["records"][0]))
+        with self.assertRaises(ValueError):
+            summarize_study(study)
+        corrupted = copy.deepcopy(self.pair)
+        corrupted["schema_version"] = "fake"
+        with self.assertRaises(ValueError):
+            summarize_study(self.bundle([a], pair=corrupted))
+
+    def test_mixed_orientation_annotation_receipt_is_rejected_even_with_same_pair_id(self):
+        a = valid_annotation(self.pair)
+        bound = bind_annotation_to_display(a, self.pair)
+        swapped_display = None
+        for i in range(30):
+            other, _ = build_blind_pair(request(), self.first, self.second,
+                                         "provider-A", "provider-B", seed=f"flip-{i}")
+            if other["A"] != self.pair["A"]:
+                swapped_display = other
+                break
+        self.assertIsNotNone(swapped_display)
+        self.assertEqual(swapped_display["pair_id"], self.pair["pair_id"])
+        self.assertNotEqual(bound["display_sha256"], digest(swapped_display))
+        study = {"schema_version": STUDY_SCHEMA,
+                 "records": [{"pair": swapped_display, "annotations": [bound]}]}
+        with self.assertRaisesRegex(ValueError, "bound to this exact"):
+            summarize_study(study)
+
+    def test_bound_receipt_is_strict_and_preserves_raw_rubric_only_in_private_input(self):
+        a = valid_annotation(self.pair)
+        bound = bind_annotation_to_display(a, self.pair)
+        self.assertEqual(bound["schema_version"], STUDY_ANNOTATION_SCHEMA)
+        self.assertEqual(bound["display_sha256"], digest(self.pair))
+        self.assertEqual(bound["annotation"], a)
+        a["preference"] = "A"
+        self.assertNotEqual(bound["annotation"]["preference"], a["preference"])
+        corrupted = copy.deepcopy(bound)
+        corrupted["signature"] = "forged-verification"
+        study = {"schema_version": STUDY_SCHEMA,
+                 "records": [{"pair": self.pair, "annotations": [corrupted]}]}
+        with self.assertRaises(ValueError):
+            summarize_study(study)
+
+    def test_record_order_does_not_affect_summary(self):
+        another_request = request(["stylistic"])
+        other_first = completed(["stylistic"])
+        other_second = copy.deepcopy(other_first)
+        other_second["synthesis"] = "A changed second summary."
+        other_pair, _ = build_blind_pair(another_request, other_first, other_second,
+                                         "provider-A", "provider-B", seed="another")
+        p1 = {"pair": self.pair, "annotations": [bind_annotation_to_display(
+            valid_annotation(self.pair), self.pair)]}
+        p2 = {"pair": other_pair, "annotations": [bind_annotation_to_display(
+            valid_annotation(other_pair), other_pair)]}
+        first = summarize_study({"schema_version": STUDY_SCHEMA, "records": [p1, p2]})
+        swapped = summarize_study({"schema_version": STUDY_SCHEMA, "records": [p2, p1]})
+        self.assertEqual(first, swapped)
+
+    def test_cli_aggregate_only_emits_summary_not_manuscript(self):
+        with tempfile.TemporaryDirectory() as path:
+            root = Path(path)
+            (root / "pair.json").write_text(json.dumps(self.pair), encoding="utf-8")
+            (root / "annotation.json").write_text(
+                json.dumps(valid_annotation(self.pair)), encoding="utf-8")
+            script = Path(__file__).resolve().parents[1] / "evaluation" / "quality_eval.py"
+            bind = subprocess.run([sys.executable, str(script), "bind-annotation",
+                                   "--pair", str(root / "pair.json"),
+                                   "--annotation", str(root / "annotation.json"),
+                                   "--out", str(root / "bound.json")],
+                                  capture_output=True, text=True, check=False)
+            self.assertEqual(bind.returncode, 0, bind.stderr)
+            bound = json.loads((root / "bound.json").read_text(encoding="utf-8"))
+            self.assertEqual(bound["display_sha256"], digest(self.pair))
+            if os.name == "posix":
+                self.assertEqual((root / "bound.json").stat().st_mode & 0o777, 0o600)
+            study = {"schema_version": STUDY_SCHEMA,
+                     "records": [{"pair": self.pair, "annotations": [bound]}]}
+            (root / "study.json").write_text(json.dumps(study), encoding="utf-8")
+            result = subprocess.run([sys.executable, str(script), "aggregate",
+                                     "--study", str(root / "study.json")],
+                                    capture_output=True, text=True, check=False)
+            self.assertEqual(result.returncode, 0, result.stderr)
+            self.assertEqual(json.loads(result.stdout)["total_annotations"], 1)
+            self.assertNotIn(WORK, result.stdout)
+            out = root / "summary.json"
+            saved = subprocess.run([sys.executable, str(script), "aggregate",
+                                    "--study", str(root / "study.json"),
+                                    "--out", str(out)],
+                                   capture_output=True, text=True, check=False)
+            self.assertEqual(saved.returncode, 0, saved.stderr)
+            self.assertEqual(json.loads(out.read_text(encoding="utf-8"))["total_annotations"], 1)
+            if os.name == "posix":
+                self.assertEqual(out.stat().st_mode & 0o777, 0o600)
 
     def test_duplicate_json_keys_rejected(self):
         with tempfile.TemporaryDirectory() as path:
