@@ -46,8 +46,8 @@ timestamp, or semantic oracle.
 - Segment spans use half-open [start, end) offsets into the exact original
   Python string. Every code point belongs to exactly one segment, including
   whitespace. Source and excerpt digests bind the plan to a source revision.
-- Sections come from major Markdown headings (#/##), plain Chapter, Part,
-  Book, Section, Act, Prologue, and Epilogue markers. Heading text is suppressed
+- Sections come from major Markdown headings (#/##), plain Chapter, numbered
+  Canto (Roman or Arabic), Part, Book, Section, Act, Prologue, and Epilogue markers. Heading text is suppressed
   in exported metadata; neutral labels retain section indices.
 - Oversized sections split first at paragraph or line boundaries, then at a
   hard Unicode code-point boundary. Unreviewable whitespace-only spans are
