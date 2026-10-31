@@ -18,8 +18,60 @@ This repository is an **independently implemented, testable starting point**—n
 - Explicit error states when no provider is configured, a request is invalid, the provider fails, or the provider returns an invalid structure. No review is fabricated on those paths.
 - A bounded, read-only JSON invocation adapter for future ecosystem integration. This adapter does not supply host authorization or a deployed service.
 - The standalone `capability_adapter.py` stdin/stdout entrypoint has no model configuration and deliberately returns `provider_unavailable`; a host must inject an explicitly configured reviewer to obtain a real critique.
+- A **v0.4 live-service candidate** adds a static, browser-based manuscript editor and an explicitly authenticated HTTP API for a single configured provider. The checked-in service code and local tests do not by themselves prove a live host or model connection.
 
 The tests verify these contracts with local fixtures and controlled providers. **Literary quality, original-GPT parity, live-provider compatibility, and deployment have not been established by those tests.**
+
+## Browser and HTTP service (v0.4 candidate)
+
+The repository includes a dependency-free interface under `public/` and
+Python HTTP handlers under `api/`, intended for a protected Vercel deployment.
+The browser lets an author submit a passage, choose any of the fourteen lenses,
+and read a structured critique **only when an explicitly configured provider
+is available**. It keeps the service access token in the page's memory, not in
+browser storage. The UI is not an anonymous, free-to-use inference service.
+
+| Endpoint | Behavior |
+| --- | --- |
+| `GET /healthz` (also `/api/health`) | Unauthenticated liveness and a configuration-readiness flag; **not** proof that a model call will succeed |
+| `POST /v1/critique` (also `/api/review`) | JSON `aeonith.review.v1` request with server-held bearer authorization and explicit external-disclosure acknowledgment |
+
+The review endpoint rejects unsupported requests, unconfigured model services,
+oversized bodies, caller-selected model destinations, and unauthorized access.
+It never substitutes an invented critique for unavailable inference. Browser
+requests are same-origin; the service does not advertise cross-origin access.
+These properties are tested with deterministic fake providers; they are **not
+claims of a deployed security audit or qualified paid model**.
+
+The operator configures the server-side environment through the hosting
+platform's protected secrets and variables:
+
+| Variable | Role |
+| --- | --- |
+| `AEONITH_SERVICE_TOKEN` | Strong server-held bearer secret (at least 32 characters) required for private reviews |
+| `AEONITH_ENABLE_LIVE_REVIEWS` | Must be the literal `true` before any model dispatch is enabled |
+| `AEONITH_PROVIDER_KIND` | One server-selected adapter: `openai-responses` (default) or `openai-compatible` |
+| `AEONITH_PROVIDER_URL` | Trusted server-selected full provider endpoint, HTTPS when remote |
+| `AEONITH_PROVIDER_MODEL` | Explicit model identifier supported by that endpoint |
+| `AEONITH_PROVIDER_API_KEY` | Server-side credential, required by the service for remote endpoints; never enter it into the browser |
+| `AEONITH_STRUCTURED_OUTPUTS` | Optional `true` to request strict model output when supported |
+
+For remote reviews the browser requires a disclosure acknowledgment before
+sending the work. The server requires the corresponding
+`X-Aeonith-Disclosure: accepted` header. This is a request-specific notice,
+not an authenticated consent ledger or a guarantee about third-party
+retention. Do not submit confidential work until the provider's processing and
+retention policy is acceptable to the author.
+
+**Production deployment is gated separately.** A bearer token and local
+request-size limit do not enforce a durable rate or cost budget across
+serverless instances. Require hosting-level access controls, rate and model
+spend limits, exact-SHA checks, protected preview smoke tests, live-provider
+qualification and rollback readiness before making paid inference public.
+See [live-service release gates](docs/RELEASE_GATES.md) and the
+[deployment runbook](docs/SERVICE_DEPLOYMENT.md). Until a verified deployment receipt
+exists, these files describe a candidate service rather than an operational
+URL.
 
 ## Try the CLI
 
