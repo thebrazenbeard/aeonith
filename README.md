@@ -128,6 +128,8 @@ python3 -m aeonith.checkpoint --input draft.md --marker "[ps]" > private_plan.js
 
 This metadata-only command never invokes a model or modifies the manuscript. The Python API verifies the whole-source fingerprint again before returning a requested excerpt. See [checkpoint boundary documentation](docs/CHECKPOINT_BOUNDARIES.md) for scope, limitations, and disclosure controls. This does not mean that the model has examined earlier text or that generated reviews will automatically be spoiler-safe.
 
+The optional bounded long-form batch runner (docs/BOOK_REVIEW_BATCH.md) invokes an explicitly supplied provider for each canonical excerpt and reports attempted versus completed source coverage. It never synthesizes whole-book literary verdicts and makes no model call without a provider.
+
 ## Current boundaries
 
 The original GPT has broader configurations than this repository implements. The repository currently **does not** provide:

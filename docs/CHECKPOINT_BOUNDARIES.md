@@ -59,9 +59,9 @@ endpoint. A marker by itself is not consent for disclosure.
   enforce spoiler redaction and the author's reveal authority.
 - The current checkpoint mechanism is exact, literal, and case-sensitive. A
   second `[ps]`, even inside a quotation, is rejected rather than guessed at.
-- The current utility plans excerpts, but does not orchestrate all the provider
-  calls, compare chapter-level contradictions, apply revisions, or generate a
-  validated whole-book synthesis.
+- An opt-in batch runner now executes individual planned provider calls but
+  cannot infer cross-chapter contradictions, apply revisions, or produce a
+  validated whole-book synthesis. See BOOK_REVIEW_BATCH.md.
 - There is no claim of original GPT literary parity or live provider
   qualification from these deterministic tests.
 
