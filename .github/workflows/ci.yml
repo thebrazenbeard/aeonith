@@ -23,5 +23,18 @@ jobs:
         run: |
           python -m json.tool aeonith/schemas/capability-envelope-v1.schema.json > /dev/null
           python -m json.tool aeonith/schemas/capability-result-v1.schema.json > /dev/null
+          python -m json.tool evaluation/human_annotation.schema.json > /dev/null
+          python -m json.tool evaluation/original_cases.json > /dev/null
       - name: Compile source
-        run: python -m compileall -q aeonith capability_adapter.py
+        run: python -m compileall -q aeonith capability_adapter.py evaluation integrations
+      - name: Build wheel and smoke-test installed package
+        run: |
+          python -m pip wheel --no-deps . --wheel-dir wheelhouse
+          python -m pip install --no-deps --force-reinstall wheelhouse/aeonith-*.whl
+          python evaluation/quality_eval.py --help
+          cd "$RUNNER_TEMP"
+          python -c "import aeonith; assert 'site-packages' in aeonith.__file__, aeonith.__file__"
+          python -m aeonith --help
+          python -m aeonith.text_input --help
+          python -m aeonith.formatting --help
+          python -c "from aeonith.evidence import locate_quote; assert locate_quote('A🌊B', '🌊')['match_count'] == 1"

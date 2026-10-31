@@ -1,20 +1,22 @@
 # Aeonith source release gates
 
-_Documentation and hostile-release review, 2026-10-31. Evidence below reflects the assembled source tree tested locally by the integrator. It is not a claim of GitHub CI, live inference, or GPT equivalence._
+_v0.2.0 candidate update, 2026-10-31. Evidence below reflects the assembled source tree tested locally by the integrator. It is not a claim of GitHub CI, live inference, or GPT equivalence. The original v0.1.0 main release merged at `63f10ff049ddc33359a7960bc06b1f8c645880ba` with 75 passing tests._
 
 | Gate | Evidence available | Verdict / action |
 | --- | --- | --- |
-| Exact source and scope | Live target `main` initially only README at `caca5631525bdc19c526d44dc660688755d2101c`; authenticated GPT editor yielded sanitized 14-lens spec | Source candidate established; commit only sanitized spec |
+| Exact source and scope | v0.2 is based on the verified v0.1.0 main tree at `63f10ff`; the previously obtained 14-lens specification remains sanitized | Commit only public code, fixtures and docs; never owner-editor private capture |
 | No private GPT assets in public source | Candidate code and sanitized spec inspected; sensitive owner-editor capture retained outside the public repository | Do **not** commit private capture, secret trigger, attached knowledge assets, or original GPT export claims |
-| Basic executable behavior | Assembled tree, `python -m unittest discover -s tests -v`, Python 3.12: **75/75 PASS**, exit 0, including 16 core tests | Contract-test pass only; loopback HTTP tests required local socket permission |
-| Independent adversarial tests | 25 tests included in the 75-test integrated suite, plus independent W2 hostile retest of forged provider metadata and output amplification | Reproduced vulnerabilities closed for tested cases; live model behavior not verified |
-| JSON capability adapter | 24 tests included in integrated suite; actual core-to-adapter success/failure, forged failure provenance, invalid-output and nonfinite JSON rejection | Tested source contract, not host authorization or replay protection |
-| HTTP provider adapter | 10 loopback/mock transport tests included in integrated suite; redirects, errors and credential transport tested | No credentialed external model inference tested |
+| Basic executable behavior | v0.2 candidate, Python 3.12, `python -m unittest discover -s tests -q`: **156/156 PASS**, exit 0, including 75 previously passing v0.1 tests | Contract-test pass only; loopback HTTP tests required local socket permission |
+| Independent adversarial tests | Three additional parallel specialist review waves; replay-ID binding, expiry recheck, bool type, unexpected tool output, blinded assignment, identity metadata, file mode, performance regressions tested | Reproduced vulnerabilities closed for tested cases; no proof of absent defects |
+| JSON capability adapter | v0.1 typed contract and 24 adapter tests retained, plus source-only fail-closed host-boundary example | Neither an installed host adapter nor authorization/replay attestation |
+| HTTP provider adapter | Chat Completions + Responses adapters, parameter opt-ins, local mock transport, refusal, redirect and credential tests | No credentialed external model inference tested |
+| User workflow | UTF-8 manuscript converter, Markdown renderer, exact source-offset sidecar, isolated wheel smoke in Python 3.12 | No browser app or running network service |
+| Evaluation framework | Offline quote/reference audit, filler warnings, stable blind A/B mapping, restrictive output file mode, human annotation schema and hashed provenance manifest | No human ratings or semantic quality scores yet |
 | Provider runtime | HTTP adapter present, but no credentialed service probe or human-assessed critique verified | **Open: do not claim live/provider quality or deployment** |
 | Publication and rights | Public repo had no license; GPT knowledge files not established for redistribution | **Open: no third-party materials, no invented license** |
 | Review comparison | One owner GPT probe was conducted; it merged lens headings and miscounted words | **Open: no equivalence claim; paired held-out evaluations required** |
 | Ecosystem authority | Rezon/CCB reviewed for possible contract integration, no service bindings | **Open: source interface is not host-installed or authorized runtime** |
-| GitHub release | Feature branch prepared from initial `main`; local source tree has passed tests | Lead owns PR, exact-head CI, merge qualification and readback |
+| GitHub release | v0.2 feature branch prepared from `63f10ff`, local source passed 156 tests | **Pending** PR, exact-head Python 3.11/3.12/3.13 CI, merge qualification and readback |
 
 ## Hostile release challenges
 
@@ -28,8 +30,8 @@ _Documentation and hostile-release review, 2026-10-31. Evidence below reflects t
 
 ## Suggested next slices
 
-1. Integrate Python core, examples, tests, capability adapter, and public spec on one reviewable branch; validate with fresh final-tree tests and static checks.
-2. Evaluate real-provider HTTP request/response handling against a controlled local server before trying a paid provider.
-3. Run consented, blind, paired literary reviews across flash fiction, poetry, non-English creative text, and long-form excerpts; record limitations and model identity.
-4. Add source span offsets, counterreadings, and chapter-aware aggregation only with regression or human-review evidence that they improve findings.
-5. Seek Patrick's separate decision on license, GPT-to-plugin migration, and rights to each knowledge asset before any corresponding public release or state change.
+1. Complete exact-head GitHub CI and merge/readback for the v0.2 source release. Do not infer deployment from merge.
+2. Qualify an explicitly selected model with a non-sensitive consented manuscript and known privacy/cost budget before operational use.
+3. Run consented blind paired literary reviews across flash fiction, poetry, dialogue and ambiguous/long excerpts with human scoring, order swaps, provenance and limitations.
+4. Qualify chapter-aware aggregation and counterreading improvements with human usefulness measures; source offsets alone do not measure insight.
+5. Seek the repository owner's deliberate decision on license, GPT-to-plugin migration and rights to each knowledge asset before publishing or importing corresponding content.

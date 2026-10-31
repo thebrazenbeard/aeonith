@@ -6,12 +6,14 @@ This repository is an **independently implemented, testable starting point**—n
 
 ## What works
 
-- A Python 3.11+ standard-library package and JSON command-line interface.
+- A Python 3.11+ standard-library package, JSON review CLI, UTF-8 manuscript-to-request converter, and readable Markdown report renderer.
 - Fourteen separately identified critical lenses: psychological, literary/thematic, narrative structure, character development, historical/cultural, philosophical, genre-specific, stylistic, sociological, moral/ethical, symbolic, reader-response, linguistic, and comparative.
 - A synthesis field, concrete passage references, uncertainty/limitations, and an optional set of challenges.
 - An injected model-provider interface and a concrete HTTP adapter for compatible chat-completions endpoints.
-- The HTTP adapter currently sends `max_tokens` and `temperature`; use it with providers/models that accept those parameters. Reasoning-model parameter variants and the Responses API need separate adapters or explicit configuration work.
+- Explicitly selected HTTP adapters for compatible Chat Completions endpoints and OpenAI-style Responses endpoints. Chat Completions retains legacy `max_tokens`/`temperature` defaults for existing configurations and provides opt-in `max_completion_tokens`, omitted temperature, and JSON mode. The Responses adapter uses `max_output_tokens`, separates instructions from input, and defaults to JSON mode. **No real model/provider interoperability is claimed without a live qualification run.**
 - Validation that quoted passages occur in the submitted text and supplied evidence-reference IDs exist. **A matching quotation does not prove the interpretation is correct.**
+- Optional exact-quote location sidecar with Unicode character offsets, repeated-occurrence ambiguity, and manuscript fingerprints.
+- An offline quality-audit and blinded comparison harness with human-rating templates. Its structure/filler checks are **not** evidence of literary insight.
 - Explicit error states when no provider is configured, a request is invalid, the provider fails, or the provider returns an invalid structure. No review is fabricated on those paths.
 - A bounded, read-only JSON invocation adapter for future ecosystem integration. This adapter does not supply host authorization or a deployed service.
 - The standalone `capability_adapter.py` stdin/stdout entrypoint has no model configuration and deliberately returns `provider_unavailable`; a host must inject an explicitly configured reviewer to obtain a real critique.
@@ -41,6 +43,28 @@ python3 -m aeonith review \
 
 The URL above is a **placeholder**; substitute an actual endpoint and model you control or are authorized to use. The adapter requires HTTPS for remote endpoints and permits unauthenticated local HTTP for development. It does not follow HTTP redirects. Do not provide confidential manuscripts to a third-party provider without reviewing that provider's processing and retention terms.
 
+For an explicitly chosen model compatible with the OpenAI Responses API, select the other adapter:
+
+```bash
+export AEONITH_PROVIDER_URL="https://api.openai.com/v1/responses"
+export AEONITH_PROVIDER_MODEL="your-selected-compatible-model"
+# Set AEONITH_PROVIDER_API_KEY securely in your environment if required.
+python3 -m aeonith review --input examples/microfiction.json --provider openai-responses
+```
+
+This is a configuration example, **not a claim of a verified live API call**. For Chat Completions models that reject the legacy token/temperature fields, use `--token-field max_completion_tokens --omit-temperature` if that matches their documented parameters. Use `--json-mode` only for compatible chat endpoints; JSON mode does not prove schema compliance.
+
+To critique a plain UTF-8 manuscript and read the output as Markdown:
+
+```bash
+python3 -m aeonith.text_input --input draft.md --title "Draft" > request.json
+python3 -m aeonith review --input request.json --provider openai-responses > review.json
+python3 -m aeonith.formatting --input review.json --title "Draft" > review.md
+```
+
+The converter and renderer are local and make no provider calls; only the middle command does. Keep `request.json`, `review.json`, and `review.md` private if the work is private. If the review fails, the renderer reports an unavailable critique instead of inventing one and preserves a nonzero exit code.
+In shells configured with `set -e`, a failed review stops the three-step workflow before rendering; inspect the JSON error, or invoke the renderer separately for a readable failure explanation.
+
 You can also send a JSON request on stdin:
 
 ```bash
@@ -67,6 +91,8 @@ result = critique(request, provider=my_explicitly_configured_provider)
 The core requests one item per selected critical lens (`lens_reviews`), with `analysis`, `basis`, `support`, and `limitations`, plus an overarching `synthesis`. It supports a subset of the fourteen lenses for focused review, but a complete default request covers all fourteen. A lens may explicitly state insufficient textual evidence instead of inventing a finding.
 
 The core checks that each `support` quotation is an exact substring of the submitted work or that a referenced supplied-evidence ID exists. It does **not** verify the truth of an external citation, a model's account of history, inferred author intent, or the literary merit of an interpretation. `evidence_audit` labels supplied evidence as unverified unless independently checked elsewhere.
+
+Use `aeonith.evidence.audit_review_spans(work_text, completed_result)` for an optional, separate `aeonith.quote_locations.v1` index that locates exact quotes, records ambiguous duplicate occurrences, and fingerprints the source. It does not rewrite the v1 result or choose an intended passage where multiple matches exist. See [source-anchor behavior](docs/SOURCE_ANCHORS.md).
 
 Review output is **advice**, not an authoritative rewrite or a command to change manuscripts, lore, memory, or other ecosystem state. The invocation envelope's `request_id` is a correlation value, not consent, authentication, durable replay protection, or provider attestation.
 
@@ -95,11 +121,16 @@ python3 -m unittest discover -s tests -v
 
 Structural tests cover lens identity, invalid/unknown references, rejected fabricated quotations, missing-provider behavior, provider errors, and CLI failure status. Their pass does **not** establish semantic accuracy or subjective literary quality. A live-provider assessment should compare fixed, consented passages to the original GPT using human-rated textual fidelity, lens distinctness, useful critique, counterreadings, and stability across repeated samples. Record the exact model/provider and date; do not compare model output on a private manuscript without its owner's consent.
 
+The [offline evaluation bench](evaluation/README.md) adds quote/reference audits, duplicate-analysis warnings, seeded blinded A/B comparison files, separate identity keys, and a six-dimension human rubric. Run `python3 evaluation/quality_eval.py --help`. These utilities do not call a provider, infer model identity, score literary truth, or replace human assessment. Do not publish blinded displays containing private manuscript text.
+The `evaluation/` scripts and experimental `integrations/host_gate.py` are **source-checkout tools**, not modules packaged in the installable `aeonith` wheel.
+
 ## Research and ecosystem direction
 
 Initial design choices favor traceable text evidence, honest abstention, and author-controlled revision. The [KRISTEVA close-reading benchmark](https://aclanthology.org/2025.acl-long.1577/) and [literary evidence retrieval research](https://aclanthology.org/2025.acl-short.29/) illustrate why deep literary interpretation and source-grounded quotation remain challenging. Public tools such as [Inspect AI](https://github.com/UKGovernmentBEIS/inspect_ai) and [Promptfoo](https://github.com/promptfoo/promptfoo) offer future evaluation options, without being required runtime dependencies.
 
 Optional integration with Rezon, CCB, or other repositories should use the documented typed contract, explicit host permission, and source provenance. It must not silently copy protected code, private manuscripts, or copyrighted GPT knowledge files.
+
+An [experimental host-gate contract](docs/HOST_BOUNDARY.md) and source-only adapter in `integrations/host_gate.py` illustrate authorization and budget reservations. **It is not an identity provider, host attestation, metering service, deployed permission mechanism, or standalone security boundary.** It must not be enabled until a separately authenticated host implements the documented controls.
 
 ## Licensing
 
