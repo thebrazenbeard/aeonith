@@ -25,6 +25,11 @@ Source: owner-authenticated inspection of the existing Aeonith GPT editor on 202
 | Quote source offsets | Exact Unicode offsets, duplicate occurrence ambiguity, fingerprint | Sidecar tests, repeated-source cache regression | Pass for literal location only; interpretations unverified |
 | Blinded evaluation process | Stable candidate IDs despite input order, separated private key, human rubric | Adversarial A/B and file-mode tests | Pass for tested source tooling; no human pilot completed |
 | Host authorization | Host-owned identity, consent, durable replay and provider metering | Source-only port + threat tests | **Not deployed; no actual authority or trust anchor** |
+| Individual lens methods | Fourteen explicit evidence targets, rival readings and abstention criteria | Deterministic prompt tests and hostile fake-provider probes | Instruction distinctness passed; semantic differentiation remains unmeasured |
+| Strict provider schema | Opt-in JSON Schema output for compatible Chat/Responses models | Local transport mocks and source parser rejection tests | Schema/request conformance tested; live interoperability unqualified |
+| Whole-source excerpt planning | Complete bounded Unicode coverage with no raw headings in metadata | Tamper and source reconstruction tests | Deterministic segmentation passed; no cross-chapter literary synthesis |
+| Reader privacy | External disclosure acknowledgment, no ambient proxy forwarding, exclusive local output | Fake transport/proxy and CLI adversarial tests | Locally checked; not authenticated host consent or provider policy |
+| Human-study summary | Exact-display annotation binding, private output and descriptive aggregation | Offline synthetic aggregate/invalid-input tests | Tested research tooling only; no actual human quality results |
 
 ## Quality rubric for future human or independent-model review
 
@@ -48,4 +53,4 @@ Run from the repository root:
 python -m unittest discover -s tests -v
 ```
 
-Latest v0.2 candidate execution (2026-10-31): **156/156 tests passed** on the assembled source tree, Python 3.12, exit 0. The earlier merged v0.1 release had 75/75. The expanded candidate includes core contracts, local HTTP transport, evidence offsets, Markdown/plain-text UX, offline evaluation, and a conditional host-boundary prototype. Tests use the Python standard library and deterministic fixtures, proving tested structural/failure invariants—not actual GPT equivalence, literary quality, host authentication or paid model compatibility. The literary fixture tags indicate questions for human interpretation, not a ground-truth oracle. No private GPT knowledge-file content is included.
+Latest v0.3 candidate execution (2026-10-31): **226/226 tests passed** on the assembled source tree, Python 3.12, exit 0. The previously merged v0.2 release had 156/156; the v0.1 release had 75/75. The current candidate adds core mutation/input-budget defenses, distinct lens methods, structured-output requests, one-command reader UX, chapter-aware planning, and offline human-study aggregation. Tests use the Python standard library and deterministic fixtures, proving tested structural/failure invariants—not actual GPT equivalence, literary quality, host authentication or paid model compatibility. The literary fixture tags indicate questions for human interpretation, not a ground-truth oracle. No private GPT knowledge-file content is included.

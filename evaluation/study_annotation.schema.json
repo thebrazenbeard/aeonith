@@ -1,0 +1,50 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "urn:aeonith:study-annotation:v1",
+  "title": "Aeonith annotation bound to one displayed A/B orientation",
+  "description": "Keep private. A hash binds an annotation to supplied display bytes; it is not host attestation or proof of which screen a reviewer saw.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schema_version", "display_sha256", "annotation"],
+  "properties": {
+    "schema_version": {"const": "aeonith.study_annotation.v1"},
+    "display_sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
+    "annotation": {"$ref": "#/$defs/annotation"}
+  },
+  "$defs": {
+    "scores": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["A", "B"],
+      "properties": {
+        "A": {"type": "integer", "enum": [0, 1, 2]},
+        "B": {"type": "integer", "enum": [0, 1, 2]}
+      }
+    },
+    "annotation": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["schema_version", "pair_id", "reviewer_pseudonym", "dimensions", "preference", "rationale"],
+      "properties": {
+        "schema_version": {"const": "aeonith.human_annotation.v1"},
+        "pair_id": {"type": "string", "minLength": 1},
+        "reviewer_pseudonym": {"type": "string", "minLength": 1, "maxLength": 80},
+        "dimensions": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["textual_accuracy", "lens_distinctness", "critical_depth", "calibration", "actionability", "synthesis"],
+          "properties": {
+            "textual_accuracy": {"$ref": "#/$defs/scores"},
+            "lens_distinctness": {"$ref": "#/$defs/scores"},
+            "critical_depth": {"$ref": "#/$defs/scores"},
+            "calibration": {"$ref": "#/$defs/scores"},
+            "actionability": {"$ref": "#/$defs/scores"},
+            "synthesis": {"$ref": "#/$defs/scores"}
+          }
+        },
+        "preference": {"enum": ["A", "B", "tie", "incomparable"]},
+        "rationale": {"type": "string", "minLength": 20, "maxLength": 4000}
+      }
+    }
+  }
+}

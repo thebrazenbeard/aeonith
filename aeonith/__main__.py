@@ -26,6 +26,7 @@ def main(argv: list[str] | None = None) -> int:
     review.add_argument("--omit-temperature", action="store_true", help="omit chat-completions temperature for models that do not support it")
     review.add_argument("--json-mode", action="store_true", help="request chat-completions JSON mode when supported")
     review.add_argument("--no-json-mode", action="store_true", help="disable default Responses JSON mode for a compatible endpoint")
+    review.add_argument("--structured-outputs", action="store_true", help="opt in to strict JSON Schema format; requires a compatible model")
     args = parser.parse_args(argv)
 
     try:
@@ -48,6 +49,7 @@ def main(argv: list[str] | None = None) -> int:
                 token_field=args.token_field,
                 temperature=None if args.omit_temperature else 0.2,
                 json_mode=args.json_mode,
+                structured_outputs=args.structured_outputs,
             )
         elif args.provider == "openai-responses":
             provider = OpenAIResponsesProvider(
@@ -56,6 +58,7 @@ def main(argv: list[str] | None = None) -> int:
                 api_key=os.environ.get(args.api_key_env),
                 max_tokens=args.max_output_tokens,
                 json_mode=not args.no_json_mode,
+                structured_outputs=args.structured_outputs,
             )
         result = critique(data, provider)
     except (OSError, ValueError, json.JSONDecodeError) as exc:

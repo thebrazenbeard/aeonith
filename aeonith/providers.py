@@ -10,8 +10,69 @@ from __future__ import annotations
 import json
 import math
 from urllib.parse import urlsplit
-from urllib.request import HTTPRedirectHandler, Request, build_opener
+from urllib.request import HTTPRedirectHandler, ProxyHandler, Request, build_opener
 from typing import Any
+
+from .core import CANONICAL_LENSES, SCHEMA
+
+
+def _candidate_strict_schema(payload: dict[str, Any]) -> dict[str, Any]:
+    """Prepare a bounded Structured Outputs subset, with no executable tools.
+
+    The schema narrows the generated object shape and lens identifiers. The
+    core still independently validates coverage, quote presence, reference
+    IDs, text budgets, and semantic provenance. This is never an authority
+    or source-verification step.
+    """
+    if not isinstance(payload, dict) or not isinstance(payload.get("task"), dict):
+        raise ValueError("structured output requires a normalized task object")
+    if payload.get("output_schema", SCHEMA) != SCHEMA:
+        raise ValueError("structured output supports only aeonith.review.v1")
+    lenses = payload["task"].get("lenses")
+    if (
+        not isinstance(lenses, list)
+        or not 1 <= len(lenses) <= len(CANONICAL_LENSES)
+        or any(not isinstance(lens, str) or lens not in CANONICAL_LENSES for lens in lenses)
+        or len(set(lenses)) != len(lenses)
+    ):
+        raise ValueError("structured output requires distinct canonical lens names")
+
+    def strict_object(properties: dict[str, Any]) -> dict[str, Any]:
+        return {
+            "type": "object", "properties": properties,
+            "required": list(properties), "additionalProperties": False,
+        }
+
+    support = {
+        "anyOf": [
+            strict_object({
+                "source": {"type": "string", "enum": ["work"]},
+                "quote": {"type": "string", "description": "Exact short substring of work.text"},
+            }),
+            strict_object({
+                "source": {"type": "string", "enum": ["provided_evidence"]},
+                "ref": {"type": "string", "description": "ID from caller-provided evidence only"},
+            }),
+        ],
+    }
+    lens_row = strict_object({
+        "lens": {"type": "string", "enum": list(lenses)},
+        "analysis": {"type": "string", "description": "Lens-specific, grounded critical reasoning"},
+        "basis": {"type": "string", "enum": ["textual", "insufficient_text"]},
+        "support": {"type": "array", "items": support},
+        "limitations": {"type": "array", "items": {"type": "string"}},
+    })
+    challenge = strict_object({
+        "text": {"type": "string"},
+        "support": {"type": "array", "items": support},
+    })
+    return strict_object({
+        "lens_reviews": {"type": "array", "items": lens_row},
+        "synthesis": {"type": "string"},
+        "challenges": {"type": "array", "items": challenge},
+        "uncertainties": {"type": "array", "items": {"type": "string"}},
+        "assessment": {"type": ["string", "null"], "enum": ["SURVIVES", "FAILS", "UNKNOWN", None]},
+    })
 
 
 class _NoRedirect(HTTPRedirectHandler):
@@ -39,6 +100,14 @@ def _validate_model_limits(model: str, timeout: float, max_tokens: int) -> None:
 
 
 def _strict_json(data: bytes | str) -> Any:
+    def unique_pairs(pairs: list[tuple[str, Any]]) -> dict[str, Any]:
+        obj: dict[str, Any] = {}
+        for key, value in pairs:
+            if key in obj:
+                raise ValueError("duplicate field in model JSON")
+            obj[key] = value
+        return obj
+
     def reject_constant(_value: str) -> None:
         raise ValueError("non-finite model JSON value")
 
@@ -48,7 +117,8 @@ def _strict_json(data: bytes | str) -> Any:
             raise ValueError("non-finite model JSON value")
         return number
 
-    return json.loads(data, parse_constant=reject_constant, parse_float=finite_float)
+    return json.loads(data, parse_constant=reject_constant, parse_float=finite_float,
+                      object_pairs_hook=unique_pairs)
 
 
 def _post_json(url: str, api_key: str | None, timeout: float, request_body: dict[str, Any]) -> dict[str, Any]:
@@ -61,7 +131,9 @@ def _post_json(url: str, api_key: str | None, timeout: float, request_body: dict
         headers=headers,
         method="POST",
     )
-    with build_opener(_NoRedirect()).open(request, timeout=timeout) as response:
+    # Never inherit process HTTP(S)_PROXY settings: even a loopback-looking
+    # endpoint can be forwarded to a remote proxy with the manuscript intact.
+    with build_opener(ProxyHandler({}), _NoRedirect()).open(request, timeout=timeout) as response:
         encoded = response.read(4_000_001)
     if len(encoded) > 4_000_000:
         raise ValueError("provider response exceeded 4 MB")
@@ -87,6 +159,7 @@ class OpenAICompatibleProvider:
         token_field: str = "max_tokens",
         temperature: float | None = 0.2,
         json_mode: bool = False,
+        structured_outputs: bool = False,
     ) -> None:
         _validate_endpoint(url, api_key)
         _validate_model_limits(model, timeout, max_tokens)
@@ -98,6 +171,8 @@ class OpenAICompatibleProvider:
             raise ValueError("temperature must be absent or between 0 and 2")
         if not isinstance(json_mode, bool):
             raise ValueError("json_mode must be a boolean")
+        if not isinstance(structured_outputs, bool):
+            raise ValueError("structured_outputs must be a boolean")
         self.url = url
         self.model = model
         self.api_key = api_key
@@ -106,6 +181,7 @@ class OpenAICompatibleProvider:
         self.token_field = token_field
         self.temperature = temperature
         self.json_mode = json_mode
+        self.structured_outputs = structured_outputs
 
     def review(self, payload: dict[str, Any]) -> dict[str, Any]:
         request_body = {
@@ -119,7 +195,16 @@ class OpenAICompatibleProvider:
             request_body["temperature"] = self.temperature
         if self.token_field != "none":
             request_body[self.token_field] = self.max_tokens
-        if self.json_mode:
+        if self.structured_outputs:
+            request_body["response_format"] = {
+                "type": "json_schema",
+                "json_schema": {
+                    "name": "aeonith_review_candidate",
+                    "strict": True,
+                    "schema": _candidate_strict_schema(payload),
+                },
+            }
+        elif self.json_mode:
             request_body["response_format"] = {"type": "json_object"}
         data = _post_json(self.url, self.api_key, self.timeout, request_body)
         if not isinstance(data.get("choices"), list) or not data["choices"]:
@@ -165,17 +250,21 @@ class OpenAIResponsesProvider:
         timeout: float = 90,
         max_tokens: int = 8_192,
         json_mode: bool = True,
+        structured_outputs: bool = False,
     ) -> None:
         _validate_endpoint(url, api_key)
         _validate_model_limits(model, timeout, max_tokens)
         if not isinstance(json_mode, bool):
             raise ValueError("json_mode must be a boolean")
+        if not isinstance(structured_outputs, bool):
+            raise ValueError("structured_outputs must be a boolean")
         self.url = url
         self.model = model
         self.api_key = api_key
         self.timeout = timeout
         self.max_tokens = max_tokens
         self.json_mode = json_mode
+        self.structured_outputs = structured_outputs
 
     def review(self, payload: dict[str, Any]) -> dict[str, Any]:
         request_body: dict[str, Any] = {
@@ -185,7 +274,12 @@ class OpenAIResponsesProvider:
             "max_output_tokens": self.max_tokens,
             "store": False,
         }
-        if self.json_mode:
+        if self.structured_outputs:
+            request_body["text"] = {"format": {
+                "type": "json_schema", "name": "aeonith_review_candidate",
+                "strict": True, "schema": _candidate_strict_schema(payload),
+            }}
+        elif self.json_mode:
             request_body["text"] = {"format": {"type": "json_object"}}
         response = _post_json(self.url, self.api_key, self.timeout, request_body)
         if response.get("status") != "completed" or response.get("error"):

@@ -14,6 +14,7 @@ import math
 import os
 import re
 from collections import Counter
+from copy import deepcopy
 from pathlib import Path
 from typing import Any
 
@@ -24,6 +25,9 @@ PAIR_SCHEMA = "aeonith.blind_pair.v1"
 KEY_SCHEMA = "aeonith.blind_pair_key.v1"
 ANNOTATION_SCHEMA = "aeonith.human_annotation.v1"
 MANIFEST_SCHEMA = "aeonith.run_manifest.v1"
+STUDY_SCHEMA = "aeonith.human_study_bundle.v1"
+STUDY_SUMMARY_SCHEMA = "aeonith.human_study_summary.v1"
+STUDY_ANNOTATION_SCHEMA = "aeonith.study_annotation.v1"
 CANONICAL_LENSES = (
     "psychological", "literary_thematic", "narrative_structure",
     "character_development", "historical_cultural", "philosophical",
@@ -107,6 +111,10 @@ def audit_review(request: dict[str, Any], review: dict[str, Any]) -> dict[str, A
     """
     if not isinstance(request, dict) or not isinstance(review, dict):
         raise ValueError("request and review must be JSON objects")
+    if request.get("schema_version") != REVIEW_SCHEMA:
+        raise ValueError("request must use aeonith.review.v1")
+    if ("work" in request) == ("proposition" in request):
+        raise ValueError("request must contain exactly one of work or proposition")
     text = _work_text(request)
     if not text.strip() or len(text) > 200_000:
         raise ValueError("request work text must be nonempty and at most 200000 characters")
@@ -132,6 +140,8 @@ def audit_review(request: dict[str, Any], review: dict[str, Any]) -> dict[str, A
         violations.append({"code": "schema_mismatch", "path": "schema_version"})
     if review.get("assessment") not in (None, "SURVIVES", "FAILS", "UNKNOWN"):
         violations.append({"code": "invalid_assessment", "path": "assessment"})
+    if "work" in request and review.get("assessment") is not None:
+        violations.append({"code": "non_proposition_assessment", "path": "assessment"})
     rows = review.get("lens_reviews")
     if not isinstance(rows, list):
         rows = []
@@ -209,7 +219,7 @@ def audit_review(request: dict[str, Any], review: dict[str, Any]) -> dict[str, A
         for i, challenge in enumerate(challenges):
             path = f"challenges[{i}]"
             if (not isinstance(challenge, dict) or not isinstance(challenge.get("text"), str)
-                    or not challenge["text"].strip() or len(challenge["text"]) > 2000):
+                    or not challenge["text"].strip() or len(challenge["text"]) > 3000):
                 violations.append({"code": "invalid_challenge", "path": path})
                 continue
             anchors = challenge.get("support", [])
@@ -350,6 +360,136 @@ def validate_annotation(annotation: dict[str, Any], pair: dict[str, Any]) -> Non
         raise ValueError("a substantive 20..4000 character rationale is required")
 
 
+def _validated_pair_id(pair: Any) -> str:
+    if (not isinstance(pair, dict)
+            or set(pair) != {"schema_version", "pair_id", "request", "A", "B", "directions"}
+            or pair.get("schema_version") != PAIR_SCHEMA):
+        raise ValueError("a canonical blinded display is required")
+    pair_id = pair.get("pair_id")
+    if not isinstance(pair_id, str) or re.fullmatch(r"[0-9a-f]{24}", pair_id) is None:
+        raise ValueError("invalid blinded pair identifier")
+    if (not isinstance(pair.get("request"), dict)
+            or not isinstance(pair.get("A"), dict)
+            or not isinstance(pair.get("B"), dict)
+            or not isinstance(pair.get("directions"), str)):
+        raise ValueError("invalid blinded display shape")
+    return pair_id
+
+
+def bind_annotation_to_display(annotation: dict[str, Any], pair: dict[str, Any]) -> dict[str, Any]:
+    """Bind a v1 rubric to the exact viewed A/B display, not just pair_id.
+
+    A study operator must make this receipt at annotation collection time.
+    The hash detects accidental orientation mixing, but is not a signature,
+    identity proof, or evidence that the human actually saw this display.
+    """
+    _validated_pair_id(pair)
+    validate_annotation(annotation, pair)
+    return {
+        "schema_version": STUDY_ANNOTATION_SCHEMA,
+        "display_sha256": digest(pair),
+        "annotation": deepcopy(annotation),
+    }
+
+
+def summarize_study(bundle: dict[str, Any]) -> dict[str, Any]:
+    """Aggregate *display-position* human ratings without unblinding candidates.
+
+    The input bundle is held in caller memory and may contain confidential
+    manuscripts, pseudonyms, and rationales. Output intentionally contains
+    only pair identifiers, content hashes, score counts, and disagreement
+    indicators. It does not rank models, establish reviewer identity, prove
+    consent or independence, or compute statistical significance.
+    """
+    if not isinstance(bundle, dict) or set(bundle) != {"schema_version", "records"}:
+        raise ValueError("study bundle must have exactly schema_version and records")
+    if bundle["schema_version"] != STUDY_SCHEMA:
+        raise ValueError("unsupported study bundle schema")
+    records = bundle["records"]
+    if not isinstance(records, list) or len(records) > 200:
+        raise ValueError("study records must be a bounded array")
+
+    totals = {label: 0 for label in ("A", "B", "tie", "incomparable")}
+    seen_pairs: set[str] = set()
+    summaries: list[dict[str, Any]] = []
+    total_annotations = 0
+    for record in records:
+        if not isinstance(record, dict) or set(record) != {"pair", "annotations"}:
+            raise ValueError("study record must contain pair and annotations only")
+        pair, annotations = record["pair"], record["annotations"]
+        pair_id = _validated_pair_id(pair)
+        if pair_id in seen_pairs:
+            raise ValueError("one blinded pair ID may appear once in a study bundle")
+        seen_pairs.add(pair_id)
+        if not isinstance(annotations, list) or len(annotations) > 40:
+            raise ValueError("annotations must be a bounded list")
+        total_annotations += len(annotations)
+        if total_annotations > 4000:
+            raise ValueError("too many annotations")
+
+        counts = {label: 0 for label in totals}
+        scores = {
+            dimension: {
+                side: {"sum": 0, "count": 0}
+                for side in ("A", "B")
+            } for dimension in DIMENSIONS
+        }
+        observed_reviewers: set[str] = set()
+        expected_display_hash = digest(pair)
+        for bound in annotations:
+            if (not isinstance(bound, dict)
+                    or set(bound) != {"schema_version", "display_sha256", "annotation"}
+                    or bound.get("schema_version") != STUDY_ANNOTATION_SCHEMA
+                    or bound.get("display_sha256") != expected_display_hash):
+                raise ValueError("annotation must be bound to this exact A/B display")
+            annotation = bound["annotation"]
+            validate_annotation(annotation, pair)
+            reviewer = annotation["reviewer_pseudonym"].strip().casefold()
+            if reviewer in observed_reviewers:
+                raise ValueError("one reviewer pseudonym must not score the same pair twice")
+            observed_reviewers.add(reviewer)
+            preference = annotation["preference"]
+            counts[preference] += 1
+            totals[preference] += 1
+            for dimension in DIMENSIONS:
+                for side in ("A", "B"):
+                    scores[dimension][side]["sum"] += annotation["dimensions"][dimension][side]
+                    scores[dimension][side]["count"] += 1
+
+        comparable = len(annotations) - counts["incomparable"]
+        # At least two comparable preferences are needed even to observe
+        # agreement/disagreement. No chance-corrected reliability is claimed.
+        disagreement = (
+            len([label for label in ("A", "B", "tie") if counts[label] > 0]) > 1
+            if comparable >= 2 else None
+        )
+        summaries.append({
+            "pair_id": pair_id,
+            "display_sha256": digest(pair),
+            "annotation_count": len(annotations),
+            "preference_counts": counts,
+            "comparable_preference_count": comparable,
+            "rater_disagreement": disagreement,
+            "dimension_scores": scores,
+        })
+
+    summaries.sort(key=lambda row: row["pair_id"])
+    return {
+        "schema_version": STUDY_SUMMARY_SCHEMA,
+        "status": "summarized" if total_annotations else "no_data",
+        "pair_count": len(records),
+        "rated_pair_count": sum(item["annotation_count"] > 0 for item in summaries),
+        "total_annotations": total_annotations,
+        "display_position_preference_counts": totals,
+        "pair_summaries": summaries,
+        "semantic_quality": "UNASSESSED",
+        "reviewer_identity": "CALLER_DECLARED_UNVERIFIED",
+        "input_permission": "CALLER_RESPONSIBILITY_UNVERIFIED",
+        "model_ranking": "NOT_COMPUTED; A/B are display positions, not provider identities",
+        "statistical_inference": "NOT_COMPUTED; raw tallies are not significance tests",
+    }
+
+
 def make_manifest(request: dict[str, Any], review: dict[str, Any], *,
                   provider_id: str, model_id: str, code_revision: str,
                   prompt_revision: str, parameters: dict[str, Any]) -> dict[str, Any]:
@@ -462,6 +602,15 @@ def main(argv: list[str] | None = None) -> int:
     annotation = commands.add_parser("validate-annotation", help="Check a human's completed rubric")
     annotation.add_argument("--pair", required=True)
     annotation.add_argument("--annotation", required=True)
+    binder = commands.add_parser("bind-annotation", help="Bind an existing human rubric to the exact displayed A/B orientation")
+    binder.add_argument("--pair", required=True)
+    binder.add_argument("--annotation", required=True)
+    binder.add_argument("--out", required=True,
+                        help="new owner-only file with display hash and private rubric")
+    aggregate = commands.add_parser("aggregate", help="Summarize human rubrics without exposing manuscripts or candidate identities")
+    aggregate.add_argument("--study", required=True,
+                           help="source-checkout JSON with blind displays and annotations")
+    aggregate.add_argument("--out", help="optional new owner-only summary file; never overwritten")
     manifest = commands.add_parser("manifest", help="Record content hashes and caller-declared run metadata")
     manifest.add_argument("--request", required=True)
     manifest.add_argument("--review", required=True)
@@ -509,6 +658,22 @@ def main(argv: list[str] | None = None) -> int:
             validate_annotation(_read_json(args.annotation), _read_json(args.pair))
             print(json.dumps({"valid": True}, sort_keys=True))
             return 0
+        if args.command == "bind-annotation":
+            bound = bind_annotation_to_display(
+                _read_json(args.annotation), _read_json(args.pair))
+            _write_json_exclusive(args.out, bound)
+            print(json.dumps({"bound_annotation_written": args.out,
+                              "display_sha256": bound["display_sha256"]}, sort_keys=True))
+            return 0
+        if args.command == "aggregate":
+            summary = summarize_study(_read_json(args.study))
+            if args.out:
+                _write_json_exclusive(args.out, summary)
+                print(json.dumps({"summary_written": args.out, "status": summary["status"]},
+                                 sort_keys=True))
+            else:
+                print(json.dumps(summary, indent=2, ensure_ascii=False, sort_keys=True))
+            return 0 if summary["status"] == "summarized" else 3
         if args.command == "manifest":
             parameters = _read_json(args.parameters) if args.parameters else {}
             run = make_manifest(_read_json(args.request), _read_json(args.review),
