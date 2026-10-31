@@ -4,7 +4,7 @@ import sys
 import unittest
 from unittest.mock import patch
 
-from aeonith.core import CANONICAL_LENSES, critique
+from aeonith.core import CANONICAL_LENSES, LENS_GUIDANCE, critique
 from aeonith.providers import OpenAICompatibleProvider
 
 
@@ -47,6 +47,19 @@ class FailingProvider:
 
 
 class CoreTests(unittest.TestCase):
+    def test_provider_receives_distinct_public_lens_guidance(self):
+        class RecordingProvider(GroundedProvider):
+            def review(self, payload):
+                self.payload = payload
+                return super().review(payload)
+
+        provider = RecordingProvider()
+        result = critique(WORK, provider)
+        self.assertEqual(result["status"], "completed")
+        self.assertEqual(set(provider.payload["task"]["lens_guidance"]), set(CANONICAL_LENSES))
+        self.assertEqual(set(LENS_GUIDANCE), set(CANONICAL_LENSES))
+        self.assertEqual(len(set(LENS_GUIDANCE.values())), len(CANONICAL_LENSES))
+
     def test_all_fourteen_lenses_have_distinct_grounded_outputs(self):
         result = critique(WORK, GroundedProvider())
         self.assertEqual(result["status"], "completed")

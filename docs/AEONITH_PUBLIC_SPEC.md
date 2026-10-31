@@ -45,7 +45,7 @@ Every substantive critique of submitted literary text should cover:
 ## Knowledge boundaries
 
 - The original GPT included a curated collection of reference files, but the editor instructions explicitly reserve using those files for requests where the user asks for them. The rebuilt application should apply equivalent opt-in retrieval, not silently inject files into every critique.
-- The file list, contents, provenance, licenses, and redistribution rights are not part of this public specification. A public repository must not include reference texts or images merely because they were attached to the GPT. The owner should separately authorize and establish reuse rights for each distributable asset.
+- The file list, contents, provenance, licenses, and redistribution rights are not part of this public specification. A public source repository must not include reference texts or images merely because they were attached to the GPT. The owner should separately authorize and establish reuse rights for each distributable asset.
 - Retrieval and comparison should preserve citation/source metadata, respect rights and personal data, and never convert secondary references into uncited assertions.
 
 ## Runtime adapters and verification

@@ -1,6 +1,6 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-    "$id": "https://github.com/thebrazenbeard/aeonith/blob/main/aeonith/schemas/capability-result-v1.schema.json",
+  "$id": "https://github.com/thebrazenbeard/aeonith/blob/main/aeonith/schemas/capability-result-v1.schema.json",
   "title": "Aeonith review capability response",
   "type": "object",
   "additionalProperties": false,
@@ -15,9 +15,16 @@
     },
     "capability": {"const": "aeonith.review.v1"},
     "outcome": {"enum": ["ok", "rejected", "unavailable", "failed"]},
+    "core_status": {
+      "description": "The recognized source-core status, if the core returned one; not a verification claim.",
+      "oneOf": [
+        {"type": "null"},
+        {"enum": ["completed", "provider_unavailable", "invalid_request", "provider_error", "invalid_provider_output"]}
+      ]
+    },
     "result": {
       "oneOf": [{"type": "null"}, {"type": "object"}],
-      "description": "The complete aeonith.review.v1 result, if a reviewer ran. Its internal schema is governed by core."
+      "description": "Validated completed critique, or null for non-completed and rejected responses. Its internal schema is governed by core."
     },
     "error": {
       "oneOf": [

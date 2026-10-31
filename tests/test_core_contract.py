@@ -1,7 +1,7 @@
 """Independent contract checks for the Aeonith review engine.
 
 Run from repository root after making the ``aeonith`` package importable:
-    python -m unittest discover -s aeonith_worker/evaluation -v
+    python -m unittest discover -s tests -v
 
 The assertions distinguish deterministic engine guarantees from later,
 necessarily model-assisted semantic/literary evaluation. No LLM is required.

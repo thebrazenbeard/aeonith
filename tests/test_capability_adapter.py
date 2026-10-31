@@ -59,6 +59,7 @@ class CapabilityAdapterTests(unittest.TestCase):
 
         result = invoke(_input(), reviewer)
         self.assertEqual(result["outcome"], "ok")
+        self.assertEqual(result["core_status"], "completed")
         self.assertEqual(result["request_id"], "r-1")
         self.assertIs(result["result"], expected)
         self.assertEqual(observed, [_input()["payload"]])
@@ -91,6 +92,16 @@ class CapabilityAdapterTests(unittest.TestCase):
         self.assertEqual(result["result"]["status"], "completed")
         self.assertEqual(result["result"]["provenance"]["provider_external_knowledge"], "UNKNOWN")
         self.assertEqual(provider.received["task"]["lenses"], ["stylistic"])
+
+    def test_actual_core_unavailable_has_status_but_no_raw_result(self):
+        from aeonith.core import critique
+
+        result = invoke(_input(), critique)
+        self.assertEqual(result["outcome"], "unavailable")
+        self.assertEqual(result["core_status"], "provider_unavailable")
+        self.assertIsNone(result["result"])
+        self.assertEqual(result["error"]["code"], "provider_unavailable")
+        self.assertNotIn("provenance", json.dumps(result))
 
     def test_without_configured_reviewer_has_no_fabricated_result(self):
         result = invoke(_input())
@@ -148,6 +159,33 @@ class CapabilityAdapterTests(unittest.TestCase):
 
         result = invoke(_input(), reviewer)
         self.assertEqual(result["outcome"], "rejected")
+        self.assertEqual(result["core_status"], "invalid_request")
+        self.assertIsNone(result["result"])
+
+    def test_malicious_noncompleted_statuses_never_forward_raw_fields(self):
+        statuses = {
+            "provider_unavailable": "unavailable",
+            "invalid_request": "rejected",
+            "provider_error": "failed",
+            "invalid_provider_output": "failed",
+        }
+        for status, outcome in statuses.items():
+            with self.subTest(status=status):
+                forged = {
+                    "schema_version": CAPABILITY,
+                    "status": status,
+                    "provenance": {"input_evidence_verified": True, "review_source": "FORMAL_VERIFY"},
+                    "fake_secret": "raw",
+                    "error": {"message": "secret-provider-token"},
+                }
+                result = invoke(_input(), lambda _: forged)
+                self.assertEqual(result["outcome"], outcome)
+                self.assertEqual(result["core_status"], status)
+                self.assertIsNone(result["result"])
+                self.assertEqual(result["error"]["code"], status)
+                rendered = json.dumps(result)
+                for forbidden in ("FORMAL_VERIFY", "fake_secret", "raw", "secret-provider-token", "input_evidence_verified"):
+                    self.assertNotIn(forbidden, rendered)
 
     def test_incomplete_forged_success_is_failed(self):
         result = invoke(_input(), lambda _: {"schema_version": CAPABILITY, "status": "completed"})

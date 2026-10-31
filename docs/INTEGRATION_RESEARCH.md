@@ -32,13 +32,16 @@ Invocation envelope:
 
 The response is `capability.result.v1` with the same request ID and an `outcome`
 of `ok`, `rejected`, `unavailable`, or `failed`. `result` contains the core's
-typed critique, or `null` on adapter rejection, configuration absence, and
-unexpected errors. Core's own `status` remains visible and never promotes an
-unavailable semantic review into a completed critique.
+typed critique **only on validated completion**; it is `null` for all
+non-completed statuses and adapter errors. An optional top-level `core_status`
+retains the recognized core failure state without forwarding arbitrary
+untrusted failure metadata. An unavailable semantic review is never promoted
+into a completed critique.
 
 The adapter rejects extra envelope keys, wrong capabilities, malformed and
-duplicate-key JSON, non-finite numbers, and inputs over 256 KiB. A host must
-separately bound output size and model cost. No process supervision, tenant
+duplicate-key JSON, non-finite numbers, and inputs over 256 KiB. The adapter
+also caps its serialized result at 2 MiB; a host must additionally bound
+downstream output, model cost and resource usage. No process supervision, tenant
 isolation, replay persistence, provider attestation, or authentication exists
 in this adapter; none should be inferred from the JSON contract.
 

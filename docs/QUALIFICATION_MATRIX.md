@@ -2,7 +2,7 @@
 
 ## Evidence boundary
 
-Source: owner-authenticated inspection of the existing Aeonith GPT editor on 2026-10-31, captured in `aeonith_worker/gpt_source.md`. This establishes what the editor **displayed**, not equivalent behavior in a new runtime. The target repository initially contained a README only. The public source does not supply a numeric quality rubric, exact JSON schema, implementation guarantees, or provider compatibility. The harness below tests new engineering contracts separately from literary quality.
+Source: owner-authenticated inspection of the existing Aeonith GPT editor on 2026-10-31, with sensitive provenance retained outside the public repository. This establishes what the editor **displayed**, not equivalent behavior in a new runtime. The target repository initially contained a README only. The public source does not supply a numeric quality rubric, exact JSON schema, implementation guarantees, or provider compatibility. The harness below tests new engineering contracts separately from literary quality.
 
 | Requirement / risk | Observable behavior | Best evidence | Preliminary status |
 | --- | --- | --- | --- |
@@ -38,10 +38,10 @@ The first four dimensions and trust boundary are release-critical. Human literar
 
 ## Test execution and limits
 
-Planned focused command after package is available:
+Run from the repository root:
 
 ```bash
-PYTHONPATH=aeonith_worker/core_build python -m unittest discover -s aeonith_worker/evaluation -v
+python -m unittest discover -s tests -v
 ```
 
-Last execution (2026-10-31): **25/25 tests passed** on the scratch core (`aeonith_worker/core_build`), Python 3.12, exit 0, 0.153s. Included three CLI subprocess checks. The harness uses Python standard library only and deterministic fixtures. It proves structural/failure invariants, not actual GPT equivalence or model output quality. The literary oracle strings in fixtures are reviewer instructions, not automated expected completions. No uploaded GPT knowledge-file content is included.
+Last integrated execution (2026-10-31): **75/75 tests passed** on the assembled public source tree, Python 3.12, exit 0. This included core, independent adversarial, capability, and loopback HTTP transport tests. The harness uses Python standard library only and deterministic fixtures. It proves structural/failure invariants, not actual GPT equivalence or model output quality. The literary oracle strings in fixtures are reviewer instructions, not automated expected completions. No uploaded GPT knowledge-file content is included.

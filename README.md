@@ -10,9 +10,11 @@ This repository is an **independently implemented, testable starting point**—n
 - Fourteen separately identified critical lenses: psychological, literary/thematic, narrative structure, character development, historical/cultural, philosophical, genre-specific, stylistic, sociological, moral/ethical, symbolic, reader-response, linguistic, and comparative.
 - A synthesis field, concrete passage references, uncertainty/limitations, and an optional set of challenges.
 - An injected model-provider interface and a concrete HTTP adapter for compatible chat-completions endpoints.
+- The HTTP adapter currently sends `max_tokens` and `temperature`; use it with providers/models that accept those parameters. Reasoning-model parameter variants and the Responses API need separate adapters or explicit configuration work.
 - Validation that quoted passages occur in the submitted text and supplied evidence-reference IDs exist. **A matching quotation does not prove the interpretation is correct.**
 - Explicit error states when no provider is configured, a request is invalid, the provider fails, or the provider returns an invalid structure. No review is fabricated on those paths.
 - A bounded, read-only JSON invocation adapter for future ecosystem integration. This adapter does not supply host authorization or a deployed service.
+- The standalone `capability_adapter.py` stdin/stdout entrypoint has no model configuration and deliberately returns `provider_unavailable`; a host must inject an explicitly configured reviewer to obtain a real critique.
 
 The tests verify these contracts with local fixtures and controlled providers. **Literary quality, original-GPT parity, live-provider compatibility, and deployment have not been established by those tests.**
 

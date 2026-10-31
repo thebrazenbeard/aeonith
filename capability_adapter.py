@@ -31,6 +31,12 @@ _CORE_STATUSES = {
     "completed", "provider_unavailable", "invalid_request",
     "provider_error", "invalid_provider_output",
 }
+_SAFE_FAILURES = {
+    "provider_unavailable": ("unavailable", "Semantic review was not performed"),
+    "invalid_request": ("rejected", "The review request was invalid"),
+    "provider_error": ("failed", "The configured review provider failed"),
+    "invalid_provider_output": ("failed", "The provider returned an invalid review"),
+}
 _REQUEST_ID = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$")
 _ALLOWED_ENVELOPE = {"kind", "request_id", "capability", "payload"}
 _CORE_RESULT_KEYS = {
@@ -76,15 +82,27 @@ def _within_depth(value: Any, limit: int = 128) -> bool:
     return True
 
 
-def _error(request_id: str | None, code: str, message: str) -> dict[str, Any]:
+def _response(
+    request_id: str | None,
+    outcome: str,
+    *,
+    core_status: str | None = None,
+    result: dict[str, Any] | None = None,
+    error: dict[str, str] | None = None,
+) -> dict[str, Any]:
     return {
         "kind": RESULT_KIND,
         "request_id": request_id,
         "capability": CAPABILITY,
-        "outcome": "rejected",
-        "result": None,
-        "error": {"code": code, "message": message},
+        "outcome": outcome,
+        "core_status": core_status,
+        "result": result,
+        "error": error,
     }
+
+
+def _error(request_id: str | None, code: str, message: str) -> dict[str, Any]:
+    return _response(request_id, "rejected", error={"code": code, "message": message})
 
 
 def _nonempty(value: Any) -> bool:
@@ -264,26 +282,18 @@ def invoke(
         return _error(request_id, "invalid_payload", "Payload must be a JSON object")
 
     if review is None:
-        return {
-            "kind": RESULT_KIND,
-            "request_id": request_id,
-            "capability": CAPABILITY,
-            "outcome": "unavailable",
-            "result": None,
-            "error": {"code": "reviewer_unavailable", "message": "No reviewer is configured"},
-        }
+        return _response(
+            request_id, "unavailable",
+            error={"code": "reviewer_unavailable", "message": "No reviewer is configured"},
+        )
 
     try:
         result = review(payload)
     except Exception:
-        return {
-            "kind": RESULT_KIND,
-            "request_id": request_id,
-            "capability": CAPABILITY,
-            "outcome": "failed",
-            "result": None,
-            "error": {"code": "reviewer_error", "message": "The reviewer failed"},
-        }
+        return _response(
+            request_id, "failed",
+            error={"code": "reviewer_error", "message": "The reviewer failed"},
+        )
 
     status = result.get("status") if isinstance(result, dict) else None
     if (
@@ -294,23 +304,21 @@ def invoke(
         or not _within_output_budget(result)
         or (status == "completed" and not _valid_completed_review(result, payload))
     ):
-        return {
-            "kind": RESULT_KIND,
-            "request_id": request_id,
-            "capability": CAPABILITY,
-            "outcome": "failed",
-            "result": None,
-            "error": {"code": "invalid_reviewer_output", "message": "Reviewer result did not match the declared schema"},
-        }
+        return _response(
+            request_id, "failed",
+            error={"code": "invalid_reviewer_output", "message": "Reviewer result did not match the declared schema"},
+        )
 
-    return {
-        "kind": RESULT_KIND,
-        "request_id": request_id,
-        "capability": CAPABILITY,
-        "outcome": "ok" if status == "completed" else "unavailable" if status == "provider_unavailable" else "rejected" if status == "invalid_request" else "failed",
-        "result": result,
-        "error": None,
-    }
+    if status != "completed":
+        outcome, message = _SAFE_FAILURES[status]
+        # Failure records may contain arbitrary provider-supplied fields.
+        # Preserve the bounded core status, never forward their raw payload.
+        return _response(
+            request_id, outcome, core_status=status,
+            error={"code": status, "message": message},
+        )
+
+    return _response(request_id, "ok", core_status="completed", result=result)
 
 
 def decode_and_invoke(
