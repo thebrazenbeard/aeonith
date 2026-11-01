@@ -95,8 +95,7 @@ all deployments, including any custom domains added later.
 **Enabling model-backed production reviews is gated separately.** The atomic
 invocation ledger enforces a cross-instance call allowance but **does not
 measure dollars**. Require hosting-level access controls, independently
-enforced provider spend limits, model
-spend limits, exact-SHA checks, protected preview smoke tests, live-provider
+enforced model spend limits, exact-SHA checks, protected preview smoke tests, live-provider
 qualification and rollback readiness before making paid inference public.
 See [live-service release gates](docs/RELEASE_GATES.md) and the
 [deployment runbook](docs/SERVICE_DEPLOYMENT.md). The verified hosted shell

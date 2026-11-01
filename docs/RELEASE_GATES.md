@@ -41,24 +41,29 @@ read back as `deploymentType: all`.
 The v0.5.0 **source candidate** adds exact route-method dispatch, bounded
 paid-pilot payload/output sizes, a seven-day UUID replay defense, cross-instance
 daily admission with one atomic Upstash Redis EVAL, and trusted Vercel AI
-Gateway OIDC routing. Its current local suite passed **309/309** tests,
+Gateway OIDC routing. Its final local suite passed **313/313** tests,
 including new integration proofs that denied admission cannot invoke the
-model. This is not yet a GitHub CI or deployed receipt, and not an authorized
-live model call. See [the private pilot checklist](LIVE_PROVIDER_PILOT.md).
+model. All three exact-head GitHub Actions Python 3.11–3.13 jobs passed at
+[`95d130a9`](https://github.com/thebrazenbeard/aeonith/commit/95d130a9b3740658019fc5cee562e0bfb33e256e).
+Vercel preview `dpl_7V4riYoo2y53Hww5Mk53fzvo6JgV` built that exact commit
+and reached **READY**. The protected preview's *HTTP routes remain untested*:
+Vercel denied the connector's authenticated fetch with 403, and the browser
+was redirected to Vercel login. No authorized live model call occurred. See
+[the private pilot checklist](LIVE_PROVIDER_PILOT.md).
 
 ## Source and qualification state
 
 | Gate | Required evidence | Current state |
 | --- | --- | --- |
-| Reviewed source | A PR diff against exact `main` SHA, no private GPT configurations, knowledge assets or secrets in public Git | **v0.4.1 merged**, v0.5.0 pilot changes not yet merged/reviewed |
-| Local contracts | Full Python 3.11–3.13 test matrix and wheel smoke; static and live-service tests in CI | v0.5.0 local Python 3.12 **309/309 PASS**; **exact-head multi-version CI pending** |
+| Reviewed source | A PR diff against exact `main` SHA, no private GPT configurations, knowledge assets or secrets in public Git | **v0.4.1 merged**; v0.5.0 [draft PR #12](https://github.com/thebrazenbeard/aeonith/pull/12), independent security/literary reviews passed source-level checks; hosted sign-off pending |
+| Local contracts | Full Python 3.11–3.13 test matrix and wheel smoke; static and live-service tests in CI | v0.5.0 local Python 3.12 **313/313 PASS**; exact-head [GitHub Actions run 41264245675](https://github.com/thebrazenbeard/aeonith/actions/runs/41264245675) Python 3.11, 3.12, 3.13 **PASS** |
 | HTTP boundary | Unauthorized requests never call providers; valid/invalid body, method, size, endpoint and error behavior exercised | Local negative matrix now includes route/method, replay, bounded input and admission-denial checks; **deployed matrix pending** |
-| Browser interaction | Same-origin requests, no stored manuscript or credentials, safe rendering, accessible failure states | v0.4.1 hosted editor loaded; v0.5.0 new editor/nonce behavior **preview pending** |
+| Browser interaction | Same-origin requests, no stored manuscript or credentials, safe rendering, accessible failure states | v0.4.1 hosted editor loaded; v0.5.0 editor/nonce tests passed locally, **authenticated preview browser test blocked** |
 | Rate/cost control | Protection against unauthenticated abuse and concurrency, model spend and invocation limits enforced outside per-process memory | Source-level atomic Redis daily admission and replay checks passed; **real Redis, Gateway project $1 budget and WAF/observability not configured or verified** |
 | Privacy | Strict no-cache response policy, no manuscript/credential logging; explicit notice before external provider disclosure | Local source-tested; **full deployed headers/logs audit still open** |
 | Provider availability | Missing credentials/provider reject honestly without fabricated criticism | Hosted health `review_configured: false` and synthetic unavailable response verified |
 | Provider compatibility | A credentialed, cost-bounded call with an intentionally non-sensitive fixture, verified exact chosen model and backend | **Open; not proven by local provider fakes** |
-| Deployment identity | Hosting project and scope verified; deployed SHA matches reviewed code; exact URL, HTTP status and logs captured | v0.4.1 shell now at **READY** deployment `dpl_6CtH7QLjnoyPUqvdNVHuvxgvYsfg`, source `afaa29ab…`; v0.5.0 preview pending |
+| Deployment identity | Hosting project and scope verified; deployed SHA matches reviewed code; exact URL, HTTP status and logs captured | v0.4.1 production shell **READY** at `dpl_6CtH7QLjnoyPUqvdNVHuvxgvYsfg` / `afaa29ab…`; v0.5.0 preview **READY** at `dpl_7V4riYoo2y53Hww5Mk53fzvo6JgV` / `95d130a9…`, with **HTTP status checks blocked by protection** |
 | Staging and promotion | Protected preview and tested staging build before assigning a production domain; repeatable rollback | **Open; do not silently assume hosting defaults** |
 | Post-deploy observability | Non-sensitive request/error logs and operational health, without manuscript bodies, prompt contents or credentials | **Open** |
 | Knowledge rights | Explicit owner decision on license and rights for each GPT reference asset; no third-party knowledge imported by assumption | **Open** |

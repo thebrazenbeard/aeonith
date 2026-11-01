@@ -9,12 +9,18 @@ by an external model provider, or end-to-end literary quality.
 running at [aeonith-seven.vercel.app](https://aeonith-seven.vercel.app/).
 Vercel reports deployment `dpl_DrkMtyBmkP9NP8iHFSGjLNr7akgC` as `READY`
 for GitHub commit `f90a64bc18a2d285638cbbe646d546ffb396a4f8`.
-The live browser editor loaded, and `/healthz` returned `status: ok` with
+Before authentication was extended to all deployments, the live browser editor
+loaded, and `/healthz` returned `status: ok` with
 `review_configured: false`. A synthetic, unauthorized review reported
 provider unavailable. No real model request or model-quality qualification
 has taken place. The Vercel connector's private-deployment probe returned
-a permission error; browser verification succeeded. Recheck access permissions
-before relying on the connector for ongoing deployed HTTP diagnostics.
+a permission error; the earlier browser verification succeeded. After Vercel
+Authentication changed to **All Deployments**, the v0.5.0 candidate preview
+`dpl_7V4riYoo2y53Hww5Mk53fzvo6JgV` reached **READY** for source commit
+`95d130a9b3740658019fc5cee562e0bfb33e256e`, with passing exact-head
+CI. However, its protected HTTP smoke is **blocked**: the browser requires
+login and the connector's protected-deployment fetch returned 403. Do not
+represent READY as proof that the runtime rewrite routes are functional.
 
 ## Route and packaging contract
 
