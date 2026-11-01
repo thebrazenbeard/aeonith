@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from contextlib import redirect_stdout
+from contextlib import redirect_stderr, redirect_stdout
 from http.server import BaseHTTPRequestHandler, HTTPServer
 import io
 import json
@@ -126,6 +126,76 @@ class CanaryContractTests(unittest.TestCase):
                 "https://arbitrary.example/api/review", token="synthetic-test-only", timeout=1
             )
 
+    def test_protection_options_are_mutually_exclusive_before_secrets(self):
+        stream = io.StringIO()
+        with patch.object(live_canary, "_secret_from_env", side_effect=AssertionError("secret read")):
+            with patch.object(live_canary, "invoke_canary", side_effect=AssertionError("network called")):
+                with redirect_stdout(stream), redirect_stderr(io.StringIO()):
+                    with self.assertRaises(SystemExit) as exited:
+                        live_canary.main([
+                            "--execute", "--allow-paid-inference",
+                            "--url", "https://aeonith-verified.vercel.app/api/review",
+                            "--expected-host", "aeonith-verified.vercel.app",
+                            "--vercel-bypass-env", "CANARY_TEST_BYPASS",
+                            "--trusted-oidc-env", "CANARY_TEST_OIDC",
+                        ])
+        self.assertEqual(exited.exception.code, 2)
+        self.assertEqual(stream.getvalue(), "")
+
+    def test_invalid_trusted_oidc_rejected_before_service_secret(self):
+        stream = io.StringIO()
+        with patch.dict(os.environ, {"CANARY_TEST_OIDC": "malformed-oauth-secret"}, clear=True):
+            with patch.object(live_canary, "invoke_canary", side_effect=AssertionError("network called")):
+                with redirect_stdout(stream):
+                    code = live_canary.main([
+                        "--execute", "--allow-paid-inference",
+                        "--url", "https://aeonith-verified.vercel.app/api/review",
+                        "--expected-host", "aeonith-verified.vercel.app",
+                        "--trusted-oidc-env", "CANARY_TEST_OIDC",
+                        "--auth-env", "SHOULD_NOT_BE_READ",
+                    ])
+        self.assertEqual(code, 1)
+        self.assertEqual(json.loads(stream.getvalue())["reason"], "trusted_oidc_token_missing_or_invalid")
+        self.assertNotIn("malformed-oauth-secret", stream.getvalue())
+
+    def test_remote_host_mismatch_rejected_before_trusted_oidc_lookup(self):
+        stream = io.StringIO()
+        with patch.object(live_canary, "_trusted_oidc_from_env", side_effect=AssertionError("OIDC secret read")):
+            with patch.object(live_canary, "invoke_canary", side_effect=AssertionError("network called")):
+                with redirect_stdout(stream):
+                    code = live_canary.main([
+                        "--execute", "--allow-paid-inference",
+                        "--url", "https://untrusted.vercel.app/api/review",
+                        "--expected-host", "trusted.vercel.app",
+                        "--trusted-oidc-env", "CANARY_TEST_OIDC",
+                    ])
+        self.assertEqual(code, 1)
+        self.assertEqual(json.loads(stream.getvalue())["reason"], "remote_host_confirmation_required")
+
+    def test_trusted_oidc_rejects_non_vercel_target_before_secret_lookup(self):
+        for url, host in (
+            ("https://arbitrary.example/api/review", "arbitrary.example"),
+            ("http://127.0.0.1:8123/api/review", "127.0.0.1"),
+        ):
+            stream = io.StringIO()
+            with self.subTest(url=url):
+                with patch.object(live_canary, "_trusted_oidc_from_env", side_effect=AssertionError("OIDC secret read")):
+                    with patch.object(live_canary, "invoke_canary", side_effect=AssertionError("network called")):
+                        with redirect_stdout(stream):
+                            code = live_canary.main([
+                                "--execute", "--allow-paid-inference", "--url", url,
+                                "--expected-host", host, "--trusted-oidc-env", "CANARY_TEST_OIDC",
+                            ])
+            self.assertEqual(code, 1)
+            self.assertEqual(json.loads(stream.getvalue())["reason"], "trusted_oidc_requires_vercel_preview")
+
+    def test_direct_invocation_rejects_two_protection_methods(self):
+        with self.assertRaisesRegex(live_canary.CanaryError, "protection_auth_methods_mutually_exclusive"):
+            live_canary.invoke_canary(
+                "http://127.0.0.1:8123/api/review", token="synthetic-only", timeout=1,
+                bypass_token="test-bypass", trusted_oidc_token="e30.e30.c2ln",
+            )
+
     def test_lens_mutation_rejected(self):
         result = completed_review()
         result["lens_reviews"][0]["lens"] = result["lens_reviews"][1]["lens"]
@@ -181,6 +251,7 @@ class _FakeService(BaseHTTPRequestHandler):
             "authorization": self.headers.get("Authorization"),
             "disclosure": self.headers.get("X-Aeonith-Disclosure"),
             "bypass": self.headers.get("x-vercel-protection-bypass"),
+            "trusted_oidc": self.headers.get("x-vercel-trusted-oidc-idp-token"),
             "request_id": self.headers.get("X-Aeonith-Request-Id"),
             "body": body,
         })
@@ -253,6 +324,49 @@ class CanaryLoopbackTests(unittest.TestCase):
         self.assertEqual(code, 0, stream.getvalue())
         self.assertEqual(json.loads(stream.getvalue())["lens_count"], 3)
         self.assertEqual(json.loads(_FakeService.requests[0]["body"])["lenses"], list(live_canary.PILOT_LENSES))
+
+    def test_short_lived_trusted_oidc_header_without_bypass(self):
+        stream = io.StringIO()
+        jwt = "eyJhbGciOiJSUzI1NiJ9.eyJpc3MiOiJ0ZXN0In0.c2lnbmF0dXJl"
+        expected_origin = "https://aeonith-approved-preview.vercel.app/api/review"
+        captured: dict = {}
+
+        class SyntheticResponse:
+            status = 200
+
+            def __enter__(self):
+                return self
+
+            def __exit__(self, *_args):
+                return False
+
+            def read(self, _maximum):
+                return json.dumps(completed_review()).encode("utf-8")
+
+        class SyntheticOpener:
+            def open(self, request, timeout):
+                captured["request"] = request
+                captured["timeout"] = timeout
+                return SyntheticResponse()
+
+        with patch.dict(os.environ, {
+            "CANARY_TEST_AUTH": "synthetic-service-secret",
+            "CANARY_TEST_OIDC": jwt,
+        }), redirect_stdout(stream):
+            with patch.object(live_canary, "build_opener", return_value=SyntheticOpener()):
+                code = live_canary.main([
+                    "--url", expected_origin, "--expected-host", "aeonith-approved-preview.vercel.app",
+                    "--execute", "--allow-paid-inference", "--auth-env", "CANARY_TEST_AUTH",
+                    "--trusted-oidc-env", "CANARY_TEST_OIDC",
+                ])
+        self.assertEqual(code, 0, stream.getvalue())
+        request = captured["request"]
+        self.assertEqual(request.full_url, expected_origin)
+        headers = {name.lower(): value for name, value in request.header_items()}
+        self.assertEqual(headers["x-vercel-trusted-oidc-idp-token"], jwt)
+        self.assertEqual(headers["authorization"], "Bearer synthetic-service-secret")
+        self.assertNotIn("x-vercel-protection-bypass", headers)
+        self.assertNotIn(jwt, stream.getvalue())
 
     def test_http_error_sanitized(self):
         _FakeService.response_status = 401

@@ -35,7 +35,7 @@ browser storage. The UI is not an anonymous, free-to-use inference service.
 
 | Endpoint | Behavior |
 | --- | --- |
-| `GET /healthz` (also `/api/health`) | Unauthenticated liveness and a configuration-readiness flag; **not** proof that a model call will succeed |
+| `GET /healthz` (also `/api/health`) | Liveness without an **application** bearer token (Vercel deployment protection still applies) and a configuration-readiness flag; **not** proof that a model call will succeed |
 | `POST /v1/critique` (also `/api/review`) | JSON `aeonith.review.v1` request with server-held bearer authorization and explicit external-disclosure acknowledgment |
 
 The review endpoint rejects unsupported requests, unconfigured model services,

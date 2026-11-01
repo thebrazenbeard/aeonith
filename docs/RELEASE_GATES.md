@@ -56,23 +56,30 @@ Follow-up hardening added an explicit `AEONITH_REQUIRE_VERCEL_GATEWAY_OIDC`
 pilot lock that refuses API-key budget bypasses even with missing runtime
 markers, plus an opt-in six-probe protected-preview smoke CLI with no paid
 inference path. The enlarged local suite passed **328/328** Python tests.
-Check the [current PR's exact-head CI](https://github.com/thebrazenbeard/aeonith/pull/12/checks)
-and Vercel deployment identity independently before release; earlier green
-commits are not proof of a successor commit.
+GitHub Actions run [41289763627](https://github.com/thebrazenbeard/aeonith/actions/runs/41289763627)
+passed on Python 3.11–3.13 for follow-up commit `91da76c9`; Vercel preview
+`dpl_EKyRQ8ucWB5oBmBvHGXZWxwnCQD4` built that exact SHA and reached
+**READY**. Further pilot hardening adds short-lived Vercel Trusted Source
+OIDC to the explicitly authorized synthetic canary (alternative to a bypass
+secret), restricted to confirmed Vercel preview hosts. Its current local
+suite passed **334/334** Python tests. Check the
+[PR's latest exact-head CI](https://github.com/thebrazenbeard/aeonith/pull/12/checks)
+and deployment identity independently before release; earlier green commits
+do not prove a successor commit or functioning protected HTTP routes.
 
 ## Source and qualification state
 
 | Gate | Required evidence | Current state |
 | --- | --- | --- |
 | Reviewed source | A PR diff against exact `main` SHA, no private GPT configurations, knowledge assets or secrets in public Git | **v0.4.1 merged**; v0.5.0 [draft PR #12](https://github.com/thebrazenbeard/aeonith/pull/12), independent security/literary reviews passed source-level checks; hosted sign-off pending |
-| Local contracts | Full Python 3.11–3.13 test matrix and wheel smoke; static and live-service tests in CI | v0.5.0 local Python 3.12 **328/328 PASS** after follow-up hardening; prior exact-head [GitHub Actions run 41289437509](https://github.com/thebrazenbeard/aeonith/actions/runs/41289437509) Python 3.11–3.13 **PASS**; current successor head requires a fresh CI result |
+| Local contracts | Full Python 3.11–3.13 test matrix and wheel smoke; static and live-service tests in CI | v0.5.0 current local Python 3.12 **334/334 PASS**; prior exact-head [GitHub Actions run 41289763627](https://github.com/thebrazenbeard/aeonith/actions/runs/41289763627) Python 3.11–3.13 **PASS** at `91da76c9`; recheck any successor SHA |
 | HTTP boundary | Unauthorized requests never call providers; valid/invalid body, method, size, endpoint and error behavior exercised | Local negative matrix now includes route/method, replay, bounded input and admission-denial checks; **deployed matrix pending** |
 | Browser interaction | Same-origin requests, no stored manuscript or credentials, safe rendering, accessible failure states | v0.4.1 hosted editor loaded; v0.5.0 editor/nonce tests passed locally, **authenticated preview browser test blocked** |
 | Rate/cost control | Protection against unauthenticated abuse and concurrency, model spend and invocation limits enforced outside per-process memory | Source-level atomic Redis daily admission and replay checks passed; **real Redis, Gateway project $1 budget and WAF/observability not configured or verified** |
 | Privacy | Strict no-cache response policy, no manuscript/credential logging; explicit notice before external provider disclosure | Local source-tested; **full deployed headers/logs audit still open** |
 | Provider availability | Missing credentials/provider reject honestly without fabricated criticism | Hosted health `review_configured: false` and synthetic unavailable response verified |
 | Provider compatibility | A credentialed, cost-bounded call with an intentionally non-sensitive fixture, verified exact chosen model and backend | **Open; not proven by local provider fakes** |
-| Deployment identity | Hosting project and scope verified; deployed SHA matches reviewed code; exact URL, HTTP status and logs captured | v0.4.1 production shell **READY** at `dpl_6CtH7QLjnoyPUqvdNVHuvxgvYsfg` / `afaa29ab…`; v0.5.0 preview **READY** at `dpl_7V4riYoo2y53Hww5Mk53fzvo6JgV` / `95d130a9…`, with **HTTP status checks blocked by protection** |
+| Deployment identity | Hosting project and scope verified; deployed SHA matches reviewed code; exact URL, HTTP status and logs captured | v0.4.1 production shell **READY** at `dpl_6CtH7QLjnoyPUqvdNVHuvxgvYsfg` / `afaa29ab…`; v0.5.0 preview **READY** at `dpl_EKyRQ8ucWB5oBmBvHGXZWxwnCQD4` / `91da76c9…`, with **HTTP status checks blocked by protection** |
 | Staging and promotion | Protected preview and tested staging build before assigning a production domain; repeatable rollback | **Open; do not silently assume hosting defaults** |
 | Post-deploy observability | Non-sensitive request/error logs and operational health, without manuscript bodies, prompt contents or credentials | **Open** |
 | Knowledge rights | Explicit owner decision on license and rights for each GPT reference asset; no third-party knowledge imported by assumption | **Open** |

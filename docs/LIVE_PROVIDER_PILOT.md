@@ -129,6 +129,7 @@ a financial ledger.
    python -m scripts.live_canary --execute --allow-paid-inference \
      --url https://YOUR_VERIFIED_PREVIEW_URL/api/review \
      --expected-host YOUR_VERIFIED_PREVIEW_URL \
+     --trusted-oidc-env GITHUB_OIDC_TOKEN \
      --lenses literary_thematic,stylistic,symbolic
    ```
 
@@ -136,10 +137,14 @@ a financial ledger.
    deployment metadata before entering `--expected-host`. Remote requests
    fail before reading credentials if the host is missing or mismatched.
    The command reads the service token from `AEONITH_SERVICE_TOKEN` in its
-   environment; use `--vercel-bypass-env NAME` only when the owner has already
-   configured a scoped protected-deployment bypass secret. Do not print or
-   pass token values on command lines. This script emits aggregate structural
-   counts and elapsed time, never the source passage or full critique.
+   environment. The `--trusted-oidc-env` variable must be populated by the
+   reviewed, protected GitHub Actions job, and the owner must authorize this
+   separately paid synthetic call. The legacy `--vercel-bypass-env NAME` is
+   an alternative only when the owner configured an appropriately scoped
+   automation-bypass secret; never use both mechanisms in one request.
+   Do not print or pass token values on command lines. This script emits
+   aggregate structural counts and elapsed time, never the source passage or
+   full critique.
 4. Require HTTP 200, valid `aeonith.review.v1`, the exact selected lens set,
    source-exact quotations, synthesis, genuine provider provenance, and
    observed model identity/usage/cost from the Gateway dashboard. A single

@@ -34,6 +34,7 @@ PILOT_LENSES = ("literary_thematic", "stylistic", "symbolic")
 MAX_RESPONSE_BYTES = 4_000_000
 MAX_TIMEOUT_SECONDS = 120.0
 ENV_VAR = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*$")
+JWT_SHAPE = re.compile(r"^[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+$")
 
 
 class CanaryError(Exception):
@@ -95,12 +96,29 @@ def confirm_remote_host(url: str, expected_host: str | None) -> None:
         raise CanaryError("remote_host_confirmation_required")
 
 
+def confirm_trusted_oidc_target(url: str, expected_host: str | None) -> None:
+    """Never disclose short-lived Vercel Trusted Source tokens off Vercel."""
+    confirm_remote_host(url, expected_host)
+    parsed = urlsplit(url)
+    if (parsed.scheme != "https" or not parsed.hostname.endswith(".vercel.app")
+            or not expected_host or expected_host.lower() != parsed.hostname):
+        raise CanaryError("trusted_oidc_requires_vercel_preview")
+
+
 def _secret_from_env(name: str) -> str:
     if not ENV_VAR.fullmatch(name):
         raise CanaryError("invalid_secret_env_name")
     token = os.environ.get(name)
     if not token or token != token.strip() or "\r" in token or "\n" in token:
         raise CanaryError("secret_env_missing_or_invalid")
+    return token
+
+
+def _trusted_oidc_from_env(name: str) -> str:
+    """Read a JWT-shaped GitHub OIDC token; Vercel verifies it, not this client."""
+    token = _secret_from_env(name)
+    if len(token) > 8192 or JWT_SHAPE.fullmatch(token) is None:
+        raise CanaryError("trusted_oidc_token_missing_or_invalid")
     return token
 
 
@@ -185,9 +203,17 @@ def examine_review(result: Any, expected_lenses: tuple[str, ...] = CANONICAL_LEN
 
 
 def invoke_canary(url: str, *, token: str, timeout: float, bypass_token: str | None = None,
+                  trusted_oidc_token: str | None = None,
                   lenses: tuple[str, ...] = CANONICAL_LENSES,
                   expected_host: str | None = None) -> dict[str, int]:
     confirm_remote_host(url, expected_host)
+    if bypass_token is not None and trusted_oidc_token is not None:
+        raise CanaryError("protection_auth_methods_mutually_exclusive")
+    if trusted_oidc_token is not None:
+        confirm_trusted_oidc_target(url, expected_host)
+    if trusted_oidc_token is not None and (len(trusted_oidc_token) > 8192
+            or JWT_SHAPE.fullmatch(trusted_oidc_token) is None):
+        raise CanaryError("trusted_oidc_token_missing_or_invalid")
     if isinstance(timeout, bool) or not isinstance(timeout, (int, float)) or not math.isfinite(timeout) or not 0 < timeout <= MAX_TIMEOUT_SECONDS:
         raise CanaryError("timeout_out_of_bounds")
     headers = {
@@ -203,6 +229,8 @@ def invoke_canary(url: str, *, token: str, timeout: float, bypass_token: str | N
     }
     if bypass_token:
         headers["x-vercel-protection-bypass"] = bypass_token
+    if trusted_oidc_token:
+        headers["x-vercel-trusted-oidc-idp-token"] = trusted_oidc_token
     request = Request(
         url,
         data=json.dumps(canary_request(lenses), ensure_ascii=False, allow_nan=False).encode("utf-8"),
@@ -232,7 +260,9 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--execute", action="store_true", help="Actually make the HTTP request; omitted by default")
     parser.add_argument("--allow-paid-inference", action="store_true", help="Acknowledge a paid-model invocation and disclosure of synthetic canary text")
     parser.add_argument("--auth-env", default="AEONITH_SERVICE_TOKEN", help="Environment variable holding the service bearer secret (not its value)")
-    parser.add_argument("--vercel-bypass-env", help="Optional environment variable holding a protected-preview bypass secret")
+    protection = parser.add_mutually_exclusive_group()
+    protection.add_argument("--vercel-bypass-env", help="Optional environment variable holding a protected-preview bypass secret")
+    protection.add_argument("--trusted-oidc-env", help="Alternative environment variable holding a short-lived GitHub Actions OIDC JWT for Vercel Trusted Sources")
     parser.add_argument("--timeout", type=float, default=90.0, help="HTTP timeout in seconds, >0 and <=120 (default: 90)")
     parser.add_argument("--lenses", default="all", help="all, or comma-separated canonical lenses; initial small pilot: literary_thematic,stylistic,symbolic")
     return parser
@@ -251,11 +281,17 @@ def main(argv: list[str] | None = None) -> int:
         # Validate URL and consent before reading secrets or making a call.
         confirm_remote_host(args.url, args.expected_host)
         lenses = parse_lenses(args.lenses)
-        token = _secret_from_env(args.auth_env)
+        if args.trusted_oidc_env:
+            confirm_trusted_oidc_target(args.url, args.expected_host)
+        # Validate the selected deployment-protection method before reading
+        # the application bearer token. Never print token text on failures.
         bypass = _secret_from_env(args.vercel_bypass_env) if args.vercel_bypass_env else None
+        trusted_oidc = _trusted_oidc_from_env(args.trusted_oidc_env) if args.trusted_oidc_env else None
+        token = _secret_from_env(args.auth_env)
         start = time.monotonic()
         counts = invoke_canary(args.url, token=token, timeout=args.timeout,
-                               bypass_token=bypass, lenses=lenses, expected_host=args.expected_host)
+                               bypass_token=bypass, trusted_oidc_token=trusted_oidc,
+                               lenses=lenses, expected_host=args.expected_host)
     except CanaryError as exc:
         print(json.dumps({"status": "failed", "reason": str(exc)}, sort_keys=True))
         return 1
