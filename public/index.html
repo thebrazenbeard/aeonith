@@ -25,7 +25,7 @@
       <aside id="funnel-privacy-note" class="funnel-notice" aria-label="Remote Tailscale HTTPS access and privacy" hidden>
         <strong>Remote access · Read before submitting</strong>
         <p>You are visiting Aeonith at a Tailscale HTTPS address. If the operator enables public Funnel access, anyone with this address can reach the page, but reviews require an <strong>operator-issued bearer token</strong>. Do not share your token.</p>
-        <p>Your browser sends your writing and bearer token over Tailscale HTTPS to the operator-owned Aeonith server. Your writing can then be processed by KoboldCpp on the operator's computer <strong>only if the local model is enabled and configured</strong>; an HTTPS connection does not guarantee a working model. Aeonith does not save manuscripts, tokens, or critiques in browser storage, but the server or model may log or retain what you submit. Use this service for private writing only if you trust its operator.</p>
+        <p>Your browser sends your writing and bearer token over Tailscale HTTPS to the operator-owned Aeonith server. Your writing can then be processed by the operator's local model runner (such as Ollama or KoboldCpp) <strong>only if the local model is enabled and configured</strong>; an HTTPS connection does not guarantee a working model. Aeonith does not save manuscripts, tokens, or critiques in browser storage, but the server or model may log or retain what you submit. Use this service for private writing only if you trust its operator.</p>
       </aside>
     </div>
 
@@ -52,19 +52,19 @@
           </div>
 
           <details class="lenses-control">
-            <summary>Critical lenses <span class="summary-aside">Three selected by default; fourteen available</span></summary>
+            <summary>Critical lenses <span class="summary-aside">One selected by default; fourteen available</span></summary>
             <fieldset>
               <legend class="sr-only">Choose critical lenses</legend>
-              <p class="field-note">Select one to fourteen perspectives. More lenses can require a longer response and more work from your local model.</p>
+              <p class="field-note">Select one to fourteen perspectives. The operator may impose a lower limit based on the local model. More lenses take longer and may exceed that limit.</p>
               <div class="lens-grid">
                 <label><input type="checkbox" name="lenses" value="psychological"> Psychological</label>
-                <label><input type="checkbox" name="lenses" value="literary_thematic" checked> Literary &amp; thematic</label>
+                <label><input type="checkbox" name="lenses" value="literary_thematic"> Literary &amp; thematic</label>
                 <label><input type="checkbox" name="lenses" value="narrative_structure"> Narrative structure</label>
                 <label><input type="checkbox" name="lenses" value="character_development"> Character development</label>
                 <label><input type="checkbox" name="lenses" value="historical_cultural"> Historical &amp; cultural</label>
                 <label><input type="checkbox" name="lenses" value="philosophical"> Philosophical</label>
                 <label><input type="checkbox" name="lenses" value="genre_specific"> Genre-specific</label>
-                <label><input type="checkbox" name="lenses" value="stylistic" checked> Stylistic</label>
+                <label><input type="checkbox" name="lenses" value="stylistic"> Stylistic</label>
                 <label><input type="checkbox" name="lenses" value="sociological"> Sociological</label>
                 <label><input type="checkbox" name="lenses" value="moral_ethical"> Moral &amp; ethical</label>
                 <label><input type="checkbox" name="lenses" value="symbolic" checked> Symbolic</label>

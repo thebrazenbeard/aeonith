@@ -16,6 +16,13 @@ Official references: [Funnel overview](https://tailscale.com/docs/features/tails
 
 ## Run Aeonith and a local model on the same computer
 
+On an existing Windows computer running an already-installed Ollama model,
+the [DPAPI-backed start and stop scripts](../scripts/README.md) automate the
+private token and local server process without downloading software or
+touching Funnel configuration. Supply the *verified* device HTTPS origin
+when starting so the app can accept that exact public host. The manual
+examples below remain available for KoboldCpp and other local runners.
+
 Start your existing KoboldCpp/GGUF model with the API bound to loopback at `http://127.0.0.1:5001/v1/chat/completions`. **Do not expose that model port through Funnel.**
 
 An already-installed **Ollama** runtime is another local-only option. Check
