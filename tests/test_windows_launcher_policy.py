@@ -30,6 +30,8 @@ class WindowsLauncherPolicyTests(unittest.TestCase):
         self.assertIn("127.0.0.1:11434/v1/chat/completions", START)
         self.assertIn("AEONITH_MAX_LENSES = '1'", START)
         self.assertIn("AEONITH_PROVIDER_TIMEOUT_SECONDS = '50'", START)
+        self.assertIn("keep_alive = '24h'", START)
+        self.assertIn("'http://127.0.0.1:11434/api/generate'", START)
         self.assertIn("Port 8765 is in use", START)
 
     def test_public_origin_is_explicit_and_listener_stays_loopback(self):

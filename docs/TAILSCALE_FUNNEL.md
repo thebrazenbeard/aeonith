@@ -112,11 +112,14 @@ Exact HTTP `Host`/`Origin` behavior through Tailscale's reverse proxy is not doc
 To disable only the chosen public HTTPS listener (without deleting unrelated Funnel configuration):
 
 ```text
-tailscale funnel --bg --https=443 http://127.0.0.1:8765 off
+tailscale funnel --https=443 off
 tailscale funnel status
 ```
 
-Tailscale's current CLI documentation says the `off` command must retain the original listener flags. Here the exact original target is repeated as an additional safeguard against disabling the wrong listener. Run `tailscale funnel --help` on the actual host before changing an existing listener, because CLI syntax has changed between Tailscale versions.
+Tailscale 1.102.4 on the verified Windows host explicitly printed this
+targeted `--https=443 off` command; it was used successfully without
+affecting another listener. Run `tailscale funnel --help` on the actual
+host first because the CLI syntax has changed across Tailscale versions.
 
 Also stop Aeonith with `Ctrl+C` or the host's explicit process-service controls. To disable just AI calls, set `AEONITH_ENABLE_LIVE_REVIEWS=false` and restart Aeonith. If the bearer token may have leaked, generate a new one and restart the local service; do not log the token during rotation.
 

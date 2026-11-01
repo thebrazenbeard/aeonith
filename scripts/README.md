@@ -26,6 +26,10 @@ HTTP listener only on `127.0.0.1:8765`. If you already have a service on
 On first start, a fresh cryptographically random bearer token is encrypted
 with Windows **per-user DPAPI** to
 `%LOCALAPPDATA%\Aeonith\token.dpapi`. The launcher never prints it.
+It also preloads the existing Ollama model and keeps roughly 1 GiB of
+model RAM reserved for 24 hours, preventing the usual five-minute idle
+unload from causing a cold-inference timeout. This makes no paid calls or
+downloads. After 24 idle hours, reviews may again be slower.
 From the **same Windows user account**, intentionally copy the token to the
 local clipboard with:
 
@@ -52,7 +56,7 @@ To stop only the recorded Aeonith process:
 
 The stop script verifies the stored PID, start time, executable path, and
 command-line identity before terminating anything. It does **not** stop
-Ollama, modify Tailscale, or remove the DPAPI token. If public Funnel was
+Ollama, unload the resident model, modify Tailscale, or remove the DPAPI token. If public Funnel was
 enabled, disable its exact Aeonith listener separately **before** stopping
 the local server; do not use a broad `tailscale funnel reset`.
 
