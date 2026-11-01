@@ -102,6 +102,23 @@ class BrowserContractTests(unittest.TestCase):
         self.assertIn("cache: \"no-store\"", script)
         self.assertIn("redirect: \"error\"", script)
 
+    def test_tailscale_https_notice_is_host_gated_and_discloses_remote_processing(self):
+        markup = (ROOT / "index.html").read_text(encoding="utf-8")
+        script = (ROOT / "app.js").read_text(encoding="utf-8")
+        css = (ROOT / "styles.css").read_text(encoding="utf-8")
+        self.assertRegex(markup, r'<aside\s+id="funnel-privacy-note"[^>]*\bhidden\b')
+        self.assertIn("Tailscale HTTPS", markup)
+        self.assertIn("operator-issued bearer token", markup)
+        self.assertIn("KoboldCpp", markup)
+        self.assertIn("browser storage", markup)
+        self.assertIn("server or model may log", markup)
+        self.assertIn('window.location.protocol === "https:"', script)
+        self.assertIn('window.location.hostname.toLowerCase()', script)
+        # Two labels must precede ts.net; arbitrary web origins never trigger it.
+        self.assertIn(r'\.ts\.net$', script)
+        self.assertIn('byId("funnel-privacy-note").hidden = false', script)
+        self.assertIn(".funnel-notice", css)
+
     def test_local_assets_and_responsive_accessibility(self):
         css = (ROOT / "styles.css").read_text(encoding="utf-8")
         self.assertIn("@media", css)

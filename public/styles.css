@@ -42,6 +42,10 @@ h1 em { font-weight: 400; color: var(--accent-dark); }
 .introduction { max-width: 67ch; color: #4f4d55; font-size: 1.03rem; margin: 0; line-height: 1.8; }
 .runtime-status { display: inline-block; margin: 1.6rem 0 0; padding: .5rem .8rem; color: #594c69; background: #eeeaf2; border: 1px solid #d9d0e2; border-radius: 5px; font-size: .77rem; line-height: 1.6; }
 .runtime-status.runtime-ready { color: #28523b; border-color: #bcd7c5; background: #e8f4eb; }
+.funnel-notice { margin: 1.5rem 0 0; padding: 1.1rem 1.3rem; border: 2px solid #aa855c; border-radius: 6px; color: #44372b; background: #fbf0dd; font-size: .85rem; line-height: 1.65; }
+.funnel-notice[hidden] { display: none; }
+.funnel-notice > strong { display: block; font-size: .95rem; }
+.funnel-notice p { margin: .65rem 0 0; }
 
 .workspace { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1.07fr); gap: clamp(2rem, 5vw, 5.5rem); padding-top: 1.5rem; border-top: 1px solid var(--line); align-items: start; }
 .section-heading { margin: 0 0 1.8rem; }

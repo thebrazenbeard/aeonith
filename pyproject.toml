@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "aeonith"
-version = "0.6.0"
+version = "0.7.0"
 description = "Evidence-aware, provider-neutral literary critique engine"
 readme = "README.md"
 requires-python = ">=3.11"

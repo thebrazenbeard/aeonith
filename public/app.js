@@ -19,6 +19,13 @@ const copyStatus = byId("copy-status");
 const MAX_MANUSCRIPT_CHARS = 12000;
 const MAX_LENSES = 14;
 
+// Display the remote-access warning for Tailscale's HTTPS machine.tailnet.ts.net
+// hostnames only. Never construct endpoints or trust a URL supplied by a user.
+if (window.location.protocol === "https:" &&
+    /^[a-z0-9-]+\.[a-z0-9-]+\.ts\.net$/.test(window.location.hostname.toLowerCase())) {
+  byId("funnel-privacy-note").hidden = false;
+}
+
 const lensLabels = Object.freeze({
   psychological: "Psychological",
   literary_thematic: "Literary & thematic",
@@ -176,13 +183,13 @@ function requestError(status, responseData) {
   const fixed = {
     400: "The request was invalid. Check the passage and selected lenses.",
     401: "Access denied. Check the service access token.",
-    403: "The local service declined this request. Check that you opened the page on the same local host.",
+    403: "The service declined this request. Check that you opened the page at the intended localhost or HTTPS service address.",
     413: "This submission exceeds a local service limit. Try a shorter excerpt or fewer critical lenses.",
     422: "The service could not validate the proposed critique. No result will be shown.",
     500: "The service encountered an internal error. No critique was generated.",
     502: "The model provider failed or returned an unusable result. No critique was generated.",
     503: "Local model reviews are disabled, unconfigured, or temporarily unavailable. No critique was returned; check service readiness before retrying.",
-    504: "The local model or service timed out. The request may still be processing on your computer."
+    504: "The local model or service timed out. The request may still be processing on the operator's computer."
   };
   const fallback = fixed[status] || `The service returned HTTP ${status}; no critique was generated.`;
   if (status >= 500 || [401, 403, 413].includes(status)) return fallback;

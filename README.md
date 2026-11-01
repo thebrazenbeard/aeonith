@@ -2,7 +2,7 @@
 
 Aeonith is an independently implemented, evidence-aware literary critic inspired by the observable behavior of [Aeonith, the Transcendent Critic](https://chatgpt.com/g/g-67f64b3b94348191b6f6ee4a83135b5a-aeonith-the-transcendent-critic), a custom ChatGPT GPT. It is **not** an export of that GPT's private instructions, reference files, model weights, or hidden configuration.
 
-**Operating rule: $0 in new spending.** This repository is designed to run on hardware and a local model you already have. It does not require a paid inference API, cloud account, subscription, hosted database, tunnel, or deployment platform. We do **not** enable paid services, even behind a nominal spending budget. There is no active public cloud deployment advertised by this repository.
+**Operating rule: $0 in new spending.** This repository is designed to run on hardware and a local model you already have. It does not require a paid inference API, subscription, hosted database, or deployment platform. We do **not** enable paid services, even behind a nominal spending budget. Optional public HTTPS access via an existing, eligible **free** Tailscale Funnel configuration is separate from the localhost default; no active public deployment is advertised until independently verified.
 
 Aeonith has two separate capabilities:
 
@@ -19,6 +19,7 @@ Aeonith has two separate capabilities:
 - Local evaluation fixtures and a blinded human-evaluation workflow. Structural acceptance tests are **not** measures of literary quality.
 - Opt-in model adapters, including a constrained local OpenAI-style Chat Completions route. No invented critiques on missing-provider, rejected-input, failed-model, or invalid-output paths.
 - A same-origin browser interface with manuscript editor, lens selection, and a token-protected local review endpoint. The default is provider-disabled and loopback-only.
+- An optional, explicit `AEONITH_FUNNEL_ORIGIN` allowlist for one Tailscale `.ts.net` HTTPS hostname. The listener and GGUF model remain bound to localhost, and review authentication still applies. This code path must be separately verified on the actual host before calling it a live public service.
 
 **Not yet proven:** the quality of judgments from your particular GGUF model, parity with the original GPT, fidelity of third-party citation assertions, consistency across repeated generations, or a live end-to-end model run on your machine. A local model can be too small, too slow, context-limited, or unable to emit Aeonith's strict JSON shape; in those cases the application should report failure, not pretend to have completed a critique.
 
@@ -59,7 +60,7 @@ Use an existing local model runner such as [KoboldCpp](https://github.com/LostRu
 
 If a local model is not already running, you can still run the library, tests, source planner, and offline evaluation without any network calls. To inspect the browser shell with reviews disabled, leave `AEONITH_ENABLE_LIVE_REVIEWS` unset and run `python3 -m aeonith.local_server` after configuring a strong service token.
 
-The exact HTTP routes, environment options, security limitations, and local verification steps are in the [self-hosted service runbook](docs/SERVICE_DEPLOYMENT.md). See [release gates](docs/RELEASE_GATES.md) before describing a machine-specific model setup as qualified.
+The exact HTTP routes, environment options, security limitations, and local verification steps are in the [self-hosted service runbook](docs/SERVICE_DEPLOYMENT.md). For an **optional public URL**, see the [Tailscale Funnel runbook](docs/TAILSCALE_FUNNEL.md); it explicitly requires a no-charge eligible account, hardened security checks, and a real HTTPS probe. See [release gates](docs/RELEASE_GATES.md) before describing a machine-specific model setup as qualified.
 
 ## Try the CLI without a model
 
@@ -118,7 +119,7 @@ The injected provider implements `review(payload: dict) -> dict`. With no provid
 
 The HTTP boundary checks authorization **before reading the manuscript body**. It caps request size and excerpt length, rejects unsupported methods and caller-specified endpoints, and avoids echoing manuscript text or secrets in error responses. If the model is unavailable or produces invalid output, the UI displays that failure. Browser code does not store manuscript content or bearer tokens in cookies, `localStorage`, or `sessionStorage`.
 
-Loopback is a meaningful privacy boundary but not perfect isolation: other software with access to the same host may contact local services, local browser extensions may read page contents, and model process logs may contain text depending on the model runner's settings. Do not publish or tunnel the port. No multi-user authorization, durable cross-process rate ledger, external public TLS gateway, or production threat review is supplied.
+Loopback is a meaningful privacy boundary but not perfect isolation: other software with access to the same host may contact local services, local browser extensions may read page contents, and model process logs may contain text depending on the model runner's settings. **Do not publish the localhost port directly.** The optional Tailscale Funnel path exposes only Aeonith's HTTPS frontend after exact-origin opt-in and security verification; it is **publicly reachable** and is not a multi-user authorization system. Aeonith does not supply a durable cross-process rate ledger, cloud SLA, or independent production threat review.
 
 ## More capabilities and their limits
 

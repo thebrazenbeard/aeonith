@@ -17,6 +17,8 @@ from __future__ import annotations
 
 import argparse
 import ipaddress
+import os
+import re
 import socket
 import sysconfig
 import threading
@@ -24,7 +26,8 @@ from http.server import ThreadingHTTPServer
 from pathlib import Path
 from urllib.parse import urlsplit
 
-from aeonith.service import _error
+from aeonith.service import _error, authorize
+from aeonith.funnel_limits import LocalAdmission
 from api.health import handler as HealthHandler
 from api.review import handler as ReviewHandler
 
@@ -42,6 +45,32 @@ _REVIEW_PATHS = frozenset({"/api/review", "/v1/critique"})
 _MAX_ASSET_BYTES = 2_000_000
 _MAX_CONNECTIONS = 16
 _IDLE_SOCKET_TIMEOUT_SECONDS = 15
+_DNS_LABEL = re.compile(r"[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?\Z")
+
+
+def _funnel_host(value: str | None) -> str | None:
+    """Validate a single HTTPS Funnel origin; never accept arbitrary web hosts.
+
+    The origin is server-owned configuration. A hostname supplied by an HTTP
+    client (or by an untrusted forwarded header) never enables this mode.
+    """
+    if value is None or value == "":
+        return None
+    if not isinstance(value, str) or len(value) > 253 or not value.isascii():
+        raise ValueError("AEONITH_FUNNEL_ORIGIN must be a bounded HTTPS .ts.net origin")
+    try:
+        parsed = urlsplit(value)
+        host = parsed.hostname or ""
+    except ValueError as exc:
+        raise ValueError("invalid AEONITH_FUNNEL_ORIGIN") from exc
+    labels = host.split(".")
+    if (len(labels) != 4 or labels[-2:] != ["ts", "net"]
+            or any(_DNS_LABEL.fullmatch(part) is None for part in labels)
+            or parsed.scheme != "https" or value != f"https://{host}"
+            or parsed.username is not None or parsed.password is not None
+            or parsed.port is not None or parsed.path or parsed.query or parsed.fragment):
+        raise ValueError("AEONITH_FUNNEL_ORIGIN must be an exact HTTPS machine.tailnet.ts.net origin")
+    return host
 
 
 def _bind_address(host: str) -> tuple[str, int]:
@@ -76,6 +105,8 @@ class _LocalHandler(ReviewHandler):
         self.connection.settimeout(_IDLE_SOCKET_TIMEOUT_SECONDS)
 
     def end_headers(self) -> None:
+        if getattr(self, "_retry_after", 0):
+            self.send_header("Retry-After", str(self._retry_after))
         self.send_header("Content-Security-Policy", (
             "default-src 'none'; script-src 'self'; style-src 'self'; "
             "connect-src 'self'; img-src 'self'; base-uri 'none'; "
@@ -88,7 +119,7 @@ class _LocalHandler(ReviewHandler):
 
     def _route(self) -> str | None:
         # Treat all queries, fragments and encoded path variants as unknown.
-        if len(self.path) > 256:
+        if len(self.path) > 256 or "?" in self.path or "#" in self.path:
             return None
         try:
             path = urlsplit(self.path)
@@ -105,7 +136,7 @@ class _LocalHandler(ReviewHandler):
         return None
 
     def _same_host(self) -> bool:
-        """Block DNS rebinding to this local HTTP service."""
+        """Block DNS rebinding; accept only local or explicitly pinned Funnel origin."""
         values = self.headers.get_all("Host", [])
         if len(values) != 1 or len(values[0]) > 256:
             return False
@@ -121,6 +152,17 @@ class _LocalHandler(ReviewHandler):
         if (not hostname or parsed.path or parsed.query or parsed.fragment
                 or parsed.username or parsed.password or parsed.netloc != raw):
             return False
+        origin_values = self.headers.get_all("Origin", [])
+        if len(origin_values) > 1:
+            return False
+        funnel_host = self.server.funnel_host
+        if funnel_host and raw == funnel_host and hostname == funnel_host:
+            # HTTPS terminates on the operator's own Tailscale device. Only
+            # the exact configured public origin may make browser requests.
+            # Never infer public origin from X-Forwarded-* request headers.
+            if self.command == "POST" and not origin_values:
+                return False
+            return not origin_values or origin_values[0] == f"https://{funnel_host}"
         actual_port = self.server.server_port
         if port is not None and port != actual_port:
             return False
@@ -133,12 +175,9 @@ class _LocalHandler(ReviewHandler):
             allowed_hosts = {bound_host}
         if hostname not in allowed_hosts:
             return False
-        origins = self.headers.get_all("Origin", [])
-        if len(origins) > 1:
-            return False
-        if origins:
+        if origin_values:
             try:
-                origin = urlsplit(origins[0])
+                origin = urlsplit(origin_values[0])
                 origin_port = origin.port
             except ValueError:
                 return False
@@ -162,6 +201,15 @@ class _LocalHandler(ReviewHandler):
             self._respond(404, _error("not_found", "Unknown local route"))
         else:
             self._respond(405, _error("method_not_allowed", "Method is not allowed for this route"))
+
+    def _rate_limited(self, code: str, retry_after: int) -> None:
+        """Reply without reading a manuscript or disclosing internal counters."""
+        self.close_connection = True
+        self._retry_after = max(1, retry_after)
+        try:
+            self._respond(429, _error(code, "Local review capacity is temporarily unavailable"))
+        finally:
+            self._retry_after = 0
 
     def _serve_asset(self, path: str) -> None:
         filename, content_type = _ASSETS[path]
@@ -198,8 +246,35 @@ class _LocalHandler(ReviewHandler):
             return
         route = self._route()
         if route == "review":
-            # ReviewHandler checks the bearer token BEFORE reading the body.
-            ReviewHandler.do_POST(self)
+            admission = self.server.public_limiter
+            if admission is None:
+                # Provider remains strictly loopback. The private-only path
+                # retains the original auth-before-manuscript behavior.
+                ReviewHandler.do_POST(self)
+                return
+            # Public mode has a global local throttle, independent of Host
+            # spelling. A forged Host: localhost header cannot evade quotas.
+            status, result = authorize(self.headers)
+            if status is not None:
+                if status == 401:
+                    allowed, retry_after = admission.auth_attempt_allowed()
+                    if not allowed:
+                        self._rate_limited("authentication_rate_limited", retry_after)
+                        return
+                    admission.record_auth_failure()
+                self._respond(status, result or _error("unauthorized", "Authorization required"))
+                return
+            # Failed credentials must never consume the legitimate owner's
+            # authorization capacity. Only failed credentials are throttled;
+            # valid ones still face the independent model-review quota.
+            reservation, retry_after = admission.begin_review()
+            if reservation is None:
+                self._rate_limited("review_rate_limited", retry_after)
+                return
+            # A valid bearer and a reserved allowance precede body reads.
+            # The reusable handler rechecks authorization before reading.
+            with reservation:
+                ReviewHandler.do_POST(self)
         else:
             self._unknown_or_wrong_method(route)
 
@@ -220,17 +295,24 @@ class _LocalHandler(ReviewHandler):
     do_DELETE = do_OPTIONS
 
 
-def create_server(host: str = "127.0.0.1", port: int = 8765) -> ThreadingHTTPServer:
+def create_server(host: str = "127.0.0.1", port: int = 8765,
+                  *, funnel_origin: str | None = None) -> ThreadingHTTPServer:
     """Create an HTTP server without contacting or provisioning anything."""
     if isinstance(port, bool) or not isinstance(port, int) or not 0 <= port <= 65_535:
         raise ValueError("port must be an integer between 0 and 65535")
     bind_host, address_family = _bind_address(host)
+    selected_origin = funnel_origin if funnel_origin is not None else os.environ.get("AEONITH_FUNNEL_ORIGIN")
+    configured_funnel_host = _funnel_host(selected_origin)
+    if configured_funnel_host and bind_host != "127.0.0.1":
+        raise ValueError("Funnel mode requires the local server bound to 127.0.0.1")
 
     class BoundServer(ThreadingHTTPServer):
         daemon_threads = True
 
         def __init__(self, *args, **kwargs):
             self._connection_slots = threading.BoundedSemaphore(_MAX_CONNECTIONS)
+            self.funnel_host = configured_funnel_host
+            self.public_limiter = LocalAdmission() if configured_funnel_host else None
             super().__init__(*args, **kwargs)
 
         def process_request(self, request, client_address):
@@ -265,6 +347,8 @@ def main(argv: list[str] | None = None) -> int:
     host, port = server.server_address[:2]
     bracketed = f"[{host}]" if ":" in host else host
     print(f"Aeonith private local UI: http://{bracketed}:{port}/", flush=True)
+    if server.funnel_host:
+        print(f"Approved Funnel origin: https://{server.funnel_host} (enable Tailscale separately)", flush=True)
     try:
         server.serve_forever(poll_interval=0.2)
     except KeyboardInterrupt:

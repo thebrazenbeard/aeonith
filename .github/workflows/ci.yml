@@ -30,7 +30,7 @@ jobs:
       - name: Run contract and adversarial tests
         run: python -m unittest discover -s tests -v
       - name: Require service and browser security gates
-        run: python -m unittest tests.test_live_service tests.test_service_security tests.test_web_ui_contract tests.test_zero_cost_policy -v
+        run: python -m unittest tests.test_live_service tests.test_service_security tests.test_web_ui_contract tests.test_zero_cost_policy tests.test_funnel_ingress tests.test_funnel_limits tests.test_funnel_e2e -v
       - name: Validate JSON schemas
         run: |
           python -m json.tool aeonith/schemas/capability-envelope-v1.schema.json > /dev/null
