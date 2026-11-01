@@ -104,6 +104,17 @@ Invoke-RestMethod -Uri 'http://127.0.0.1:11434/api/tags' -TimeoutSec 4 | Out-Nul
 $occupied = @(Get-NetTCPConnection -State Listen -LocalPort $port -ErrorAction SilentlyContinue)
 if ($occupied.Count -gt 0) { throw 'Port 8765 is in use; refusing to interrupt another service.' }
 
+# Ollama unloads idle models after five minutes by default, which can make a
+# cold CPU inference exceed the app's bounded 50-second timeout. Preload only
+# the already-installed model, with no user content or generated text, and
+# keep it resident for 24 hours. This uses existing local RAM, not a paid API.
+$warmPayload = @{ model = $Model; keep_alive = '24h'; stream = $false } | ConvertTo-Json
+$warmResult = Invoke-RestMethod -Uri 'http://127.0.0.1:11434/api/generate' `
+    -Method Post -ContentType 'application/json' -Body $warmPayload -TimeoutSec 90
+if ($warmResult.done -ne $true) {
+    throw 'Ollama did not confirm model preload; Aeonith was not started.'
+}
+
 $settings = @{
     AEONITH_SERVICE_TOKEN = $token
     AEONITH_PROVIDER_KIND = 'local-openai-compatible'
