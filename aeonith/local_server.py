@@ -233,6 +233,16 @@ class _LocalHandler(ReviewHandler):
     def do_GET(self) -> None:
         if not self._dispatch_allowed():
             return
+        if self.path == "/?utm_source=chatgpt.com":
+            # ChatGPT decorates outbound links. Strip this exact public
+            # decoration without relaxing the prohibition on query-bearing
+            # API routes or potentially sensitive URL parameters.
+            self.send_response(302)
+            self.send_header("Location", "/")
+            self.send_header("Cache-Control", "no-store")
+            self.send_header("Content-Length", "0")
+            self.end_headers()
+            return
         route = self._route()
         if route == "health":
             HealthHandler.do_GET(self)

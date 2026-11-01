@@ -42,6 +42,13 @@
             <input id="work-title" name="title" type="text" maxlength="500" autocomplete="off" placeholder="Untitled work">
           </div>
 
+          <div class="field import-field">
+            <label for="manuscript-file">Import a local text file <span class="optional">optional</span></label>
+            <input id="manuscript-file" type="file" accept=".txt,.text,.md,.markdown,text/plain,text/markdown" aria-describedby="import-hint import-status">
+            <p id="import-hint" class="field-note">Choose a UTF-8 TXT or Markdown file. Its text is read only in this browser and placed into the editor; the file itself is not uploaded. Up to 12,000 characters can be reviewed. Word and PDF files are not supported yet; export those as plain text first.</p>
+            <p id="import-status" class="import-status" role="status" aria-live="polite"></p>
+          </div>
+
           <div class="field">
             <div class="field-heading">
               <label for="manuscript">Manuscript or excerpt</label>

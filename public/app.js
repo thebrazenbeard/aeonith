@@ -5,6 +5,8 @@ const byId = (id) => document.getElementById(id);
 const form = byId("review-form");
 const titleInput = byId("work-title");
 const manuscriptInput = byId("manuscript");
+const fileInput = byId("manuscript-file");
+const importStatusNode = byId("import-status");
 const tokenInput = byId("service-token");
 const consentInput = byId("disclosure");
 const submitButton = byId("submit-button");
@@ -17,6 +19,7 @@ const countNode = byId("character-count");
 const copyButton = byId("copy-result");
 const copyStatus = byId("copy-status");
 const MAX_MANUSCRIPT_CHARS = 12000;
+const MAX_IMPORT_BYTES = 65536;
 const MAX_LENSES = 14;
 
 // Display the remote-access warning for Tailscale's HTTPS machine.tailnet.ts.net
@@ -45,6 +48,8 @@ const lensLabels = Object.freeze({
 
 let plainTextReview = "";
 let requestInFlight = false;
+let manuscriptRevision = 0;
+let latestFileSelection = 0;
 
 async function checkLocalService() {
   // Readiness is configuration only: this probe sends no writing or token and
@@ -198,12 +203,69 @@ function requestError(status, responseData) {
 }
 
 manuscriptInput.addEventListener("input", () => {
+  manuscriptRevision += 1;
   const size = manuscriptInput.value.length;
   countNode.textContent = `${size.toLocaleString()} / ${MAX_MANUSCRIPT_CHARS.toLocaleString()} characters`;
   // Disclosure applies to this particular writing, not future edits.
   consentInput.checked = false;
 });
 titleInput.addEventListener("input", () => { consentInput.checked = false; });
+
+fileInput.addEventListener("change", async () => {
+  const file = fileInput.files && fileInput.files[0];
+  if (!file) return;
+  const selection = ++latestFileSelection;
+  const originalRevision = manuscriptRevision;
+  importStatusNode.textContent = "";
+  try {
+    if (requestInFlight) {
+      importStatusNode.textContent = "Wait for the current critique to finish before importing another passage.";
+      return;
+    }
+    // The file picker accept= filter is advisory, so validate the extension.
+    if (!/\.(?:txt|text|md|markdown)$/i.test(file.name)) {
+      importStatusNode.textContent = "Choose a UTF-8 .txt or Markdown file. Word and PDF files are not supported yet.";
+      return;
+    }
+    if (file.size === 0 || file.size > MAX_IMPORT_BYTES) {
+      importStatusNode.textContent = "The file must be nonempty and no larger than 64 KiB. Import a shorter text excerpt.";
+      return;
+    }
+    // Nothing is uploaded. Decode locally and reject invalid UTF-8 rather
+    // than silently replacing bytes or accidentally treating binary as text.
+    const bytes = await file.arrayBuffer();
+    const text = new TextDecoder("utf-8", { fatal: true }).decode(bytes);
+    if (!text.trim() || text.includes("\u0000")) {
+      importStatusNode.textContent = "The selected file does not contain usable plain text.";
+      return;
+    }
+    if (text.length > MAX_MANUSCRIPT_CHARS) {
+      importStatusNode.textContent = "The file exceeds 12,000 characters. No text was replaced or truncated; choose a shorter excerpt.";
+      return;
+    }
+    // A delayed file read must never overwrite changes made in the editor,
+    // nor a more recently selected file or a review in progress.
+    if (selection !== latestFileSelection || originalRevision !== manuscriptRevision || requestInFlight) {
+      importStatusNode.textContent = "Import cancelled because the editor or review state changed. Select the file again.";
+      return;
+    }
+    if (manuscriptInput.value && !window.confirm("Replace the current editor text with this file's contents?")) {
+      importStatusNode.textContent = "Import cancelled; your existing text is unchanged.";
+      return;
+    }
+    manuscriptInput.value = text;
+    manuscriptInput.dispatchEvent(new Event("input", { bubbles: true }));
+    resetResults();
+    clearError();
+    statusNode.textContent = "Imported text is ready for a new critique.";
+    importStatusNode.textContent = `Imported ${file.name} into the editor (${text.length.toLocaleString()} characters).`;
+    manuscriptInput.focus();
+  } catch {
+    importStatusNode.textContent = "The file could not be read as UTF-8 text. Your existing writing was not replaced.";
+  } finally {
+    if (selection === latestFileSelection) fileInput.value = "";
+  }
+});
 
 form.addEventListener("submit", async (event) => {
   event.preventDefault();

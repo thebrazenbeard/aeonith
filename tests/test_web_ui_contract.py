@@ -60,6 +60,9 @@ class BrowserContractTests(unittest.TestCase):
         self.assertEqual({entry["value"] for entry in lens_inputs if "checked" in entry},
                          {"symbolic"})
         self.assertTrue(any(input_.get("type") == "password" and input_.get("id") == "service-token" for input_ in doc.inputs))
+        self.assertTrue(any(input_.get("type") == "file" and input_.get("id") == "manuscript-file"
+                            and "name" not in input_ for input_ in doc.inputs))
+        self.assertTrue({"manuscript-file", "import-status", "import-hint"}.issubset(doc.ids))
         self.assertTrue(any(input_.get("type") == "checkbox" and input_.get("id") == "disclosure" for input_ in doc.inputs))
         self.assertEqual(doc.scripts, ["/app.js"])
         self.assertEqual(doc.stylesheets, ["/styles.css"])
@@ -101,6 +104,22 @@ class BrowserContractTests(unittest.TestCase):
         self.assertIn("Local model disabled or unconfigured", script)
         self.assertIn("cache: \"no-store\"", script)
         self.assertIn("redirect: \"error\"", script)
+
+    def test_local_text_import_is_bounded_and_cannot_upload_binary_files(self):
+        script = (ROOT / "app.js").read_text(encoding="utf-8")
+        markup = (ROOT / "index.html").read_text(encoding="utf-8")
+        self.assertIn('accept=".txt,.text,.md,.markdown,text/plain,text/markdown"', markup)
+        self.assertIn("TXT or Markdown", markup)
+        self.assertIn("Word and PDF files", markup)
+        self.assertIn('fileInput.addEventListener("change"', script)
+        self.assertIn("MAX_IMPORT_BYTES = 65536", script)
+        self.assertIn('new TextDecoder("utf-8", { fatal: true })', script)
+        self.assertIn("file.arrayBuffer()", script)
+        self.assertIn("text.length > MAX_MANUSCRIPT_CHARS", script)
+        self.assertIn("window.confirm", script)
+        self.assertIn('manuscriptInput.dispatchEvent(new Event("input"', script)
+        self.assertIn('fileInput.value = ""', script)
+        self.assertNotIn("FormData", script)
 
     def test_tailscale_https_notice_is_host_gated_and_discloses_remote_processing(self):
         markup = (ROOT / "index.html").read_text(encoding="utf-8")

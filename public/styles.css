@@ -60,6 +60,10 @@ h1 em { font-weight: 400; color: var(--accent-dark); }
 .field input:hover, .field textarea:hover, .access-panel input:hover { border-color: #8f839f; }
 .field textarea { min-height: 275px; resize: vertical; line-height: 1.72; }
 .field-note { color: var(--muted); font-size: .76rem; line-height: 1.6; margin: .55rem 0 0; }
+.import-field input[type="file"] { padding: .6rem .75rem; cursor: pointer; }
+.import-field input[type="file"]::file-selector-button { border: 1px solid #aba1bc; border-radius: 5px; background: #f2eff5; color: var(--accent-dark); font: inherit; margin-right: .8rem; padding: .4rem .65rem; cursor: pointer; }
+.import-status { margin: .45rem 0 0; color: var(--accent-dark); font-size: .78rem; line-height: 1.55; overflow-wrap: anywhere; }
+.import-status:empty { display: none; }
 
 .lenses-control { border-top: 1px solid var(--line); border-bottom: 1px solid var(--line); padding: .95rem 0; margin: 1.4rem 0; }
 .lenses-control summary { cursor: pointer; font-weight: 680; font-size: .9rem; }
