@@ -1,8 +1,8 @@
 # Aeonith release and live-service qualification gates
 
-_2026-10-31, v0.4 live-service candidate. This document distinguishes merged
-v0.3 source evidence from pending v0.4 API, deployment and model qualification.
-It is not a deployment receipt._
+_2026-10-31, v0.4.1 Vercel entrypoint hotfix candidate. This document distinguishes
+merged v0.4 source evidence from pending hosted API and model qualification.
+It is not a successful deployment receipt._
 
 The verified v0.3.0 source release was merged as [PR #6](https://github.com/thebrazenbeard/aeonith/pull/6)
 at `8980df6989219ae026d958171b8fdaf200e7edfd`. It passed **226/226** local
@@ -11,19 +11,27 @@ Python 3.12 contract tests and the exact-head GitHub Actions Python 3.11,
 external model. Earlier candidate text saying PR #6 was still pending was
 historical and is retired.
 
+The v0.4 protected HTTP/browser source release merged as
+[PR #9](https://github.com/thebrazenbeard/aeonith/pull/9) at
+`5ccfd7928b1c9587a9279d7d777b0ec31a6f7046`, with 272 local tests and
+all three exact-head GitHub Actions jobs green. Vercel's first real build
+reported `PYTHON_ENTRYPOINT_NOT_FOUND` because two handler candidates existed
+without an explicit entrypoint. v0.4.1 selects `api.index:handler` and routes
+health/review through a single dispatcher; that fix awaits deployed proof.
+
 ## Source and qualification state
 
 | Gate | Required evidence | Current state |
 | --- | --- | --- |
-| Reviewed source | A PR diff against exact `main` SHA, no private GPT configurations, knowledge assets or secrets in public Git | **Pending v0.4 PR**; v0.3 source was merged |
-| Local contracts | Full Python 3.11–3.13 test matrix and wheel smoke; static and live-service tests in CI | Candidate local Python 3.12 **272/272 PASS**; **pending exact-head GitHub v0.4 CI** |
+| Reviewed source | A PR diff against exact `main` SHA, no private GPT configurations, knowledge assets or secrets in public Git | **v0.4 PR #9 merged**; pending v0.4.1 entrypoint fix |
+| Local contracts | Full Python 3.11–3.13 test matrix and wheel smoke; static and live-service tests in CI | Candidate local Python 3.12 **275/275 PASS** and wheel built; **pending exact-head GitHub v0.4.1 CI** |
 | HTTP boundary | Unauthorized requests never call providers; valid/invalid body, method, size, endpoint and error behavior exercised | **32/32 focused service/security/browser source tests passed**; deployed HTTP pending |
 | Browser interaction | Same-origin requests, no stored manuscript or credentials, safe rendering, accessible failure states | Static contract tests passed; **actual deployed browser behavior pending** |
 | Rate/cost control | Protection against unauthenticated abuse and concurrency, model spend and invocation limits enforced outside per-process memory | **Open production gate** |
 | Privacy | Strict no-cache response policy, no manuscript/credential logging; explicit notice before external provider disclosure | **Pending live proof** |
 | Provider availability | Missing credentials/provider reject honestly without fabricated criticism | **Pending hosted proof** |
 | Provider compatibility | A credentialed, cost-bounded call with an intentionally non-sensitive fixture, verified exact chosen model and backend | **Open; not proven by local provider fakes** |
-| Deployment identity | Hosting project and team verified; deployed SHA matches reviewed code; exact URL, HTTP status and logs captured | **No confirmed deployment receipt yet** |
+| Deployment identity | Hosting project and scope verified; deployed SHA matches reviewed code; exact URL, HTTP status and logs captured | Vercel project found in personal scope; first v0.4 build matched `5ccfd79` but **ERROR** (`PYTHON_ENTRYPOINT_NOT_FOUND`); v0.4.1 fix not yet deployed |
 | Staging and promotion | Protected preview and tested staging build before assigning a production domain; repeatable rollback | **Open; do not silently assume hosting defaults** |
 | Post-deploy observability | Non-sensitive request/error logs and operational health, without manuscript bodies, prompt contents or credentials | **Open** |
 | Knowledge rights | Explicit owner decision on license and rights for each GPT reference asset; no third-party knowledge imported by assumption | **Open** |

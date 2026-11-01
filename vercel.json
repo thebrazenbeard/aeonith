@@ -9,11 +9,19 @@
   "rewrites": [
     {
       "source": "/healthz",
-      "destination": "/api/health"
+      "destination": "/api"
     },
     {
       "source": "/v1/critique",
-      "destination": "/api/review"
+      "destination": "/api"
+    },
+    {
+      "source": "/api/health",
+      "destination": "/api"
+    },
+    {
+      "source": "/api/review",
+      "destination": "/api"
     }
   ],
   "headers": [
