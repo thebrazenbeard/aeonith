@@ -18,14 +18,15 @@ This repository is an **independently implemented, testable starting point**—n
 - Explicit error states when no provider is configured, a request is invalid, the provider fails, or the provider returns an invalid structure. No review is fabricated on those paths.
 - A bounded, read-only JSON invocation adapter for future ecosystem integration. This adapter does not supply host authorization or a deployed service.
 - The standalone `capability_adapter.py` stdin/stdout entrypoint has no model configuration and deliberately returns `provider_unavailable`; a host must inject an explicitly configured reviewer to obtain a real critique.
-- A **v0.4.1 live-service candidate** adds a static, browser-based manuscript editor and an explicitly authenticated HTTP API for a single configured provider. The checked-in service code and local tests do not by themselves prove a healthy hosted service or model connection.
+- A **v0.4.1 deployed, provider-disabled web service** adds a browser-based manuscript editor and an explicitly authenticated HTTP API for a single configured provider. Its production health endpoint and editor have been checked on Vercel; no external model connection or genuine critique has been qualified.
 
-The tests verify these contracts with local fixtures and controlled providers. **Literary quality, original-GPT parity, live-provider compatibility, and deployment have not been established by those tests.**
+The tests verify these contracts with local fixtures and controlled providers. **Literary quality, original-GPT parity, and live-provider compatibility have not been established.** Deployment health and browser rendering were verified separately against the hosted service.
 
-## Browser and HTTP service (v0.4.1 candidate)
+## Browser and HTTP service (v0.4.1 deployed shell)
 
 The repository includes a dependency-free interface under `public/` and
-Python HTTP handlers under `api/`, intended for a protected Vercel deployment.
+Python HTTP handlers under `api/`, deployed on Vercel with authentication
+protection on the default `.vercel.app` domains.
 The browser lets an author submit a passage, choose any of the fourteen lenses,
 and read a structured critique **only when an explicitly configured provider
 is available**. It keeps the service access token in the page's memory, not in
@@ -63,15 +64,24 @@ not an authenticated consent ledger or a guarantee about third-party
 retention. Do not submit confidential work until the provider's processing and
 retention policy is acceptable to the author.
 
-**Production deployment is gated separately.** A bearer token and local
+**Live editor:** [aeonith-seven.vercel.app](https://aeonith-seven.vercel.app/).
+On 2026-11-01, the production deployment for commit
+`f90a64bc18a2d285638cbbe646d546ffb396a4f8` reported `READY`;
+`GET /healthz` returned `status: "ok"` and `review_configured: false`, and
+the actual browser editor rendered. A harmless, unauthorized synthetic
+review request returned a provider-unavailable message without a critique.
+This is a **live, deliberately disabled review shell**, not a qualified
+model-backed criticism service. The account's protection setting currently
+exempts possible future custom domains; review that setting before adding one.
+
+**Enabling model-backed production reviews is gated separately.** A bearer token and local
 request-size limit do not enforce a durable rate or cost budget across
 serverless instances. Require hosting-level access controls, rate and model
 spend limits, exact-SHA checks, protected preview smoke tests, live-provider
 qualification and rollback readiness before making paid inference public.
 See [live-service release gates](docs/RELEASE_GATES.md) and the
-[deployment runbook](docs/SERVICE_DEPLOYMENT.md). Until a verified deployment receipt
-exists, these files describe a candidate service rather than an operational
-URL.
+[deployment runbook](docs/SERVICE_DEPLOYMENT.md). The verified hosted shell
+does not remove the provider, privacy, cost, and abuse-control gates.
 
 ## Try the CLI
 
