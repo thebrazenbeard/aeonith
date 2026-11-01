@@ -14,9 +14,18 @@ This is an **opt-in, $0-additional-service-cost** publishing path for an Aeonith
 
 Official references: [Funnel overview](https://tailscale.com/docs/features/tailscale-funnel), [Funnel CLI](https://tailscale.com/docs/reference/tailscale-cli/funnel), and [free Personal plan](https://tailscale.com/pricing).
 
-## Run Aeonith and KoboldCpp on the same computer
+## Run Aeonith and a local model on the same computer
 
 Start your existing KoboldCpp/GGUF model with the API bound to loopback at `http://127.0.0.1:5001/v1/chat/completions`. **Do not expose that model port through Funnel.**
+
+An already-installed **Ollama** runtime is another local-only option. Check
+`ollama list` and its loopback listener first, then substitute
+`http://127.0.0.1:11434/v1/chat/completions` for the provider URL and the
+exact installed model name for `AEONITH_PROVIDER_MODEL`. Do **not** expose
+port 11434 or download a model just to satisfy a deployment checklist.
+OpenAI-compatible transport alone does not qualify a model: a full Aeonith
+review must still finish within the configured 50-second maximum and pass
+the strict evidence/schema checks. A generic text response is insufficient.
 
 In PowerShell, set process-local Aeonith configuration. Generate a new secret; never commit or paste its value into a log or chat:
 

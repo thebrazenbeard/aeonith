@@ -28,15 +28,18 @@ class TextInputTests(unittest.TestCase):
     def test_preserves_unicode_and_newlines_via_stdin(self) -> None:
         submitted = "Écho\nA bell…\n"
         completed = subprocess.run(
-            [sys.executable, str(MODULE_PATH), "--input", "-", "--title", "L’écho"],
-            input=submitted,
-            text=True,
+            # Windows defaults subprocess text pipes to the active code page.
+            # Exercise the documented UTF-8 input contract explicitly.
+            [sys.executable, "-X", "utf8", str(MODULE_PATH), "--input", "-", "--title", "L’écho"],
+            # Binary stdin avoids Windows text-mode CRLF conversion and
+            # preserves the exact UTF-8 byte contract across platforms.
+            input=submitted.encode("utf-8"),
             capture_output=True,
             check=False,
             timeout=10,
         )
-        self.assertEqual(completed.returncode, 0, completed.stderr)
-        obj = json.loads(completed.stdout)
+        self.assertEqual(completed.returncode, 0, completed.stderr.decode("utf-8", errors="replace"))
+        obj = json.loads(completed.stdout.decode("utf-8"))
         self.assertEqual(obj["work"]["text"], submitted)
         self.assertEqual(obj["work"]["title"], "L’écho")
 
