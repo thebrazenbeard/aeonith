@@ -58,7 +58,7 @@ class BrowserContractTests(unittest.TestCase):
         self.assertEqual({input_["value"] for input_ in lens_inputs}, set(CANONICAL_LENSES))
         self.assertEqual(len(lens_inputs), len(CANONICAL_LENSES))
         self.assertEqual({entry["value"] for entry in lens_inputs if "checked" in entry},
-                         {"literary_thematic", "stylistic", "symbolic"})
+                         {"symbolic"})
         self.assertTrue(any(input_.get("type") == "password" and input_.get("id") == "service-token" for input_ in doc.inputs))
         self.assertTrue(any(input_.get("type") == "checkbox" and input_.get("id") == "disclosure" for input_ in doc.inputs))
         self.assertEqual(doc.scripts, ["/app.js"])
@@ -110,6 +110,9 @@ class BrowserContractTests(unittest.TestCase):
         self.assertIn("Tailscale HTTPS", markup)
         self.assertIn("operator-issued bearer token", markup)
         self.assertIn("KoboldCpp", markup)
+        self.assertIn("Ollama", markup)
+        self.assertIn("One selected by default", markup)
+        self.assertEqual(1, markup.count('name="lenses" value="symbolic" checked'))
         self.assertIn("browser storage", markup)
         self.assertIn("server or model may log", markup)
         self.assertIn('window.location.protocol === "https:"', script)

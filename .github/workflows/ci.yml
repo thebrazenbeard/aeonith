@@ -81,3 +81,12 @@ jobs:
           python -m compileall -q aeonith api
           python -m pip wheel --no-deps . --wheel-dir wheelhouse
           node --check public/app.js
+      - name: Parse Windows deployment scripts without executing them
+        shell: pwsh
+        run: |
+          foreach ($file in @('scripts/start-aeonith-windows.ps1', 'scripts/stop-aeonith-windows.ps1')) {
+            $tokens = $null
+            $errors = $null
+            [System.Management.Automation.Language.Parser]::ParseFile((Resolve-Path $file), [ref]$tokens, [ref]$errors) | Out-Null
+            if ($errors.Count -ne 0) { throw "PowerShell script parsing failed: $file" }
+          }

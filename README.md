@@ -56,6 +56,14 @@ Use an existing local model runner such as [KoboldCpp](https://github.com/LostRu
 
 3. On the **same computer**, open `http://127.0.0.1:8765/` and enter that token in the editor. The token is kept in page memory, not browser persistent storage. The service binds to `127.0.0.1` by default; do not expose it publicly. Stop it with `Ctrl+C`.
 
+For an existing **Windows + Ollama** setup, the optional
+[DPAPI-backed launcher](scripts/README.md) starts Aeonith against an
+already-installed local model and stores its bearer token encrypted under
+the Windows user's profile, outside Git. It does not install software,
+enable Funnel, or configure auto-start. A small local model has only been
+qualified for a synthetic **single-lens** review; the browser defaults to
+one lens and more demanding reviews require independent model validation.
+
 `AEONITH_PROVIDER_MODEL=local` is a model label for a simple single-model KoboldCpp instance, not a model download instruction. If your runner requires a particular model ID, use the ID it exposes. Local model interoperability and output quality must be checked with a harmless test passage; not all compatible APIs support JSON mode or structured output equally. The service deliberately does **not** fall back to a remote model if local inference fails.
 
 If a local model is not already running, you can still run the library, tests, source planner, and offline evaluation without any network calls. To inspect the browser shell with reviews disabled, leave `AEONITH_ENABLE_LIVE_REVIEWS` unset and run `python3 -m aeonith.local_server` after configuring a strong service token.
