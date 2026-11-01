@@ -26,6 +26,7 @@ Non-secret Vercel settings for a **protected preview**:
 AEONITH_PROVIDER_KIND=openai-responses
 AEONITH_PROVIDER_URL=https://ai-gateway.vercel.sh/v1/responses
 AEONITH_PROVIDER_MODEL=openai/gpt-6-luna
+AEONITH_REQUIRE_VERCEL_GATEWAY_OIDC=true
 AEONITH_STRUCTURED_OUTPUTS=true
 AEONITH_MAX_LENSES=3
 AEONITH_MAX_OUTPUT_TOKENS=4096
@@ -46,6 +47,12 @@ storage:
 
 For the hosted Gateway route do **not** set `AEONITH_PROVIDER_API_KEY` or
 `AI_GATEWAY_API_KEY`. The deployed Vercel runtime supplies the OIDC credential.
+The literal `AEONITH_REQUIRE_VERCEL_GATEWAY_OIDC=true` locks the pilot to the
+exact Responses Gateway URL and its deployment OIDC token; a missing token,
+alternative endpoint or adapter, or any configured Gateway/provider API key
+fails closed even if Vercel runtime markers are missing. Invalid flag values
+also fail closed. Never disable this lock to work around an authentication
+failure or an unverified project budget.
 For an alternative, explicitly approved provider, use its dedicated project
 key and separate hard-enforced spend controls, and evaluate retention afresh.
 
@@ -84,7 +91,27 @@ a financial ledger.
 
 ## Qualification sequence
 
-1. On the protected preview, verify `GET /healthz` reports `status: ok` and
+1. Authorize a narrowly scoped **GitHub Actions Trusted Source** in Aeonith's
+   Vercel **Settings → Deployment Protection → Trusted Sources**. Restrict it
+   to GitHub account `thebrazenbeard`, repository `aeonith`, feature branch
+   `feat/live-provider-pilot-20261101` and the **Preview** environment only.
+   The test job needs GitHub `id-token: write`; obtain its short-lived token
+   with `core.getIDToken()` and make it available only to the smoke step as a
+   masked environment variable. Never print the token or follow redirects.
+   The opt-in, non-billable six-probe smoke tool is:
+
+   ```bash
+   python -m scripts.preview_smoke --execute \
+     --origin https://YOUR_VERIFIED_PREVIEW_HOST.vercel.app \
+     --expected-host YOUR_VERIFIED_PREVIEW_HOST.vercel.app \
+     --trusted-oidc-env GITHUB_OIDC_TOKEN
+   ```
+
+   Independently verify this full deployment origin and exact Git commit in
+   Vercel metadata before invoking the test. The script cannot create an OIDC
+   token, bypass protection, or run any network calls without `--execute`.
+   Keep inference disabled for this test. On the protected preview, verify
+   `GET /healthz` reports `status: ok` and
    the expected readiness flag. Route matrix: `GET /api/health` is health;
    `GET /api/review` and `POST /healthz` are 405; unknown paths are 404.
    Check both friendly and direct `/api?aeonith_route=review` POST aliases.

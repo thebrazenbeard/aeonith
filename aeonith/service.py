@@ -156,6 +156,29 @@ def _hosted_runtime(env: Mapping[str, str]) -> bool:
             or env.get("AEONITH_ENFORCE_PROVIDER_ALLOWLIST") == "true")
 
 
+def _gateway_oidc_required(env: Mapping[str, str]) -> bool:
+    """Treat an invalid pilot budget-lock flag as a configuration failure."""
+    flag = env.get("AEONITH_REQUIRE_VERCEL_GATEWAY_OIDC")
+    if flag is None or flag == "false":
+        return False
+    if flag != "true":
+        raise ValueError("invalid Gateway OIDC requirement")
+    return True
+
+
+def _validate_gateway_oidc_lock(env: Mapping[str, str], kind: str, url: str) -> bool:
+    """Pin the paid pilot to project-budgeted OIDC independent of Vercel markers."""
+    if not _gateway_oidc_required(env):
+        return False
+    if (kind != "openai-responses"
+            or url != _VERCEL_GATEWAY_RESPONSES_ENDPOINT
+            or not env.get("VERCEL_OIDC_TOKEN")
+            or env.get("AEONITH_PROVIDER_API_KEY")
+            or env.get("AI_GATEWAY_API_KEY")):
+        raise ValueError("Gateway pilot requires exact endpoint and OIDC only")
+    return True
+
+
 def _validate_hosted_provider_endpoint(env: Mapping[str, str], kind: str, url: str) -> None:
     """A hosted worker may send writing only to an explicitly allowed URL.
 
@@ -204,10 +227,11 @@ def _construct_provider(env: Mapping[str, str]) -> Any:
     kind = env.get("AEONITH_PROVIDER_KIND", "openai-responses")
     url = env.get("AEONITH_PROVIDER_URL", "")
     model = env.get("AEONITH_PROVIDER_MODEL", "")
+    oidc_locked = _validate_gateway_oidc_lock(env, kind, url)
     # Vercel project budgets apply to deployment OIDC calls, not calls using
     # an API key. Require OIDC for the hosted gateway rather than silently
     # switching to a key that would bypass the configured project budget.
-    if url == _VERCEL_GATEWAY_RESPONSES_ENDPOINT and _hosted_runtime(env):
+    if oidc_locked or (url == _VERCEL_GATEWAY_RESPONSES_ENDPOINT and _hosted_runtime(env)):
         api_key = env.get("VERCEL_OIDC_TOKEN") or None
     else:
         # Ambient Vercel OIDC may never be sent to a different host.
@@ -234,6 +258,10 @@ def _construct_provider(env: Mapping[str, str]) -> Any:
 def is_ready(environ: Mapping[str, str] | None = None) -> bool:
     """Conservative configuration readiness; not evidence of model success."""
     env = _env(environ)
+    try:
+        oidc_locked = _gateway_oidc_required(env)
+    except ValueError:
+        return False
     secret = env.get("AEONITH_SERVICE_TOKEN", "")
     if (env.get("AEONITH_ENABLE_LIVE_REVIEWS") != "true"
             or not isinstance(secret, str) or len(secret) < 32
@@ -243,7 +271,7 @@ def is_ready(environ: Mapping[str, str] | None = None) -> bool:
         return False
     url = env.get("AEONITH_PROVIDER_URL")
     if _remote_provider(env):
-        if url == _VERCEL_GATEWAY_RESPONSES_ENDPOINT and _hosted_runtime(env):
+        if oidc_locked or (url == _VERCEL_GATEWAY_RESPONSES_ENDPOINT and _hosted_runtime(env)):
             if not env.get("VERCEL_OIDC_TOKEN"):
                 return False
         elif not (env.get("AEONITH_PROVIDER_API_KEY")
@@ -253,7 +281,7 @@ def is_ready(environ: Mapping[str, str] | None = None) -> bool:
     # The public hosted health flag must never advertise review readiness
     # without a configured cross-instance admission gate. Configuration alone
     # is not a Redis availability test; the actual EVAL remains fail-closed.
-    if _hosted_runtime(env) and not admission_ready(env):
+    if (_hosted_runtime(env) or oidc_locked) and not admission_ready(env):
         return False
     try:
         _pilot_settings(env)
@@ -326,7 +354,7 @@ def process_review(
     # Reserve one distributed daily invocation before constructing or calling
     # any real provider. The injected fake-provider seam is only used by local
     # non-hosted tests; hosted workers enforce admission even when injected.
-    if provider is None or _hosted_runtime(env):
+    if provider is None or _hosted_runtime(env) or _gateway_oidc_required(env):
         admission_status, admission_error = admit_request(headers, env)
         if admission_status is not None:
             return admission_status, admission_error or _error(

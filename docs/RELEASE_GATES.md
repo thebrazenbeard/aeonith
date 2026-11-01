@@ -41,7 +41,8 @@ read back as `deploymentType: all`.
 The v0.5.0 **source candidate** adds exact route-method dispatch, bounded
 paid-pilot payload/output sizes, a seven-day UUID replay defense, cross-instance
 daily admission with one atomic Upstash Redis EVAL, and trusted Vercel AI
-Gateway OIDC routing. Its final local suite passed **313/313** tests,
+Gateway OIDC routing. The initial source candidate at `95d130a9` passed
+**313/313** tests,
 including new integration proofs that denied admission cannot invoke the
 model. All three exact-head GitHub Actions Python 3.11–3.13 jobs passed at
 [`95d130a9`](https://github.com/thebrazenbeard/aeonith/commit/95d130a9b3740658019fc5cee562e0bfb33e256e).
@@ -51,12 +52,20 @@ Vercel denied the connector's authenticated fetch with 403, and the browser
 was redirected to Vercel login. No authorized live model call occurred. See
 [the private pilot checklist](LIVE_PROVIDER_PILOT.md).
 
+Follow-up hardening added an explicit `AEONITH_REQUIRE_VERCEL_GATEWAY_OIDC`
+pilot lock that refuses API-key budget bypasses even with missing runtime
+markers, plus an opt-in six-probe protected-preview smoke CLI with no paid
+inference path. The enlarged local suite passed **328/328** Python tests.
+Check the [current PR's exact-head CI](https://github.com/thebrazenbeard/aeonith/pull/12/checks)
+and Vercel deployment identity independently before release; earlier green
+commits are not proof of a successor commit.
+
 ## Source and qualification state
 
 | Gate | Required evidence | Current state |
 | --- | --- | --- |
 | Reviewed source | A PR diff against exact `main` SHA, no private GPT configurations, knowledge assets or secrets in public Git | **v0.4.1 merged**; v0.5.0 [draft PR #12](https://github.com/thebrazenbeard/aeonith/pull/12), independent security/literary reviews passed source-level checks; hosted sign-off pending |
-| Local contracts | Full Python 3.11–3.13 test matrix and wheel smoke; static and live-service tests in CI | v0.5.0 local Python 3.12 **313/313 PASS**; exact-head [GitHub Actions run 41264245675](https://github.com/thebrazenbeard/aeonith/actions/runs/41264245675) Python 3.11, 3.12, 3.13 **PASS** |
+| Local contracts | Full Python 3.11–3.13 test matrix and wheel smoke; static and live-service tests in CI | v0.5.0 local Python 3.12 **328/328 PASS** after follow-up hardening; prior exact-head [GitHub Actions run 41289437509](https://github.com/thebrazenbeard/aeonith/actions/runs/41289437509) Python 3.11–3.13 **PASS**; current successor head requires a fresh CI result |
 | HTTP boundary | Unauthorized requests never call providers; valid/invalid body, method, size, endpoint and error behavior exercised | Local negative matrix now includes route/method, replay, bounded input and admission-denial checks; **deployed matrix pending** |
 | Browser interaction | Same-origin requests, no stored manuscript or credentials, safe rendering, accessible failure states | v0.4.1 hosted editor loaded; v0.5.0 editor/nonce tests passed locally, **authenticated preview browser test blocked** |
 | Rate/cost control | Protection against unauthenticated abuse and concurrency, model spend and invocation limits enforced outside per-process memory | Source-level atomic Redis daily admission and replay checks passed; **real Redis, Gateway project $1 budget and WAF/observability not configured or verified** |

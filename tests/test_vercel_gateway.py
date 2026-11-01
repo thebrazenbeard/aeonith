@@ -18,6 +18,7 @@ import unittest
 from unittest.mock import patch
 
 from aeonith.providers import OpenAIResponsesProvider
+from aeonith.service import _construct_provider, is_ready
 
 
 GATEWAY_RESPONSES_URL = "https://ai-gateway.vercel.sh/v1/responses"
@@ -41,6 +42,16 @@ CANDIDATE = {
     "challenges": [],
     "uncertainties": [],
     "assessment": None,
+}
+
+PILOT_ENV = {
+    "AEONITH_SERVICE_TOKEN": "s" * 48,
+    "AEONITH_ENABLE_LIVE_REVIEWS": "true",
+    "AEONITH_PROVIDER_KIND": "openai-responses",
+    "AEONITH_PROVIDER_URL": GATEWAY_RESPONSES_URL,
+    "AEONITH_PROVIDER_MODEL": "openai/gpt-6-luna",
+    "AEONITH_REQUIRE_VERCEL_GATEWAY_OIDC": "true",
+    "VERCEL_OIDC_TOKEN": "synthetic-oidc-test-fixture",
 }
 
 
@@ -70,6 +81,42 @@ class _Capture:
 
 
 class VercelGatewayContractTests(unittest.TestCase):
+    def test_explicit_budget_lock_requires_oidc_without_vercel_marker(self):
+        """An omitted VERCEL_ENV must never activate a Gateway API-key fallback."""
+        self.assertNotIn("VERCEL", PILOT_ENV)
+        provider = _construct_provider(PILOT_ENV)
+        self.assertEqual(provider.api_key, "synthetic-oidc-test-fixture")
+        with patch("aeonith.service.admission_ready", return_value=True) as ready:
+            self.assertTrue(is_ready(PILOT_ENV))
+            ready.assert_called_once()
+        with patch("aeonith.service.admission_ready", return_value=False):
+            self.assertFalse(is_ready(PILOT_ENV))
+
+    def test_budget_lock_rejects_keys_or_other_provider_destinations(self):
+        mutations = (
+            {"AEONITH_PROVIDER_API_KEY": "must-not-override-oidc"},
+            {"AI_GATEWAY_API_KEY": "must-not-override-oidc"},
+            {"VERCEL_OIDC_TOKEN": ""},
+            {"AEONITH_PROVIDER_URL": "https://api.openai.com/v1/responses"},
+            {"AEONITH_PROVIDER_URL": "https://ai-gateway.vercel.sh/v1/responses?x=1"},
+            {"AEONITH_PROVIDER_KIND": "openai-compatible"},
+        )
+        for mutation in mutations:
+            with self.subTest(mutation=mutation):
+                environment = {**PILOT_ENV, **mutation}
+                with self.assertRaises(ValueError):
+                    _construct_provider(environment)
+                with patch("aeonith.service.admission_ready", return_value=True):
+                    self.assertFalse(is_ready(environment))
+
+    def test_budget_lock_invalid_boolean_fails_closed(self):
+        for flag in ("", "1", "TRUE", "yes", "False"):
+            with self.subTest(flag=flag):
+                environment = {**PILOT_ENV, "AEONITH_REQUIRE_VERCEL_GATEWAY_OIDC": flag}
+                with self.assertRaises(ValueError):
+                    _construct_provider(environment)
+                self.assertFalse(is_ready(environment))
+
     def test_explicit_gateway_oidc_bearer_uses_existing_responses_schema(self):
         """A trusted caller may explicitly supply an OIDC token as API key."""
         capture = _Capture()
