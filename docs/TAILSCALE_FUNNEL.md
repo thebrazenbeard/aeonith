@@ -2,7 +2,7 @@
 
 This is an **opt-in, $0-additional-service-cost** publishing path for an Aeonith instance on a computer the operator already owns. It does **not** make the local model public directly, download model weights, create cloud inference accounts, or authorize paid hosting. The basic local-only deployment remains the default.
 
-**Public means public:** Anyone on the internet can open the Funnel URL, including attackers. Tailscale Funnel supplies HTTPS ingress, **not visitor authentication**. Aeonith still requires its bearer token before reading a manuscript or requesting a review. Do not publish a personal manuscript, a token, or a local KoboldCpp endpoint.
+**Public means public:** Anyone on the internet can open the Funnel URL, including attackers. Tailscale Funnel supplies HTTPS ingress, **not visitor authentication**. Aeonith still requires authorization by bearer token or a browser session created with that token before reading a manuscript or requesting a review. Do not publish a personal manuscript, a token, or a local KoboldCpp endpoint.
 
 ## Mandatory $0 and readiness checks
 
@@ -64,7 +64,15 @@ unset AEONITH_PROVIDER_API_KEY
 python3 -m aeonith.local_server --host 127.0.0.1 --port 8765
 ```
 
-The service token is still required for every review; anonymous visitors only receive the public editor and health status. The app has no public account signup, multi-user identity system, or persisted manuscripts. Treat it as **single-owner access over a public transport**, not a hardened multi-tenant SaaS.
+The service token is still the root credential. Enter it once into the public editor and choose the optional browser-session control to receive an HTTPS-only, `HttpOnly`, `SameSite=Strict`, signed cookie valid for at most seven days. Further reviews from that browser can use the cookie without retyping the bearer token. The session holds **no plaintext service token** and incurs **no additional charge**. Signing out removes that browser's cookie; a stolen copy remains valid until expiry or service-token rotation. An explicit `Authorization: Bearer ...` header continues to work for command-line clients. Anonymous visitors receive only the editor and health information. The app has no public account signup, multi-user identity system, or persisted manuscripts. Treat it as **single-owner access over a public transport**, not a hardened multi-tenant SaaS.
+
+On the owner-controlled Windows host, the DPAPI-backed launcher can put the existing token on the clipboard without creating a new token or restarting the service. Run this as the **same signed-in Windows account** that launched Aeonith, then paste into the browser's session sign-in field and clear clipboard history:
+
+```powershell
+powershell.exe -NoProfile -ExecutionPolicy Bypass -File "C:\Users\Vera\aeonith\scripts\start-aeonith-windows.ps1" -FunnelOrigin "https://vn1.tail86ea75.ts.net" -CopyTokenToClipboard
+```
+
+The path and origin above are specific to this deployment; replace them for another host. Never paste the secret into a chat, URL, README, log, or shared screenshot.
 
 ## Publish over Funnel only after local checks pass
 

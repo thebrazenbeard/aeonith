@@ -24,8 +24,8 @@
       <p class="runtime-status" id="runtime-status" role="status" aria-live="polite">Checking local service configuration…</p>
       <aside id="funnel-privacy-note" class="funnel-notice" aria-label="Remote Tailscale HTTPS access and privacy" hidden>
         <strong>Remote access · Read before submitting</strong>
-        <p>You are visiting Aeonith at a Tailscale HTTPS address. If the operator enables public Funnel access, anyone with this address can reach the page, but reviews require an <strong>operator-issued bearer token</strong>. Do not share your token.</p>
-        <p>Your browser sends your writing and bearer token over Tailscale HTTPS to the operator-owned Aeonith server. Your writing can then be processed by the operator's local model runner (such as Ollama or KoboldCpp) <strong>only if the local model is enabled and configured</strong>; an HTTPS connection does not guarantee a working model. Aeonith does not save manuscripts, tokens, or critiques in browser storage, but the server or model may log or retain what you submit. Use this service for private writing only if you trust its operator.</p>
+        <p>You are visiting Aeonith at a Tailscale HTTPS address. If the operator enables public Funnel access, anyone with this address can reach the page, but reviews require an <strong>operator-issued bearer token</strong> or a previously authorized browser session. Do not share your token.</p>
+        <p>Your browser sends your writing and any bearer token you enter over Tailscale HTTPS to the operator-owned Aeonith server. Your writing can then be processed by the operator's local model runner (such as Ollama or KoboldCpp) <strong>only if the local model is enabled and configured</strong>; an HTTPS connection does not guarantee a working model. Aeonith does not save manuscripts, tokens, or critiques in browser storage. If you opt in to a seven-day session, the browser retains a secure HttpOnly authentication cookie (not manuscript text); the server or model may log or retain what you submit. Use this service for private writing only if you trust its operator.</p>
       </aside>
     </div>
 
@@ -83,9 +83,14 @@
           </details>
 
           <div class="access-panel">
-            <label for="service-token">Service access token</label>
-            <input id="service-token" name="service-token" type="password" autocomplete="off" required placeholder="Enter your access token" aria-describedby="token-note">
-            <p id="token-note" class="field-note">Required even on localhost. Use the secret set by the person running this Aeonith service. The interface never saves it to browser storage. Do not use an untrusted network connection.</p>
+            <label id="service-token-label" for="service-token">Service access token</label>
+            <input id="service-token" name="service-token" type="password" autocomplete="off" placeholder="Enter your access token" aria-describedby="token-note auth-status">
+            <p id="token-note" class="field-note">Enter the operator-issued token to review, or sign in once on HTTPS to use a seven-day browser session. On localhost HTTP, use the token for each review. The token is never saved to browser storage. Do not use an untrusted network connection.</p>
+            <div id="session-controls">
+              <button id="session-sign-in" type="button" class="secondary-action">Remember this browser for 7 days</button>
+              <button id="session-sign-out" type="button" class="secondary-action" hidden>Sign out of this browser</button>
+            </div>
+            <p id="auth-status" class="field-note" role="status" aria-live="polite">Checking browser access…</p>
           </div>
 
           <label class="disclosure-control" for="disclosure">

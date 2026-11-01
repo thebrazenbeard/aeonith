@@ -37,7 +37,13 @@ local clipboard with:
 .\scripts\start-aeonith-windows.ps1 -FunnelOrigin 'https://machine.tailnet.ts.net' -CopyTokenToClipboard
 ```
 
-Paste it into Aeonith's browser token field. This optional operation
+Paste it into Aeonith's browser token field. On the public HTTPS Funnel page,
+choose **Remember this browser for 7 days** to create an `HttpOnly`,
+`Secure`, `SameSite=Strict` browser session; the site then allows subsequent
+reviews without retyping the root token until the session expires or the
+root token is rotated. The session cookie never contains the root token.
+On localhost HTTP, the root token is still required for each review.
+This optional clipboard operation
 temporarily exposes the token to the **local Windows clipboard**, including
 any clipboard-history or sync facilities you enabled; clear clipboard
 history after use. Do not paste the token into chats, terminals, logs,

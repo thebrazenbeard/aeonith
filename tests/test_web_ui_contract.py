@@ -53,7 +53,8 @@ class BrowserContractTests(unittest.TestCase):
         self.assertEqual(doc.form_attrs[0].get("action"), "/api/review")
         self.assertEqual(doc.textareas[0].get("spellcheck"), "false")
         self.assertNotIn("maxlength", doc.textareas[0])  # Never silently truncate a pasted manuscript.
-        self.assertTrue({"manuscript", "work-title", "service-token", "disclosure", "results", "status", "runtime-status"}.issubset(doc.ids))
+        self.assertTrue({"manuscript", "work-title", "service-token", "disclosure", "results", "status", "runtime-status",
+                         "session-sign-in", "session-sign-out", "auth-status", "session-controls"}.issubset(doc.ids))
         lens_inputs = [input_ for input_ in doc.inputs if input_.get("name") == "lenses"]
         self.assertEqual({input_["value"] for input_ in lens_inputs}, set(CANONICAL_LENSES))
         self.assertEqual(len(lens_inputs), len(CANONICAL_LENSES))
@@ -104,6 +105,27 @@ class BrowserContractTests(unittest.TestCase):
         self.assertIn("Local model disabled or unconfigured", script)
         self.assertIn("cache: \"no-store\"", script)
         self.assertIn("redirect: \"error\"", script)
+
+    def test_optional_browser_session_never_persists_bearer_in_script_storage(self):
+        script = (ROOT / "app.js").read_text(encoding="utf-8")
+        markup = (ROOT / "index.html").read_text(encoding="utf-8")
+        self.assertIn('fetch("/api/session"', script)
+        self.assertIn('fetch("/api/session/logout"', script)
+        self.assertIn('const verifiedResponse = await fetch("/api/session"', script)
+        self.assertIn("verified.authenticated !== true", script)
+        self.assertIn("This browser did not retain the secure cookie", script)
+        self.assertIn('method: "GET", credentials: "same-origin"', script)
+        self.assertIn('method: "POST", credentials: "same-origin"', script)
+        self.assertIn('"Authorization": `Bearer ${token}`', script)
+        self.assertIn('...(token ? { "Authorization": `Bearer ${token}` } : {})', script)
+        self.assertIn('if (!token && !browserSessionActive)', script)
+        self.assertIn('tokenInput.value = ""', script)
+        self.assertIn('window.location.protocol !== "https:"', script)
+        self.assertIn('authStateVersion', script)
+        self.assertIn('Remember this browser for 7 days', markup)
+        self.assertIn('Sign out of this browser', markup)
+        self.assertIn('HttpOnly authentication cookie', markup)
+        self.assertNotRegex(script, r"\b(?:localStorage|sessionStorage|indexedDB|document\.cookie|innerHTML|outerHTML|eval)\b")
 
     def test_local_text_import_is_bounded_and_cannot_upload_binary_files(self):
         script = (ROOT / "app.js").read_text(encoding="utf-8")

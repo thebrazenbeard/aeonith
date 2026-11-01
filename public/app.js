@@ -8,6 +8,12 @@ const manuscriptInput = byId("manuscript");
 const fileInput = byId("manuscript-file");
 const importStatusNode = byId("import-status");
 const tokenInput = byId("service-token");
+const tokenLabel = byId("service-token-label");
+const tokenNote = byId("token-note");
+const sessionControls = byId("session-controls");
+const sessionSignInButton = byId("session-sign-in");
+const sessionSignOutButton = byId("session-sign-out");
+const authStatusNode = byId("auth-status");
 const consentInput = byId("disclosure");
 const submitButton = byId("submit-button");
 const runtimeStatusNode = byId("runtime-status");
@@ -52,6 +58,116 @@ let plainTextReview = "";
 let requestInFlight = false;
 let manuscriptRevision = 0;
 let latestFileSelection = 0;
+let browserSessionActive = false;
+let authRequestInFlight = false;
+let authStateVersion = 0;
+
+function updateAccessUI(active, message) {
+  browserSessionActive = active;
+  // A successful session must not leave a hidden bearer value in the DOM.
+  if (active) tokenInput.value = "";
+  tokenLabel.hidden = active;
+  // The form stylesheet sets labels to display:block, so enforce hidden there.
+  tokenLabel.style.display = active ? "none" : "";
+  tokenInput.hidden = active;
+  tokenNote.hidden = active;
+  sessionSignInButton.hidden = active;
+  sessionSignOutButton.hidden = !active;
+  authStatusNode.textContent = message || (active ?
+    "This browser is signed in for up to seven days. You can sign out at any time." :
+    "Not signed in. Enter the operator-issued service token to review or authorize this browser.");
+}
+
+async function checkBrowserSession() {
+  const version = authStateVersion;
+  if (window.location.protocol !== "https:") {
+    sessionControls.hidden = true;
+    updateAccessUI(false, "Local HTTP: enter your service token for each review. Browser sessions require HTTPS.");
+    return;
+  }
+  try {
+    const response = await fetch("/api/session", {
+      method: "GET", credentials: "same-origin", redirect: "error", cache: "no-store"
+    });
+    if (!response.ok) throw new Error("Session status unavailable");
+    const data = await response.json();
+    if (!data || typeof data.authenticated !== "boolean") throw new Error("Invalid session status");
+    if (version !== authStateVersion) return;
+    updateAccessUI(data.authenticated);
+  } catch {
+    if (version !== authStateVersion) return;
+    updateAccessUI(false, "Saved session status unavailable. You can still use a service token for reviews.");
+  }
+}
+
+sessionSignInButton.addEventListener("click", async () => {
+  if (authRequestInFlight || requestInFlight) return;
+  const token = tokenInput.value.trim();
+  if (!token) {
+    updateAccessUI(false, "Enter your service access token first to authorize this browser.");
+    tokenInput.focus();
+    return;
+  }
+  authRequestInFlight = true;
+  authStateVersion += 1;
+  sessionSignInButton.disabled = true;
+  authStatusNode.textContent = "Authorizing this browser…";
+  try {
+    const response = await fetch("/api/session", {
+      method: "POST",
+      headers: { "Authorization": `Bearer ${token}`, "Accept": "application/json" },
+      credentials: "same-origin", redirect: "error", cache: "no-store"
+    });
+    if (!response.ok) throw new Error(response.status === 401 ? "Token was rejected." : "Session could not be established.");
+    const data = await response.json();
+    if (!data || data.authenticated !== true) throw new Error("Server did not confirm the session.");
+    // A successful Set-Cookie response does not guarantee that a browser with
+    // cookies disabled actually retained it. Confirm the round trip before
+    // concealing the token input or promising tokenless reviews.
+    const verifiedResponse = await fetch("/api/session", {
+      method: "GET", credentials: "same-origin", redirect: "error", cache: "no-store"
+    });
+    if (!verifiedResponse.ok) throw new Error("The browser session could not be verified.");
+    const verified = await verifiedResponse.json();
+    if (!verified || verified.authenticated !== true) {
+      throw new Error("This browser did not retain the secure cookie. Continue using the service token for reviews.");
+    }
+    // Clear the bearer from the page once the server has issued an HttpOnly cookie.
+    tokenInput.value = "";
+    updateAccessUI(true);
+  } catch (error) {
+    updateAccessUI(false, error && error.message ? error.message + " Your token has not been stored." :
+      "Could not authorize this browser. Token-only reviews remain available.");
+  } finally {
+    authRequestInFlight = false;
+    sessionSignInButton.disabled = false;
+  }
+});
+
+sessionSignOutButton.addEventListener("click", async () => {
+  if (authRequestInFlight || requestInFlight) return;
+  authRequestInFlight = true;
+  authStateVersion += 1;
+  sessionSignOutButton.disabled = true;
+  authStatusNode.textContent = "Signing out of this browser…";
+  try {
+    const response = await fetch("/api/session/logout", {
+      method: "POST", credentials: "same-origin", redirect: "error", cache: "no-store"
+    });
+    if (!response.ok) throw new Error("Sign-out failed. Try again or clear this site's cookies.");
+    const data = await response.json();
+    if (!data || data.authenticated !== false) throw new Error("Sign-out was not confirmed.");
+    tokenInput.value = "";
+    updateAccessUI(false, "Signed out. Enter your service token before the next review.");
+  } catch (error) {
+    updateAccessUI(true, error && error.message ? error.message : "Sign-out unavailable; try again.");
+  } finally {
+    authRequestInFlight = false;
+    sessionSignOutButton.disabled = false;
+  }
+});
+
+void checkBrowserSession();
 
 async function checkLocalService() {
   // Readiness is configuration only: this probe sends no writing or token and
@@ -189,7 +305,7 @@ function renderReview(review) {
 function requestError(status, responseData) {
   const fixed = {
     400: "The request was invalid. Check the passage and selected lenses.",
-    401: "Access denied. Check the service access token.",
+    401: "Access denied. Your browser session may have expired; sign in again or check the service token.",
     403: "The service declined this request. Check that you opened the page at the intended localhost or HTTPS service address.",
     413: "This submission exceeds a local service limit. Try a shorter excerpt or fewer critical lenses.",
     422: "The service could not validate the proposed critique. No result will be shown.",
@@ -411,7 +527,7 @@ form.addEventListener("submit", async (event) => {
   if (title.length > 500) return showError("The title must contain 500 characters or fewer.");
   if (!lenses.length) return showError("Select at least one critical lens.");
   if (lenses.length > MAX_LENSES) return showError("Choose no more than fourteen lenses for a review.");
-  if (!token) return showError("Enter your service access token to continue.");
+  if (!token && !browserSessionActive) return showError("Enter your service token or sign in this browser to continue.");
   if (!consentInput.checked) return showError("Confirm that you have permission to submit this writing to the local model.");
   const payload = {
     schema_version: "aeonith.review.v1",
@@ -431,7 +547,7 @@ form.addEventListener("submit", async (event) => {
       headers: {
         "Content-Type": "application/json",
         "Accept": "application/json",
-        "Authorization": `Bearer ${token}`
+        ...(token ? { "Authorization": `Bearer ${token}` } : {})
       },
       body: JSON.stringify(payload),
       signal: controller.signal,
@@ -442,7 +558,12 @@ form.addEventListener("submit", async (event) => {
     const responseText = await response.text();
     let data;
     try { data = JSON.parse(responseText); } catch { data = null; }
-    if (!response.ok) return showError(requestError(response.status, data));
+    if (!response.ok) {
+      if (response.status === 401 && browserSessionActive) {
+        updateAccessUI(false, "Browser session expired or was revoked. Enter the token and sign in again.");
+      }
+      return showError(requestError(response.status, data));
+    }
     if (!data || data.status !== "completed") return showError(requestError(503, data));
     try { renderReview(data); } catch {
       resetResults();
