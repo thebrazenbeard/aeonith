@@ -1,4 +1,4 @@
-"""Adversarial contract checks for the internet-facing Aeonith service.
+"""Adversarial contract checks for the loopback-only Aeonith service.
 
 These use a fake provider and an in-memory HTTP handler. No network, real
 credentials, paid inference, or external manuscripts are involved.
@@ -20,10 +20,9 @@ TOKEN = "s" * 48
 DEFAULT_ENV = {
     "AEONITH_SERVICE_TOKEN": TOKEN,
     "AEONITH_ENABLE_LIVE_REVIEWS": "true",
-    "AEONITH_PROVIDER_KIND": "openai-responses",
-    "AEONITH_PROVIDER_URL": "https://api.example.test/v1/responses",
-    "AEONITH_PROVIDER_MODEL": "nonexistent-test-model",
-    "AEONITH_PROVIDER_API_KEY": "nonsecret-test-placeholder",
+    "AEONITH_PROVIDER_KIND": "local-openai-compatible",
+    "AEONITH_PROVIDER_URL": "http://127.0.0.1:5001/v1/chat/completions",
+    "AEONITH_PROVIDER_MODEL": "local",
 }
 BASE_REQUEST = b'{"schema_version":"aeonith.review.v1","work":{"title":"Example","text":"The last bell rang."}}'
 
@@ -46,7 +45,6 @@ def headers(**extra: str) -> dict[str, str]:
     value = {
         "Authorization": f"Bearer {TOKEN}",
         "Content-Type": "application/json",
-        "X-Aeonith-Disclosure": "accepted",
     }
     value.update(extra)
     return value
@@ -169,14 +167,31 @@ class ServicePayloadHardeningTests(unittest.TestCase):
                 self.assertEqual(read_count, 0)
                 self.assertNotIn("Access-Control-Allow-Origin", head)
 
-    def test_remote_disclosure_acknowledgment_required(self):
+    def test_local_model_requires_no_external_disclosure(self):
         fake = CountingProvider()
         sent = headers()
-        sent.pop("X-Aeonith-Disclosure")
         code, result = process_review(BASE_REQUEST, sent, DEFAULT_ENV, provider=fake)
-        self.assertEqual(code, 403)
-        self.assertEqual(result["error"]["code"], "disclosure_required")
-        self.assertEqual(fake.calls, 0)
+        # Fake returns an invalid critique, but model invocation is allowed:
+        # local-only routing does not require a third-party disclosure flag.
+        self.assertEqual(code, 502)
+        self.assertEqual(result["status"], "invalid_provider_output")
+        self.assertEqual(fake.calls, 1)
+
+    def test_paid_or_remote_model_configuration_rejected_before_dispatch(self):
+        for changes in (
+            {"AEONITH_PROVIDER_URL": "https://api.openai.com/v1/responses"},
+            {"AEONITH_PROVIDER_URL": "https://ai-gateway.vercel.sh/v1/responses"},
+            {"AEONITH_PROVIDER_URL": "http://192.168.1.10:5001/v1/chat/completions"},
+            {"AEONITH_PROVIDER_API_KEY": "synthetic-credential"},
+            {"AEONITH_PROVIDER_KIND": "openai-responses"},
+        ):
+            with self.subTest(changes=changes):
+                fake = CountingProvider()
+                code, result = process_review(BASE_REQUEST, headers(),
+                                              {**DEFAULT_ENV, **changes}, provider=fake)
+                self.assertEqual(code, 503)
+                self.assertEqual(result["status"], "provider_unavailable")
+                self.assertEqual(fake.calls, 0)
 
     def test_operator_must_explicitly_enable_model_calls(self):
         fake = CountingProvider()

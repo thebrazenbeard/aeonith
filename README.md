@@ -1,160 +1,100 @@
 # Aeonith
 
-Aeonith is a **model-assisted literary criticism engine** reconstructed from the observable behavior and owner-accessible configuration of [Aeonith, the Transcendent Critic](https://chatgpt.com/g/g-67f64b3b94348191b6f6ee4a83135b5a-aeonith-the-transcendent-critic), a custom ChatGPT GPT.
+Aeonith is an independently implemented, evidence-aware literary critic inspired by the observable behavior of [Aeonith, the Transcendent Critic](https://chatgpt.com/g/g-67f64b3b94348191b6f6ee4a83135b5a-aeonith-the-transcendent-critic), a custom ChatGPT GPT. It is **not** an export of that GPT's private instructions, reference files, model weights, or hidden configuration.
 
-This repository is an **independently implemented, testable starting point**—not an export of the GPT, its model weights, hidden activation material, or private reference files. It critiques user-supplied written works with fourteen critical perspectives and an overarching synthesis when an explicitly configured language-model provider is available.
+**Operating rule: $0 in new spending.** This repository is designed to run on hardware and a local model you already have. It does not require a paid inference API, cloud account, subscription, hosted database, tunnel, or deployment platform. We do **not** enable paid services, even behind a nominal spending budget. There is no active public cloud deployment advertised by this repository.
+
+Aeonith has two separate capabilities:
+
+1. A complete, dependency-free **review contract, manuscript-processing workflow, and critical-method prompt set**, testable without any model calls.
+2. A **local web interface and authenticated HTTP API** that can request genuine model-generated criticism **only after** you explicitly configure a running, local compatible model. A healthy web page or green test suite alone is not a model-backed critique.
 
 ## What works
 
-- A Python 3.11+ standard-library package, JSON review CLI, single-command manuscript workflow, UTF-8 input converter, and readable Markdown report renderer.
-- Fourteen separately identified critical lenses: psychological, literary/thematic, narrative structure, character development, historical/cultural, philosophical, genre-specific, stylistic, sociological, moral/ethical, symbolic, reader-response, linguistic, and comparative.
-- A synthesis field, concrete passage references, uncertainty/limitations, and an optional set of challenges.
-- Explicitly selected HTTP adapters for compatible Chat Completions and OpenAI-style Responses endpoints. Chat retains legacy defaults plus opt-in model-specific token/temperature settings. Responses uses `max_output_tokens` and separated instructions. Both can request strict JSON Schema output when supported. **No real model/provider interoperability is claimed without a live qualification run.**
-- Fourteen distinct, evidence-oriented critical-method prompts that ask for competing readings and calibrated uncertainty; the actual quality of model interpretations remains unverified.
-- Validation that quoted passages occur in the submitted text and supplied evidence-reference IDs exist. **A matching quotation does not prove the interpretation is correct.**
-- Optional exact-quote location sidecar with Unicode character offsets, repeated-occurrence ambiguity, and manuscript fingerprints.
-- A deterministic chapter/excerpt planner for longer writing, with source-complete offsets; no automatic whole-book synthesis.
-- An offline quality-audit and blinded human-comparison harness with display-bound annotations and descriptive aggregation. Its checks are **not** evidence of literary insight.
-- Explicit error states when no provider is configured, a request is invalid, the provider fails, or the provider returns an invalid structure. No review is fabricated on those paths.
-- A bounded, read-only JSON invocation adapter for future ecosystem integration. This adapter does not supply host authorization or a deployed service.
-- The standalone `capability_adapter.py` stdin/stdout entrypoint has no model configuration and deliberately returns `provider_unavailable`; a host must inject an explicitly configured reviewer to obtain a real critique.
-- A **v0.4.1 deployed, provider-disabled web service** adds a browser-based manuscript editor and an explicitly authenticated HTTP API for a single configured provider. Its production health endpoint and editor have been checked on Vercel; no external model connection or genuine critique has been qualified.
+- Python 3.11+ standard-library package, JSON CLI, plain-text/Markdown manuscript workflow, and Markdown report renderer.
+- Fourteen critical lenses: psychological, literary/thematic, narrative structure, character development, historical/cultural, philosophical, genre-specific, stylistic, sociological, moral/ethical, symbolic, reader-response, linguistic, and comparative.
+- Typed review results with a synthesis, lens-by-lens interpretation, challenges, uncertainties, evidence pointers and candid insufficient-evidence outcomes.
+- Source-exact quoted-passage checks and caller-supplied evidence-reference checks. A quote's presence **does not establish that the interpretation is true**.
+- Optional exact-quote offset and fingerprint sidecar; deterministic planning for long manuscripts using bounded excerpts, **not** automatic whole-book comprehension.
+- Local evaluation fixtures and a blinded human-evaluation workflow. Structural acceptance tests are **not** measures of literary quality.
+- Opt-in model adapters, including a constrained local OpenAI-style Chat Completions route. No invented critiques on missing-provider, rejected-input, failed-model, or invalid-output paths.
+- A same-origin browser interface with manuscript editor, lens selection, and a token-protected local review endpoint. The default is provider-disabled and loopback-only.
 
-The tests verify these contracts with local fixtures and controlled providers. **Literary quality, original-GPT parity, and live-provider compatibility have not been established.** Deployment health and browser rendering were verified separately against the hosted service.
+**Not yet proven:** the quality of judgments from your particular GGUF model, parity with the original GPT, fidelity of third-party citation assertions, consistency across repeated generations, or a live end-to-end model run on your machine. A local model can be too small, too slow, context-limited, or unable to emit Aeonith's strict JSON shape; in those cases the application should report failure, not pretend to have completed a critique.
 
-## Browser and HTTP service (v0.4.1 deployed shell)
+## Run locally at no additional service cost
 
-The repository includes a dependency-free interface under `public/` and
-Python HTTP handlers under `api/`, deployed on Vercel with authentication
-protection on the default `.vercel.app` domains.
-The browser lets an author submit a passage, choose any of the fourteen lenses,
-and read a structured critique **only when an explicitly configured provider
-is available**. It keeps the service access token in the page's memory, not in
-browser storage. The UI is not an anonymous, free-to-use inference service.
+Use an existing local model runner such as [KoboldCpp](https://github.com/LostRuins/koboldcpp) with a GGUF text model you already possess or have permission to use. KoboldCpp documents an OpenAI-compatible API at its local `/v1` route, normally port `5001`. Use a model you are licensed to run; Aeonith does not ship or acquire model weights.
 
-| Endpoint | Behavior |
-| --- | --- |
-| `GET /healthz` (also `/api/health`) | Unauthenticated liveness and a configuration-readiness flag; **not** proof that a model call will succeed |
-| `POST /v1/critique` (also `/api/review`) | JSON `aeonith.review.v1` request with server-held bearer authorization and explicit external-disclosure acknowledgment |
+1. Launch your own KoboldCpp model **locally** and verify its API is listening on `127.0.0.1:5001`. Its Chat Completions endpoint is ordinarily `http://127.0.0.1:5001/v1/chat/completions` ([upstream endpoint reference](https://github.com/LostRuins/koboldcpp.net/blob/main/src/content/docs/docs/api/endpoints.mdoc)). Keep its listener off public networks.
+2. From this repository, configure only the local endpoint and generate a fresh service token. No paid API key is needed:
 
-The review endpoint rejects unsupported requests, unconfigured model services,
-oversized bodies, caller-selected model destinations, and unauthorized access.
-It never substitutes an invented critique for unavailable inference. Browser
-requests are same-origin; the service does not advertise cross-origin access.
-These properties are tested with deterministic fake providers; they are **not
-claims of a deployed security audit or qualified paid model**.
+   ```bash
+   export AEONITH_SERVICE_TOKEN="$(python3 -c 'import secrets; print(secrets.token_urlsafe(32))')"
+   export AEONITH_PROVIDER_KIND=local-openai-compatible
+   export AEONITH_PROVIDER_URL=http://127.0.0.1:5001/v1/chat/completions
+   export AEONITH_PROVIDER_MODEL=local
+   export AEONITH_ENABLE_LIVE_REVIEWS=true
+   unset AEONITH_PROVIDER_API_KEY
+   python3 -m aeonith.local_server
+   ```
 
-The operator configures the server-side environment through the hosting
-platform's protected secrets and variables:
+   On Windows PowerShell, the equivalent is:
 
-| Variable | Role |
-| --- | --- |
-| `AEONITH_SERVICE_TOKEN` | Strong server-held bearer secret (at least 32 characters) required for private reviews |
-| `AEONITH_ENABLE_LIVE_REVIEWS` | Must be the literal `true` before any model dispatch is enabled |
-| `AEONITH_PROVIDER_KIND` | One server-selected adapter: `openai-responses` (default) or `openai-compatible` |
-| `AEONITH_PROVIDER_URL` | Trusted server-selected full provider endpoint, HTTPS when remote |
-| `AEONITH_PROVIDER_MODEL` | Explicit model identifier supported by that endpoint |
-| `AEONITH_PROVIDER_API_KEY` | Server-side credential, required by the service for remote endpoints; never enter it into the browser |
-| `AEONITH_STRUCTURED_OUTPUTS` | Optional `true` to request strict model output when supported |
+   ```powershell
+   $bytes = New-Object byte[] 32
+   [System.Security.Cryptography.RandomNumberGenerator]::Create().GetBytes($bytes)
+   $env:AEONITH_SERVICE_TOKEN = [Convert]::ToBase64String($bytes)
+   $env:AEONITH_PROVIDER_KIND = 'local-openai-compatible'
+   $env:AEONITH_PROVIDER_URL = 'http://127.0.0.1:5001/v1/chat/completions'
+   $env:AEONITH_PROVIDER_MODEL = 'local'
+   $env:AEONITH_ENABLE_LIVE_REVIEWS = 'true'
+   Remove-Item Env:AEONITH_PROVIDER_API_KEY -ErrorAction SilentlyContinue
+   python -m aeonith.local_server
+   ```
 
-For remote reviews the browser requires a disclosure acknowledgment before
-sending the work. The server requires the corresponding
-`X-Aeonith-Disclosure: accepted` header. This is a request-specific notice,
-not an authenticated consent ledger or a guarantee about third-party
-retention. Do not submit confidential work until the provider's processing and
-retention policy is acceptable to the author.
+3. On the **same computer**, open `http://127.0.0.1:8765/` and enter that token in the editor. The token is kept in page memory, not browser persistent storage. The service binds to `127.0.0.1` by default; do not expose it publicly. Stop it with `Ctrl+C`.
 
-**Live editor:** [aeonith-seven.vercel.app](https://aeonith-seven.vercel.app/).
-On 2026-11-01, the production deployment for commit
-`f90a64bc18a2d285638cbbe646d546ffb396a4f8` reported `READY`;
-`GET /healthz` returned `status: "ok"` and `review_configured: false`, and
-the actual browser editor rendered. A harmless, unauthorized synthetic
-review request returned a provider-unavailable message without a critique.
-This is a **live, deliberately disabled review shell**, not a qualified
-model-backed criticism service. The account's protection setting currently
-exempts possible future custom domains; review that setting before adding one.
+`AEONITH_PROVIDER_MODEL=local` is a model label for a simple single-model KoboldCpp instance, not a model download instruction. If your runner requires a particular model ID, use the ID it exposes. Local model interoperability and output quality must be checked with a harmless test passage; not all compatible APIs support JSON mode or structured output equally. The service deliberately does **not** fall back to a remote model if local inference fails.
 
-**Enabling model-backed production reviews is gated separately.** A bearer token and local
-request-size limit do not enforce a durable rate or cost budget across
-serverless instances. Require hosting-level access controls, rate and model
-spend limits, exact-SHA checks, protected preview smoke tests, live-provider
-qualification and rollback readiness before making paid inference public.
-See [live-service release gates](docs/RELEASE_GATES.md) and the
-[deployment runbook](docs/SERVICE_DEPLOYMENT.md). The verified hosted shell
-does not remove the provider, privacy, cost, and abuse-control gates.
+If a local model is not already running, you can still run the library, tests, source planner, and offline evaluation without any network calls. To inspect the browser shell with reviews disabled, leave `AEONITH_ENABLE_LIVE_REVIEWS` unset and run `python3 -m aeonith.local_server` after configuring a strong service token.
 
-## Try the CLI
+The exact HTTP routes, environment options, security limitations, and local verification steps are in the [self-hosted service runbook](docs/SERVICE_DEPLOYMENT.md). See [release gates](docs/RELEASE_GATES.md) before describing a machine-specific model setup as qualified.
 
-For a plain UTF-8 manuscript, the shortest local path is:
+## Try the CLI without a model
 
-```bash
-python3 -m aeonith.workflow --input draft.md --title "Draft"
-```
-
-This deliberately returns a readable `provider_unavailable` message and exit code `3` until you explicitly select a provider. For remote model inference, select an HTTPS endpoint and model and acknowledge external manuscript disclosure:
-
-```bash
-python3 -m aeonith.workflow --input draft.md --title "Draft" \
-  --provider openai-responses --url https://api.openai.com/v1/responses \
-  --model YOUR_COMPATIBLE_MODEL --allow-external-disclosure \
-  --output review.md
-```
-
-Set `AEONITH_PROVIDER_API_KEY` securely if the chosen provider requires it. The flag is a local disclosure acknowledgment, **not** a host-authenticated consent record or a cost guarantee. Output paths are reserved exclusively and not overwritten. See the [reader workflow guide](docs/READER_WORKFLOW.md).
-
-From the repository root, with Python 3.11 or later:
+From the source checkout, with Python 3.11 or later:
 
 ```bash
 python3 -m aeonith review --input examples/microfiction.json
+python3 -m aeonith.workflow --input draft.md --title "A draft"
 ```
 
-With no provider configured, the command prints JSON with `"status": "provider_unavailable"` and exits with code `3`. This is intentional: structural processing without a language model is not literary criticism.
+With no provider chosen, review status is `provider_unavailable` and the command exits `3`. This is intentional: prompt preparation and structural validation without a language model do not constitute literary criticism. Replace `draft.md` with an existing UTF-8 `.txt` or `.md` manuscript file for the workflow command.
 
-To run an actual review, choose a trusted service implementing the compatible chat-completions endpoint and configure its full URL, model, and optional key through your environment or secret manager:
+To use an explicitly selected **local** Chat Completions endpoint from the JSON CLI:
 
 ```bash
-export AEONITH_PROVIDER_URL="https://provider.example/v1/chat/completions"
-export AEONITH_PROVIDER_MODEL="your-supported-chat-model"
-# If required, supply AEONITH_PROVIDER_API_KEY via your secret manager.
+unset AEONITH_PROVIDER_API_KEY
 python3 -m aeonith review \
   --input examples/microfiction.json \
-  --provider openai-compatible
+  --provider local-openai-compatible \
+  --url http://127.0.0.1:5001/v1/chat/completions \
+  --model local
 ```
 
-The URL above is a **placeholder**; substitute an actual endpoint and model you control or are authorized to use. The adapter requires HTTPS for remote endpoints and permits unauthenticated local HTTP for development. It does not follow HTTP redirects. Do not provide confidential manuscripts to a third-party provider without reviewing that provider's processing and retention terms.
-
-For an explicitly chosen model compatible with the OpenAI Responses API, select the other adapter:
+Or from a real manuscript into a new Markdown file (Aeonith will never overwrite an existing output):
 
 ```bash
-export AEONITH_PROVIDER_URL="https://api.openai.com/v1/responses"
-export AEONITH_PROVIDER_MODEL="your-selected-compatible-model"
-# Set AEONITH_PROVIDER_API_KEY securely in your environment if required.
-python3 -m aeonith review --input examples/microfiction.json --provider openai-responses
+python3 -m aeonith.workflow --input draft.md --title "Draft" \
+  --provider local-openai-compatible \
+  --url http://127.0.0.1:5001/v1/chat/completions \
+  --model local --output critique.md
 ```
 
-This is a configuration example, **not a claim of a verified live API call**. For Chat Completions models that reject the legacy token/temperature fields, use `--token-field max_completion_tokens --omit-temperature` if that matches their documented parameters. Use `--json-mode` only for compatible chat endpoints; JSON mode does not prove schema compliance.
+Only run these model-backed commands when the local runner is actually available. The selected local adapter rejects remote endpoints and keeps network protections (including no HTTP redirects or inherited proxy forwarding). The legacy generic remote adapters are **not** an approved route to paid inference.
 
-Use `--structured-outputs` with `python3 -m aeonith review` to request a strict JSON Schema for supported models, while keeping Aeonith's independent quote and lens validation. See [structured-output compatibility](docs/STRUCTURED_OUTPUTS.md).
-
-To critique a plain UTF-8 manuscript and read the output as Markdown:
-
-```bash
-python3 -m aeonith.text_input --input draft.md --title "Draft" > request.json
-python3 -m aeonith review --input request.json --provider openai-responses > review.json
-python3 -m aeonith.formatting --input review.json --title "Draft" > review.md
-```
-
-The converter and renderer are local and make no provider calls; only the middle command does. Keep `request.json`, `review.json`, and `review.md` private if the work is private. If the review fails, the renderer reports an unavailable critique instead of inventing one and preserves a nonzero exit code.
-In shells configured with `set -e`, a failed review stops the three-step workflow before rendering; inspect the JSON error, or invoke the renderer separately for a readable failure explanation.
-
-You can also send a JSON request on stdin:
-
-```bash
-printf '%s\n' '{"schema_version":"aeonith.review.v1","work":{"title":"A draft","text":"The door opened, but nobody entered."}}' \
-  | python3 -m aeonith review --input - --provider openai-compatible
-```
-
-The CLI returns structured JSON. The core is also importable:
+For programmatic integration:
 
 ```python
 from aeonith import critique
@@ -166,56 +106,40 @@ request = {
 result = critique(request, provider=my_explicitly_configured_provider)
 ```
 
-`provider` is an injected object with a `review(payload: dict) -> dict` method. Omitting it produces a truthful `provider_unavailable` result.
+The injected provider implements `review(payload: dict) -> dict`. With no provider, `critique(request)` returns a truthful `provider_unavailable` status. The independent core validates output structure and exact support quotations; it cannot independently determine whether a model's reasoning is good.
 
-## Output and evidence boundaries
+## Browser and HTTP contract
 
-The core requests one item per selected critical lens (`lens_reviews`), with `analysis`, `basis`, `support`, and `limitations`, plus an overarching `synthesis`. It supports a subset of the fourteen lenses for focused review, but a complete default request covers all fourteen. A lens may explicitly state insufficient textual evidence instead of inventing a finding.
+| Route | Behavior |
+| --- | --- |
+| `GET /` | Local manuscript editor and static assets, no embedded secrets |
+| `GET /healthz` or `/api/health` | Liveness and configuration-readiness indicator, **not** proof of a successful model call |
+| `POST /api/review` or `/v1/critique` | Strict `aeonith.review.v1` request; strong server-held bearer token, bounded UTF-8 JSON, explicit operator model selection |
 
-The core checks that each `support` quotation is an exact substring of the submitted work or that a referenced supplied-evidence ID exists. It does **not** verify the truth of an external citation, a model's account of history, inferred author intent, or the literary merit of an interpretation. `evidence_audit` labels supplied evidence as unverified unless independently checked elsewhere.
+The HTTP boundary checks authorization **before reading the manuscript body**. It caps request size and excerpt length, rejects unsupported methods and caller-specified endpoints, and avoids echoing manuscript text or secrets in error responses. If the model is unavailable or produces invalid output, the UI displays that failure. Browser code does not store manuscript content or bearer tokens in cookies, `localStorage`, or `sessionStorage`.
 
-Use `aeonith.evidence.audit_review_spans(work_text, completed_result)` for an optional, separate `aeonith.quote_locations.v1` index that locates exact quotes, records ambiguous duplicate occurrences, and fingerprints the source. It does not rewrite the v1 result or choose an intended passage where multiple matches exist. See [source-anchor behavior](docs/SOURCE_ANCHORS.md).
+Loopback is a meaningful privacy boundary but not perfect isolation: other software with access to the same host may contact local services, local browser extensions may read page contents, and model process logs may contain text depending on the model runner's settings. Do not publish or tunnel the port. No multi-user authorization, durable cross-process rate ledger, external public TLS gateway, or production threat review is supplied.
 
-For longer writing, `python3 -m aeonith.longform --input book.md` plans bounded excerpts, preserving Unicode offsets and exact source coverage without invoking a model. `aeonith.longform.build_segment_request` prepares a selected excerpt for the existing v1 critic. It does **not** evaluate relationships across unseen chapters. See [long-form planning](docs/LONGFORM.md).
+## More capabilities and their limits
 
-Review output is **advice**, not an authoritative rewrite or a command to change manuscripts, lore, memory, or other ecosystem state. The invocation envelope's `request_id` is a correlation value, not consent, authentication, durable replay protection, or provider attestation.
+- [Critical lens methods](docs/LENS_METHODS.md) describe deliberately different question sets and textual grounding expectations.
+- [Long-form planning](docs/LONGFORM.md) preserves source offsets across bounded excerpts; it does **not** synthesize unseen chapters.
+- [Evidence/source anchors](docs/SOURCE_ANCHORS.md) cover quoted text and ambiguous repeated passages, not attribution truth.
+- [Structured output behavior](docs/STRUCTURED_OUTPUTS.md) documents provider-specific compatibility issues and the independent validation layer.
+- [Reader workflow](docs/READER_WORKFLOW.md) documents local text input and report generation.
+- [Offline evaluation](evaluation/README.md) describes human scoring, blinded comparisons, and machine-checkable structural warnings. No fixture test can establish original-GPT parity or human-level criticism.
+- [Public functional specification](docs/AEONITH_PUBLIC_SPEC.md) distinguishes observed GPT behavior from this new implementation. [Integration research](docs/INTEGRATION_RESEARCH.md) and [research quality](docs/RESEARCH_QUALITY.md) are design references rather than runtime quality certificates.
 
-## Current boundaries
+An experimental [host boundary](docs/HOST_BOUNDARY.md) and source-only `integrations/host_gate.py` are **not** deployed identity, permission, metering, or ecosystem mutation controls. Aeonith analyses are **advice**, not instructions to rewrite manuscripts or change other repositories automatically. Private knowledge assets and GPT activation material are not bundled.
 
-The original GPT has broader configurations than this repository implements. The repository currently **does not** provide:
-
-- ChatGPT's general-conversation interface, canvas, or web research;
-- the original GPT's attached knowledge-file corpus or retrieval workflow;
-- creative Trickster activation or its private trigger;
-- the image-refinement/Realism generation workflow;
-- semantic chapter comprehension, automatic cross-chapter synthesis, manuscript revisions, or a human-calibrated literary-quality score;
-- a running network service, MCP server, CCB delivery, Rezon deployment, or host-owned authorization.
-
-These are candidate follow-on interfaces, not completed capabilities. Publishing the GPT's attached references would also require a per-file ownership, privacy, and redistribution-rights review. The original GPT's instructions and a private activation phrase are deliberately not included here.
-
-The [sanitized functional specification](docs/AEONITH_PUBLIC_SPEC.md) records what the authenticated editor exposed and which claims remain unverified. [Ecosystem integration research](docs/INTEGRATION_RESEARCH.md) and [literary evaluation research](docs/RESEARCH_QUALITY.md) provide proposed improvements and their evidence—not proof of runtime quality.
-
-## Test and qualification
-
-Run the local standard-library suites after installing or checking out the source:
+## Test and qualify
 
 ```bash
 python3 -m unittest discover -s tests -v
 ```
 
-Structural tests cover lens identity, invalid/unknown references, rejected fabricated quotations, missing-provider behavior, provider errors, and CLI failure status. Their pass does **not** establish semantic accuracy or subjective literary quality. A live-provider assessment should compare fixed, consented passages to the original GPT using human-rated textual fidelity, lens distinctness, useful critique, counterreadings, and stability across repeated samples. Record the exact model/provider and date; do not compare model output on a private manuscript without its owner's consent.
+The repository's Python tests use controlled local providers and deterministic fixtures; they must not incur model or cloud charges. A real local model qualification requires a separately observed, harmless passage, matching selected lenses, valid JSON, source-exact quotes, useful counterreadings, and repeated human review. Record the local runtime/model, settings, exact source commit, and outcome. Never describe a structurally passing response alone as literary validation.
 
-The [offline evaluation bench](evaluation/README.md) adds quote/reference audits, duplicate-analysis warnings, seeded blinded A/B comparison files, display-hash-bound human annotations, descriptive aggregation, and a six-dimension rubric. Run `python3 evaluation/quality_eval.py --help`. These utilities do not call a provider, verify human independence, infer model identity, score literary truth, or replace human assessment. Do not publish blinded displays containing private manuscript text.
-The `evaluation/` scripts and experimental `integrations/host_gate.py` are **source-checkout tools**, not modules packaged in the installable `aeonith` wheel.
+## Rights and licensing
 
-## Research and ecosystem direction
-
-Initial design choices favor traceable text evidence, honest abstention, and author-controlled revision. The [KRISTEVA close-reading benchmark](https://aclanthology.org/2025.acl-long.1577/) and [literary evidence retrieval research](https://aclanthology.org/2025.acl-short.29/) illustrate why deep literary interpretation and source-grounded quotation remain challenging. Public tools such as [Inspect AI](https://github.com/UKGovernmentBEIS/inspect_ai) and [Promptfoo](https://github.com/promptfoo/promptfoo) offer future evaluation options, without being required runtime dependencies.
-
-Optional integration with Rezon, CCB, or other repositories should use the documented typed contract, explicit host permission, and source provenance. It must not silently copy protected code, private manuscripts, or copyrighted GPT knowledge files.
-
-An [experimental host-gate contract](docs/HOST_BOUNDARY.md) and source-only adapter in `integrations/host_gate.py` illustrate authorization and budget reservations. **It is not an identity provider, host attestation, metering service, deployed permission mechanism, or standalone security boundary.** It must not be enabled until a separately authenticated host implements the documented controls.
-
-## Licensing
-
-This repository has no published license at this stage. Publicly readable source is **not automatically open source** and does not grant unrestricted redistribution rights. A license and third-party-asset policy require a deliberate owner decision.
+This repository currently has no published license. Publicly readable code is **not automatically open source**, and no rights to redistribute the original GPT's attached reference corpus are implied. Choose a license and review third-party asset rights before redistribution.

@@ -20,15 +20,13 @@ TOKEN = "A" * 48
 CONFIG = {
     "AEONITH_SERVICE_TOKEN": TOKEN,
     "AEONITH_ENABLE_LIVE_REVIEWS": "true",
-    "AEONITH_PROVIDER_KIND": "openai-responses",
-    "AEONITH_PROVIDER_URL": "https://provider.example.test/v1/responses",
-    "AEONITH_PROVIDER_MODEL": "test-model",
-    "AEONITH_PROVIDER_API_KEY": "example-not-a-real-key",
+    "AEONITH_PROVIDER_KIND": "local-openai-compatible",
+    "AEONITH_PROVIDER_URL": "http://127.0.0.1:5001/v1/chat/completions",
+    "AEONITH_PROVIDER_MODEL": "local",
 }
 HEADERS = {
     "Authorization": "Bearer " + TOKEN,
     "Content-Type": "application/json",
-    "X-Aeonith-Disclosure": "accepted",
 }
 WORK = {
     "schema_version": "aeonith.review.v1",
@@ -72,7 +70,9 @@ class ServicePureTests(unittest.TestCase):
     def test_ready_is_a_configuration_check_only(self):
         self.assertTrue(is_ready(CONFIG))
         self.assertFalse(is_ready({**CONFIG, "AEONITH_ENABLE_LIVE_REVIEWS": "false"}))
-        self.assertFalse(is_ready({**CONFIG, "AEONITH_PROVIDER_API_KEY": ""}))
+        self.assertFalse(is_ready({**CONFIG, "AEONITH_PROVIDER_API_KEY": "not-a-real-key"}))
+        self.assertFalse(is_ready({**CONFIG, "AEONITH_PROVIDER_URL": "https://api.openai.com/v1/responses"}))
+        self.assertFalse(is_ready({**CONFIG, "AEONITH_PROVIDER_KIND": "openai-responses"}))
 
     def test_authentication_denies_absent_token_and_missing_service_secret(self):
         status, _ = authorize({}, CONFIG)
@@ -111,13 +111,29 @@ class ServicePureTests(unittest.TestCase):
         self.assertEqual(result["error"]["code"], "invalid_request")
         self.assertEqual(provider.calls, 0)
 
-    def test_remote_disclosure_required_before_model_call(self):
+    def test_local_review_does_not_require_external_disclosure_or_redis(self):
         provider = FakeProvider()
         headers = dict(HEADERS)
-        del headers["X-Aeonith-Disclosure"]
         status, result = self._run(headers=headers, provider=provider)
-        self.assertEqual(status, 403)
-        self.assertEqual(result["error"]["code"], "disclosure_required")
+        self.assertEqual(status, 200)
+        self.assertEqual(result["status"], "completed")
+        self.assertEqual(provider.calls, 1)
+
+    def test_remote_destination_fails_even_when_api_key_is_present(self):
+        provider = FakeProvider()
+        for destination in (
+            "https://api.openai.com/v1/responses",
+            "https://ai-gateway.vercel.sh/v1/responses",
+            "https://provider.example.test/v1/chat/completions",
+            "http://192.168.1.7:5001/v1/chat/completions",
+        ):
+            with self.subTest(destination=destination):
+                env = {**CONFIG, "AEONITH_PROVIDER_URL": destination,
+                       "AEONITH_PROVIDER_API_KEY": "synthetic-key"}
+                self.assertFalse(is_ready(env))
+                status, result = self._run(env=env, provider=provider)
+                self.assertEqual(status, 503)
+                self.assertEqual(result["status"], "provider_unavailable")
         self.assertEqual(provider.calls, 0)
 
     def test_disabled_reviews_never_call_provider(self):
@@ -148,7 +164,7 @@ class ServicePureTests(unittest.TestCase):
         status, _ = self._run(headers={**HEADERS, "Content-Type": "text/plain"},
                               provider=FakeProvider())
         self.assertEqual(status, 415)
-        status, _ = process_review(b"x" * 1_000_001, HEADERS, CONFIG,
+        status, _ = process_review(b"x" * (64 * 1024 + 1), HEADERS, CONFIG,
                                    provider=FakeProvider())
         self.assertEqual(status, 413)
 
@@ -194,6 +210,8 @@ class ServiceHTTPTests(unittest.TestCase):
         self.assertEqual(json.loads(raw)["error"]["code"], "method_not_allowed")
 
     def test_authenticated_post_is_a_real_http_json_endpoint(self):
+        # Mock only the model boundary. The service must never call Redis or
+        # require a cloud credential to authorize a locally configured model.
         with patch("aeonith.service._construct_provider", return_value=FakeProvider()):
             status, headers, raw = self._serve(
                 ReviewHandler, "/api/review", method="POST",

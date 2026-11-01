@@ -1,2 +1,2 @@
-"""Vercel Python function entrypoints for Aeonith."""
+"""Reusable HTTP handlers for Aeonith's local-only service."""
 

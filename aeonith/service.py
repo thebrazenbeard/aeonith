@@ -1,8 +1,8 @@
-"""Restricted HTTP-service boundary for the Aeonith literary critic.
+"""Private, local-only HTTP review boundary for the Aeonith literary critic.
 
-This module is not the authenticated multi-tenant host gate. It operates with
-a single server-owned bearer secret and a single server-selected model
-destination, and deliberately has no public endpoint-selection capability.
+No paid API, hosted model, Redis admission service, cloud credential, or
+arbitrary provider URL is supported by this service. Inference is explicitly
+opted into by the operator and can reach only a loopback model server.
 """
 
 from __future__ import annotations
@@ -15,14 +15,26 @@ from collections.abc import Mapping
 from typing import Any
 from urllib.parse import urlsplit
 
-from .core import SCHEMA, critique
-from .providers import OpenAICompatibleProvider, OpenAIResponsesProvider
+from .core import SCHEMA, _parse_request, critique
+from .providers import LocalOpenAICompatibleProvider
 
-MAX_BODY_BYTES = 1_000_000
+# The local HTTP interface accepts bounded excerpts; the separate CLI retains
+# its 1 MiB aggregate request limit.
+MAX_BODY_BYTES = 64 * 1024
+MAX_REVIEW_WORK_CHARS = 12_000
+MAX_REVIEW_CONTEXT_CHARS = 2_000
+_DEFAULT_MAX_OUTPUT_TOKENS = 4_096
+_DEFAULT_PROVIDER_TIMEOUT_SECONDS = 45.0
 _ALLOWED_REQUEST_KEYS = frozenset({
     "schema_version", "work", "proposition", "context", "lenses", "claims",
 })
-_LOCAL_HOSTS = frozenset({"localhost", "127.0.0.1", "::1"})
+_LOCAL_HOSTS = frozenset({"127.0.0.1", "::1"})
+_CLOUD_CONFIGURATION_KEYS = (
+    "AEONITH_PROVIDER_API_KEY", "AI_GATEWAY_API_KEY", "VERCEL_OIDC_TOKEN",
+    "AEONITH_REQUIRE_VERCEL_GATEWAY_OIDC", "AEONITH_ADMISSION_REDIS_URL",
+    "AEONITH_ADMISSION_REDIS_TOKEN", "AEONITH_ALLOWED_PROVIDER_URLS",
+    "VERCEL", "VERCEL_ENV",
+)
 
 
 def _error(code: str, message: str, *, status: str = "invalid_request") -> dict[str, Any]:
@@ -96,37 +108,100 @@ def _strict_json(raw: bytes) -> Any:
                       parse_constant=bad_constant, parse_float=finite_float)
 
 
-def _remote_provider(env: Mapping[str, str]) -> bool:
+def _local_provider_url(env: Mapping[str, str]) -> bool:
+    """Allow only literal loopback IPs and the standard chat endpoint.
+
+    Avoid DNS, redirects and userinfo so even hostile local environment
+    settings cannot silently turn manuscript requests into paid network calls.
+    """
     try:
-        return urlsplit(env.get("AEONITH_PROVIDER_URL", "")).hostname not in _LOCAL_HOSTS
-    except ValueError:
-        # Invalid endpoint is rejected by the provider constructor, but never
-        # silently bypass the disclosure gate.
-        return True
+        parts = urlsplit(env.get("AEONITH_PROVIDER_URL", ""))
+        return (parts.scheme == "http" and parts.hostname in _LOCAL_HOSTS
+                and parts.port is not None and parts.port > 0
+                and parts.path == "/v1/chat/completions"
+                and parts.username is None and parts.password is None
+                and not parts.query and not parts.fragment)
+    except (TypeError, ValueError):
+        return False
+
+
+def _bounded_int_env(env: Mapping[str, str], name: str, default: int,
+                     minimum: int, maximum: int) -> int:
+    raw = env.get(name)
+    if raw is None:
+        return default
+    if (not isinstance(raw, str) or not raw or len(raw) > 6
+            or any(character not in "0123456789" for character in raw)):
+        raise ValueError(f"invalid {name}")
+    result = int(raw)
+    if not minimum <= result <= maximum:
+        raise ValueError(f"out-of-range {name}")
+    return result
+
+
+def _review_settings(env: Mapping[str, str]) -> tuple[int, int, float]:
+    """Fail closed on malformed operator limits, even when the model is ready."""
+    max_lenses = _bounded_int_env(env, "AEONITH_MAX_LENSES", 14, 1, 14)
+    max_output_tokens = _bounded_int_env(
+        env, "AEONITH_MAX_OUTPUT_TOKENS", _DEFAULT_MAX_OUTPUT_TOKENS, 256, 8_192,
+    )
+    raw_timeout = env.get("AEONITH_PROVIDER_TIMEOUT_SECONDS")
+    if raw_timeout is None:
+        timeout = _DEFAULT_PROVIDER_TIMEOUT_SECONDS
+    else:
+        if not isinstance(raw_timeout, str) or not raw_timeout or len(raw_timeout) > 16:
+            raise ValueError("invalid provider timeout")
+        try:
+            timeout = float(raw_timeout)
+        except ValueError as exc:
+            raise ValueError("invalid provider timeout") from exc
+    if not math.isfinite(timeout) or not 1 <= timeout <= 50:
+        raise ValueError("provider timeout must be between 1 and 50 seconds")
+    return max_lenses, max_output_tokens, timeout
+
+
+def _bool_setting(env: Mapping[str, str], name: str, default: bool) -> bool:
+    value = env.get(name)
+    if value is None:
+        return default
+    if value not in ("true", "false"):
+        raise ValueError(f"invalid {name}")
+    return value == "true"
+
+
+def _request_exceeds_limits(request: dict[str, Any], max_lenses: int) -> bool:
+    work = request.get("work", request.get("proposition"))
+    text = work.get("text") if isinstance(work, dict) else work
+    context = request.get("context")
+    lenses = request.get("lenses")
+    return bool(
+        (isinstance(text, str) and len(text) > MAX_REVIEW_WORK_CHARS)
+        or (isinstance(context, str) and len(context) > MAX_REVIEW_CONTEXT_CHARS)
+        or (isinstance(lenses, list) and len(lenses) > max_lenses)
+        or (lenses is None and max_lenses < 14)
+    )
 
 
 def _construct_provider(env: Mapping[str, str]) -> Any:
-    kind = env.get("AEONITH_PROVIDER_KIND", "openai-responses")
-    url = env.get("AEONITH_PROVIDER_URL", "")
-    model = env.get("AEONITH_PROVIDER_MODEL", "")
-    api_key = env.get("AEONITH_PROVIDER_API_KEY") or None
-    # Model destination and all paid inference settings are server-owned.
-    common = {
-        "url": url, "model": model, "api_key": api_key,
-        "timeout": 45, "max_tokens": 8_192,
-        "structured_outputs": env.get("AEONITH_STRUCTURED_OUTPUTS") == "true",
-    }
-    if kind == "openai-responses":
-        return OpenAIResponsesProvider(**common)
-    if kind == "openai-compatible":
-        return OpenAICompatibleProvider(
-            **common, token_field="max_tokens", temperature=0.2, json_mode=True,
-        )
-    raise ValueError("unsupported configured provider")
+    if env.get("AEONITH_PROVIDER_KIND") != "local-openai-compatible":
+        raise ValueError("only a local OpenAI-compatible model is supported")
+    if any(env.get(key) for key in _CLOUD_CONFIGURATION_KEYS):
+        raise ValueError("cloud credentials and hosted configuration are unsupported")
+    if not _local_provider_url(env):
+        raise ValueError("provider must be a literal loopback chat-completions endpoint")
+    _max_lenses, max_tokens, timeout = _review_settings(env)
+    return LocalOpenAICompatibleProvider(
+        url=env["AEONITH_PROVIDER_URL"],
+        model=env.get("AEONITH_PROVIDER_MODEL", ""),
+        timeout=timeout,
+        max_tokens=max_tokens,
+        json_mode=_bool_setting(env, "AEONITH_LOCAL_JSON_MODE", True),
+        structured_outputs=_bool_setting(env, "AEONITH_STRUCTURED_OUTPUTS", False),
+    )
 
 
 def is_ready(environ: Mapping[str, str] | None = None) -> bool:
-    """Conservative configuration readiness; not evidence of model success."""
+    """Local-only configuration readiness; not evidence of model success."""
     env = _env(environ)
     secret = env.get("AEONITH_SERVICE_TOKEN", "")
     if (env.get("AEONITH_ENABLE_LIVE_REVIEWS") != "true"
@@ -134,8 +209,6 @@ def is_ready(environ: Mapping[str, str] | None = None) -> bool:
             or not secret.strip() or not secret.isascii()
             or not env.get("AEONITH_PROVIDER_URL")
             or not env.get("AEONITH_PROVIDER_MODEL")):
-        return False
-    if _remote_provider(env) and not env.get("AEONITH_PROVIDER_API_KEY"):
         return False
     try:
         _construct_provider(env)
@@ -174,20 +247,30 @@ def process_review(
         return 400, _error("invalid_request", "Request must be a JSON object")
     if set(request) - _ALLOWED_REQUEST_KEYS:
         return 400, _error("invalid_request", "Unknown request fields are not permitted")
-    # Never invoke paid inference unless an explicit operator switch is on.
+    try:
+        max_lenses, _max_output_tokens, _timeout = _review_settings(env)
+    except ValueError:
+        return 503, _error("service_unconfigured", "Review service limits are not configured",
+                           status="provider_unavailable")
+    if _request_exceeds_limits(request, max_lenses):
+        return 413, _error("review_limit_exceeded", "Review exceeds the configured service limits")
+    # Check the core schema, evidence-reference integrity and lens set before
+    # any model invocation.
+    try:
+        parsed_request, _reason = _parse_request(request)
+    except (TypeError, ValueError, RecursionError):
+        parsed_request = None
+    if parsed_request is None:
+        return 400, _error("invalid_request", "Review request is invalid")
+    # Never invoke inference unless an explicit operator switch is on.
     if env.get("AEONITH_ENABLE_LIVE_REVIEWS") != "true":
         return 503, _error("service_disabled", "Live reviews are disabled",
                            status="provider_unavailable")
     if not is_ready(env):
         return 503, _error("provider_unavailable", "Review provider is not configured",
                            status="provider_unavailable")
-    if _remote_provider(env):
-        disclosure = _single_header(headers, "X-Aeonith-Disclosure")
-        if disclosure != "accepted":
-            return 403, _error(
-                "disclosure_required",
-                "Explicit external-provider disclosure acknowledgment required",
-            )
+    # Local providers consume no paid account quota. No Redis or other cloud
+    # admission round-trip is ever made, including in production requests.
     if provider is None:
         try:
             provider = _construct_provider(env)

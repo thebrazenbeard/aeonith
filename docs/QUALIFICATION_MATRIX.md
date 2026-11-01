@@ -1,5 +1,12 @@
 # Aeonith qualification matrix (independent evaluation)
 
+**Status note (local-only operating policy):** This table preserves the early
+v0.3 research/qualification baseline. Aeonith now includes a loopback-only web
+service and an explicitly configured local compatible model route; it has **no
+active public cloud deployment**, paid-provider authorization, or demonstrated
+literary-quality equivalence to the original GPT. New service gates and
+up-to-date test results belong in [RELEASE_GATES.md](RELEASE_GATES.md).
+
 ## Evidence boundary
 
 Source: owner-authenticated inspection of the existing Aeonith GPT editor on 2026-10-31, with sensitive provenance retained outside the public repository. This establishes what the editor **displayed**, not equivalent behavior in a new runtime. The target repository initially contained a README only. The public source does not supply a numeric quality rubric, exact JSON schema, implementation guarantees, or provider compatibility. The harness below tests new engineering contracts separately from literary quality.
@@ -20,15 +27,15 @@ Source: owner-authenticated inspection of the existing Aeonith GPT editor on 202
 | Evidence types are not laundered | `DOC`, `MODEL_REVIEW`, `TEST` never silently become `FORMAL_VERIFY` or `RUNTIME_PROBE` | Deterministic audit tests and provenance review | Pass for tested input audit; source verification not performed |
 | Model unavailable does not fabricate criticism | Null assessment, empty generated critique/synthesis, structured error | `test_core_contract.py` with no provider | Pass |
 | Invalid provider output rejected | Missing/duplicate lens, fabricated quote/reference, invalid schema rejected | Provider stub contract tests | Pass for tested malformed outputs |
-| New design does not claim GPT parity without real checks | README and status identify in-scope engine, missing UI/tools/knowledge and untested live provider(s) | Source/README review + local no-provider pipeline | Pass for truthful source-only boundary; real model/GPT parity remains pending |
-| Readable standalone manuscript workflow | UTF-8 text/Markdown preparation, explicit model review, escaped Markdown report | Converter/renderer tests + wheel smoke | Pass locally; no web service is deployed |
+| New design does not claim GPT parity without real checks | README and status identify implemented code, missing GPT tools/knowledge and untested local model(s) | Source/README review + local no-provider pipeline | Pass for truthful source-contract boundary; real model/GPT parity remains pending |
+| Readable standalone manuscript workflow | UTF-8 text/Markdown preparation, explicit local model review, escaped Markdown report | Converter/renderer tests + wheel smoke | Pass locally; a loopback web service now exists but end-to-end real-model inference is unqualified |
 | Quote source offsets | Exact Unicode offsets, duplicate occurrence ambiguity, fingerprint | Sidecar tests, repeated-source cache regression | Pass for literal location only; interpretations unverified |
 | Blinded evaluation process | Stable candidate IDs despite input order, separated private key, human rubric | Adversarial A/B and file-mode tests | Pass for tested source tooling; no human pilot completed |
 | Host authorization | Host-owned identity, consent, durable replay and provider metering | Source-only port + threat tests | **Not deployed; no actual authority or trust anchor** |
 | Individual lens methods | Fourteen explicit evidence targets, rival readings and abstention criteria | Deterministic prompt tests and hostile fake-provider probes | Instruction distinctness passed; semantic differentiation remains unmeasured |
-| Strict provider schema | Opt-in JSON Schema output for compatible Chat/Responses models | Local transport mocks and source parser rejection tests | Schema/request conformance tested; live interoperability unqualified |
+| Strict provider schema | Opt-in JSON Schema output for compatible local chat models; historical Responses transport exists | Local transport mocks and source parser rejection tests | Schema/request conformance tested; real local model interoperability unqualified |
 | Whole-source excerpt planning | Complete bounded Unicode coverage with no raw headings in metadata | Tamper and source reconstruction tests | Deterministic segmentation passed; no cross-chapter literary synthesis |
-| Reader privacy | External disclosure acknowledgment, no ambient proxy forwarding, exclusive local output | Fake transport/proxy and CLI adversarial tests | Locally checked; not authenticated host consent or provider policy |
+| Reader privacy | Loopback-only model/service routes, no ambient proxy forwarding, exclusive local output | Fake transport/proxy, CLI and local HTTP adversarial tests | Source-level checks; not proof of model-runner logs, browser extensions or host isolation |
 | Human-study summary | Exact-display annotation binding, private output and descriptive aggregation | Offline synthetic aggregate/invalid-input tests | Tested research tooling only; no actual human quality results |
 
 ## Quality rubric for future human or independent-model review

@@ -1,4 +1,4 @@
-"""Bearer-protected serverless Aeonith critique endpoint."""
+"""Bearer-protected local Aeonith critique endpoint."""
 
 from __future__ import annotations
 
@@ -9,7 +9,7 @@ from aeonith.service import (
 )
 
 
-class handler(BaseHTTPRequestHandler):  # Vercel Python runtime entrypoint
+class handler(BaseHTTPRequestHandler):
     def log_message(self, _format: str, *args: object) -> None:
         # Do not emit manuscript-bearing paths, headers or content in logs.
         return

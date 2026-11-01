@@ -207,11 +207,12 @@ class ExplicitProviderTransportTests(unittest.TestCase):
         with patch("aeonith.providers.build_opener", side_effect=AssertionError("unexpected network")):
             OpenAIResponsesProvider(url="https://api.example.test/v1/responses", model="m")
 
-    def test_cli_exposes_explicit_modes_without_required_credentials(self):
+    def test_cli_exposes_only_free_local_mode_without_credentials(self):
         completed = subprocess.run([sys.executable, "-m", "aeonith", "review", "--help"], capture_output=True, text=True)
         self.assertEqual(completed.returncode, 0, completed.stderr)
-        self.assertIn("openai-responses", completed.stdout)
-        self.assertIn("max_completion_tokens", completed.stdout)
+        self.assertIn("local-openai-compatible", completed.stdout)
+        self.assertNotIn("openai-responses", completed.stdout)
+        self.assertNotIn("--api-key-env", completed.stdout)
 
 
 if __name__ == "__main__":

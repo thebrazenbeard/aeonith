@@ -17,34 +17,34 @@ states that no literary critique was generated, and the process exits with
 code `3`. Setting ambient URL/model/key environment variables alone never
 activates model inference.
 
-## Explicit model call
+## Explicit, no-cost local model call
 
-Review the chosen provider's privacy/retention terms before disclosing a
-manuscript. Set its key using your normal secret-management process; never
-place credential values in command arguments or manuscripts.
+Use a local text model already available on hardware you own (for example
+KoboldCpp with a permitted GGUF). No paid provider or API key is needed;
+the hard additional-service spending limit is **$0.00**. Check the local
+runner's logging and manuscript handling before using private writing.
 
 ```bash
-export AEONITH_PROVIDER_URL="https://api.openai.com/v1/responses"
-export AEONITH_PROVIDER_MODEL="SELECTED_COMPATIBLE_MODEL"
-# AEONITH_PROVIDER_API_KEY is provided securely if required.
+export AEONITH_PROVIDER_URL="http://127.0.0.1:5001/v1/chat/completions"
+export AEONITH_PROVIDER_MODEL="local"
+unset AEONITH_PROVIDER_API_KEY
 
 python -m aeonith.workflow --input draft.md --title "Draft" \
-  --provider openai-responses --allow-external-disclosure \
+  --provider local-openai-compatible \
   --output critique.md
 ```
 
-This is an **example, not a verified live API qualification**. The disclosure
-flag is only an explicit local acknowledgment. It does **not** authenticate
-the user, verify consent ownership, pin the resolved network endpoint,
-guarantee provider confidentiality, meter token/cost spending, or grant Rezon,
-CCB or any other ecosystem authority. Those controls require an independently
-secured host and remain out of scope.
+This is an **example, not a verified local model qualification**. It fails
+honestly if the local runner is unavailable or returns unusable output. The
+local-only adapter constrains the destination to loopback but does not verify
+manuscript ownership, confidentiality of other local processes, or permission
+to modify Rezon, CCB or other ecosystem state.
 
-For compatible Chat Completions endpoints, select
-`--provider openai-compatible`. Flags
-`--token-field max_completion_tokens --omit-temperature --json-mode` are available only
-when the selected model documents support. These request-shape options do not
-guarantee schema-conforming or useful literary output.
+For compatible **local** Chat Completions endpoints, select
+`--provider local-openai-compatible`. The CLI requests JSON mode by default;
+use `--no-json-mode` if your local server rejects that format. This does not
+remove the requirement that the model actually generate a valid review JSON
+object. No request-shape option guarantees schema-conforming or useful output.
 For models explicitly supporting strict JSON Schema responses,
 `--structured-outputs` opts into the same schema mode as the lower-level
 review CLI; Aeonith still validates source quotes and requested lenses.
@@ -58,9 +58,7 @@ review CLI; Aeonith still validates source quotes and requested lenses.
 - `--output -` writes to stdout (the default). A named output path is
   exclusively created with mode `0600` on POSIX systems; existing files
   are never overwritten. The path is reserved before provider invocation so
-  a pre-existing file prevents a potentially billable call.
-- `--api-key-env NAME` changes the environment variable read by the selected
-  provider, never the secret itself.
+  no attempted local generation happens if the output already exists.
 
 The input converter rejects invalid UTF-8, NUL characters, empty or oversized
 work, and requests larger than the existing JSON CLI limit. The Markdown
@@ -79,9 +77,8 @@ remain; the tool never silently overwrites a prior file.
 python -m unittest discover -s tests -p 'test_workflow.py' -v
 ```
 
-The 15 local tests cover unavailable-provider honesty, external disclosure
-gating (including URL environment variables), successful fake Chat and
-Responses adapters, focused lenses, malformed UTF-8/title, safe exclusive file
-outputs, and sanitized provider exceptions. These **do not** prove real model
-interoperability, literary quality, API costs, privacy compliance, or host
+The local tests cover unavailable-provider honesty, loopback-only routing,
+focused lenses, malformed input, safe exclusive file outputs, and sanitized
+provider exceptions. They **do not** prove actual local model
+interoperability, literary quality, local runner confidentiality, or host
 authorization.

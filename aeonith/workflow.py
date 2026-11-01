@@ -3,14 +3,11 @@
 Usage:
 
     python -m aeonith.workflow --input draft.md
-    python -m aeonith.workflow --input draft.md --provider openai-responses \
-        --url https://api.openai.com/v1/responses --model SELECTED_MODEL \
-        --allow-external-disclosure --output review.md
+    python -m aeonith.workflow --input draft.md --provider local-openai-compatible \
+        --url http://127.0.0.1:5001/v1/chat/completions --output review.md
 
-Nothing invokes a model unless the provider is explicitly selected. For a
-non-loopback endpoint, the caller must also explicitly acknowledge disclosure.
-That acknowledgment is NOT authenticated consent, an endpoint allowlist, cost
-control, provider-side retention assurance, or host authorization.
+Nothing invokes a model unless the local provider is explicitly selected.
+The CLI cannot be configured to send manuscripts to a paid or remote provider.
 """
 
 from __future__ import annotations
@@ -19,16 +16,12 @@ import argparse
 import json
 import os
 import sys
-from urllib.parse import urlsplit
 from typing import Any
 
 from .core import CANONICAL_LENSES, critique
 from .formatting import EXIT_CODES, render_review_markdown
-from .providers import OpenAICompatibleProvider, OpenAIResponsesProvider
+from .providers import LocalOpenAICompatibleProvider
 from .text_input import MAX_OUTPUT_BYTES, TextInputError, _read_text, make_request
-
-
-LOCAL_HOSTS = frozenset({"localhost", "127.0.0.1", "::1"})
 
 
 def _parser() -> argparse.ArgumentParser:
@@ -43,23 +36,14 @@ def _parser() -> argparse.ArgumentParser:
     parser.add_argument("--format", choices=("markdown", "json"), default="markdown")
     parser.add_argument("--output", default="-",
                         help="new output file (never overwritten), or - for stdout")
-    parser.add_argument("--provider", choices=("none", "openai-compatible", "openai-responses"),
+    parser.add_argument("--provider", choices=("none", "local-openai-compatible"),
                         default="none", help="model calls are opt-in; defaults to unavailable")
-    parser.add_argument("--url", help="full model endpoint URL")
-    parser.add_argument("--model", help="model identifier supported by the selected provider")
-    parser.add_argument("--api-key-env", default="AEONITH_PROVIDER_API_KEY",
-                        help="environment variable name for a required key, never its value")
-    parser.add_argument("--allow-external-disclosure", action="store_true",
-                        help="acknowledge that the whole manuscript may be transmitted to a nonlocal provider")
-    parser.add_argument("--max-output-tokens", type=int, default=8_192)
-    parser.add_argument("--token-field", choices=("max_tokens", "max_completion_tokens", "none"),
-                        default="max_tokens")
+    parser.add_argument("--url", help="literal loopback-only /v1/chat/completions URL")
+    parser.add_argument("--model", help="local model name (default: local)")
+    parser.add_argument("--max-output-tokens", type=int, default=4_096)
     parser.add_argument("--omit-temperature", action="store_true")
-    formats = parser.add_mutually_exclusive_group()
-    formats.add_argument("--json-mode", action="store_true",
-                         help="request compatible Chat Completions JSON mode")
-    formats.add_argument("--no-json-mode", action="store_true",
-                         help="disable default Responses JSON mode for a compatible endpoint")
+    parser.add_argument("--no-json-mode", action="store_true",
+                        help="disable JSON mode when unsupported by the local model")
     parser.add_argument("--structured-outputs", action="store_true",
                         help="request strict JSON Schema output from a compatible provider/model")
     return parser
@@ -68,43 +52,14 @@ def _parser() -> argparse.ArgumentParser:
 def _build_provider(args: argparse.Namespace) -> Any:
     if args.provider == "none":
         return None
-    url = args.url or ""
-    model = args.model or ""
-    # Validate locally before deciding which destination needs disclosure.
-    # Provider constructors do not connect; critique() is the only call site.
-    common = {
-        "url": url,
-        "model": model,
-        "api_key": os.environ.get(args.api_key_env),
-        "max_tokens": args.max_output_tokens,
-    }
-    if args.provider == "openai-compatible":
-        return OpenAICompatibleProvider(
-            **common,
-            token_field=args.token_field,
-            temperature=None if args.omit_temperature else 0.2,
-            json_mode=args.json_mode,
-            structured_outputs=args.structured_outputs,
-        )
-    return OpenAIResponsesProvider(
-        **common, json_mode=not args.no_json_mode,
+    return LocalOpenAICompatibleProvider(
+        url=args.url or "http://127.0.0.1:5001/v1/chat/completions",
+        model=args.model or "local",
+        max_tokens=args.max_output_tokens,
+        temperature=None if args.omit_temperature else 0.2,
+        json_mode=not args.no_json_mode,
         structured_outputs=args.structured_outputs,
     )
-
-
-def _external_disclosure_required(args: argparse.Namespace) -> bool:
-    if args.provider == "none":
-        return False
-    url = args.url or ""
-    try:
-        hostname = urlsplit(url).hostname
-    except ValueError:
-        return False
-    # A missing or malformed host never reaches a model call: provider
-    # constructors reject it as invalid configuration before review().
-    if hostname is None:
-        return False
-    return hostname not in LOCAL_HOSTS
 
 
 def _load_request(args: argparse.Namespace) -> dict[str, Any]:
@@ -130,18 +85,6 @@ def _render(result: dict[str, Any], args: argparse.Namespace) -> str:
 
 def main(argv: list[str] | None = None) -> int:
     args = _parser().parse_args(argv)
-    if args.provider != "none":
-        # Bind the selected destination once. Consent gating and the eventual
-        # provider constructor must inspect exactly the same endpoint value.
-        args.url = args.url or os.environ.get("AEONITH_PROVIDER_URL", "")
-        args.model = args.model or os.environ.get("AEONITH_PROVIDER_MODEL", "")
-    if _external_disclosure_required(args) and not args.allow_external_disclosure:
-        print(
-            "External model disclosure blocked: review the provider's privacy terms and "
-            "use --allow-external-disclosure to acknowledge manuscript transmission.",
-            file=sys.stderr,
-        )
-        return 2
     try:
         provider = _build_provider(args)
         request = _load_request(args)
@@ -150,9 +93,9 @@ def main(argv: list[str] | None = None) -> int:
               file=sys.stderr)
         return 2
 
-    # Reserve a unique owner-readable output BEFORE invoking a possibly paid
-    # provider. If the path exists, no manuscript is transmitted and no model
-    # call occurs. This is a local convenience, not a billing or quota guard.
+    # Reserve a unique owner-readable output BEFORE invoking the local model.
+    # Existing files are never overwritten, and model calls are never made
+    # when the output path is already occupied.
     reserved_fd: int | None = None
     try:
         if args.output != "-":

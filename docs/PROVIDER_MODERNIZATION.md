@@ -1,66 +1,65 @@
-# Aeonith provider adapters
+# Aeonith provider adapters — local-only operating policy
 
-Aeonith ships explicit, dependency-free HTTP provider adapters in
-`aeonith/providers.py`. The Chat Completions transport preserves the v0.1
-legacy request mode, and v0.2 adds an opt-in Responses transport and
-model-specific parameter switches. These are source capabilities, not a
-deployed external API or proof of live model compatibility.
+**Current operating rule: $0.00 additional spending, no cloud inference.**
+Aeonith's supported CLI/service selection is `local-openai-compatible`,
+with a literal loopback endpoint and no API key. Earlier remote adapter
+research remains in this document for historical protocol context, **not** as
+instructions to use a paid service. No remote fallback is authorized.
+
+Aeonith ships dependency-free HTTP transport code in `aeonith/providers.py`.
+Earlier revisions implemented general Chat Completions and Responses
+transports, still useful as source-level compatibility references. The
+supported zero-cost path constrains the selected Chat Completions destination
+to a local endpoint; no actual model qualification is implied.
 The public contract remains `provider.review(payload) -> dict`, and the core
 still independently validates output, quotations and provenance before emitting
 a completed critique.
 
 ## Implemented provider modes
 
-| Provider | Endpoint | CLI selection | Output token request | JSON request |
+| Adapter | Endpoint | Status | Output token request | JSON request |
 |---|---|---|---|---|
-| Existing chat-compatible | Explicit URL ending in `/chat/completions` | `--provider openai-compatible` | `--token-field max_tokens` (legacy default), `max_completion_tokens`, or `none` | Optional `--json-mode` |
-| OpenAI Responses API | Explicit URL ending in `/responses` | `--provider openai-responses` | `max_output_tokens` | `text.format.type=json_object` by default; `--no-json-mode` opt-out |
+| Local Chat Completions | Exact local `/v1/chat/completions` URL | **Supported:** `--provider local-openai-compatible` | `max_tokens` (some runners expose compatible alternatives) | JSON mode by default; `--no-json-mode` to disable, or `--structured-outputs` if supported |
+| General Chat Completions | Arbitrary explicit HTTP URL | Historical transport implementation; not an approved runtime selection | Legacy `max_tokens` or model-dependent alternatives | Historical compatibility behavior |
+| OpenAI Responses | General remote `/responses` URL | Historical transport implementation; **not** an approved runtime selection | `max_output_tokens` | `text.format` requests |
 
 The adapters **do not auto-detect** a model's capabilities or rewrite the
-endpoint path. For modern OpenAI Chat Completions models, choose the supported
-`--token-field max_completion_tokens`, and use `--omit-temperature` where the
-selected model does not accept sampling temperature. Older compatible servers
-retain the original defaults. JSON mode asks the model to return valid JSON;
+endpoint path. The supported local CLI offers `--omit-temperature` if a
+particular runner rejects that field and `--no-json-mode` if it rejects JSON
+response-format requests. Older generic transport classes retained legacy
+token-field variants for research, but these are not active CLI selections.
+JSON mode asks the model to return valid JSON;
 **it does not guarantee Aeonith's exact result schema**. That is why `core.py`
 validates every candidate and rejects unverifiable evidence or incomplete
 shapes.
 
-## CLI examples
+## Approved CLI example
 
-Replace the model name and URL only after selecting a provider and reviewing
-the data-sharing consequences for the manuscript. The following commands are
-illustrative; no live API was contacted during implementation.
-
-```bash
-python -m aeonith review --input manuscript.json \
-  --provider openai-responses \
-  --url https://api.openai.com/v1/responses \
-  --model YOUR_SUPPORTED_MODEL
-```
+Use a **previously installed and running** compatible local model (for example
+KoboldCpp on your own computer). The example makes no cloud request; it will
+return a provider error if the local server is unavailable. Choose a model
+name that your local runtime accepts.
 
 ```bash
-python -m aeonith review --input manuscript.json \
-  --provider openai-compatible \
-  --url https://api.openai.com/v1/chat/completions \
-  --model YOUR_SUPPORTED_CHAT_MODEL \
-  --token-field max_completion_tokens --omit-temperature --json-mode
+unset AEONITH_PROVIDER_API_KEY
+python -m aeonith review --input examples/microfiction.json \
+  --provider local-openai-compatible \
+  --url http://127.0.0.1:5001/v1/chat/completions \
+  --model local
 ```
 
-To authenticate explicitly, place the secret in the environment variable named
-by `--api-key-env` (default `AEONITH_PROVIDER_API_KEY`); never write a secret to
-input JSON, the command line, logs or a repository file. Provider selection is
-opt-in; setting environment variables alone never triggers an API call. The
-local unit tests use fake in-memory HTTP transport and never need API keys.
+Do not configure provider keys or saved unrelated credentials. Provider
+selection is opt-in; setting environment variables alone must not trigger a
+request. The unit tests use controlled fake transport and never need API keys.
 
 ## Privacy and error semantics
 
-- Credential-bearing requests are HTTPS-only. Plain HTTP is accepted only for
-  unauthenticated loopback development endpoints. Redirects are refused rather
-  than forwarding a bearer token or manuscript to a changed host.
-- Responses API calls send `store: false` and no tool configuration, preventing
-  request-controlled tools and disabling server response-state storage. **This
-  is not a zero-data-retention guarantee**; consult the selected provider's
-  applicable retention/privacy terms before sending private manuscripts.
+- Approved local requests use no provider credential and a literal loopback
+  HTTP endpoint. Redirects and inherited HTTP(S) proxy settings are refused,
+  preventing accidental forwarding to a different host.
+- Historical Responses code includes `store: false`, which is **not** a
+  zero-retention guarantee; it must not be used as a justification to send
+  manuscripts to a cloud provider.
 - The transport has a 4 MB response body cap, a configurable bounded timeout,
   and bounded output-token request. It rejects nonfinite JSON, refusal content,
   incomplete Responses API status, missing assistant text, unexpected tool
@@ -69,7 +68,7 @@ local unit tests use fake in-memory HTTP transport and never need API keys.
   no fabricated literary analysis is substituted. The transport has no retry
   mechanism, tool execution, vector store, file-upload, caching or telemetry.
 
-## Official API documentation grounding
+## Original protocol research sources (not deployment instructions)
 
 - OpenAI Chat Completions create parameters: `max_completion_tokens` replaces
   the deprecated `max_tokens` for compatible models, and a JSON object response
@@ -81,9 +80,12 @@ local unit tests use fake in-memory HTTP transport and never need API keys.
 - OpenAI Structured Outputs guide and JSON mode distinctions:
   https://developers.openai.com/api/docs/guides/structured-outputs
 
-Compatibility is model-specific and may evolve. These sources verify the
-request fields, not that any chosen model will accept all flags, reproduce all
-14 critical lenses faithfully, or produce high-quality real-world criticism.
+For the supported local runner, consult the [KoboldCpp endpoint
+documentation](https://github.com/LostRuins/koboldcpp.net/blob/main/src/content/docs/docs/api/endpoints.mdoc)
+and verify its `/v1/chat/completions` behavior yourself. Protocol research
+sources verify possible request fields, not that a particular local model
+accepts every flag, reproduces all fourteen lenses, or generates useful
+literary criticism.
 
 ## Source verification
 
@@ -95,7 +97,7 @@ python -m unittest discover -s tests -v
 python -m compileall -q aeonith
 ```
 
-Release qualification still requires deliberate live model testing with a
-non-sensitive manuscript and a human review of the literary judgment quality.
+Release qualification still requires deliberate **local** model testing with a
+non-sensitive manuscript and human review of literary judgment quality.
 The mocked tests prove request construction and fail-closed protocol parsing,
-not upstream inference quality, provider uptime, pricing, or data residency.
+not actual inference quality, local model availability, or model-runner privacy.

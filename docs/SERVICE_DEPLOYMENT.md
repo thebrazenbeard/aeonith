@@ -1,146 +1,102 @@
-# Aeonith HTTP service: protected deployment runbook
+# Aeonith local-service runbook — no paid infrastructure
 
-This describes the Vercel deployment of Aeonith's independently
-implemented literary critic. Source checks and a functioning HTTP endpoint
-are **not** proof of original-GPT parity, model suitability, safe retention
-by an external model provider, or end-to-end literary quality.
+Aeonith's supported operating model is **self-hosted on an already-owned computer with zero new service/API spending**. The former Vercel shell and paid-provider pilot are retired; account deletion means historical deployment `READY` records are not evidence of a current live endpoint. No Vercel account, Gateway, Upstash Redis database, cloud tunnel, subscription, or paid model key is part of this setup.
 
-**Verified 2026-11-01:** The protected, provider-disabled web shell is
-running at [aeonith-seven.vercel.app](https://aeonith-seven.vercel.app/).
-Vercel reports deployment `dpl_DrkMtyBmkP9NP8iHFSGjLNr7akgC` as `READY`
-for GitHub commit `f90a64bc18a2d285638cbbe646d546ffb396a4f8`.
-The live browser editor loaded, and `/healthz` returned `status: ok` with
-`review_configured: false`. A synthetic, unauthorized review reported
-provider unavailable. No real model request or model-quality qualification
-has taken place. The Vercel connector's private-deployment probe returned
-a permission error; browser verification succeeded. Recheck access permissions
-before relying on the connector for ongoing deployed HTTP diagnostics.
+The source includes a browser UI and a stdlib Python server, but it does not ship model weights. A provider-disabled shell is not a functioning AI critic. Actual criticism requires a locally running, capable, compatible model.
 
-## Route and packaging contract
+## Prerequisites
 
-The Python Vercel Functions runtime (currently beta) supports the standard
-library `BaseHTTPRequestHandler` entry point. The Vercel project expects a
-**single** application entrypoint, selected in `pyproject.toml` as
-`[tool.vercel] entrypoint = "api.index:handler"`. That dispatcher delegates
-GET liveness to `api/health.py` and authenticated POST reviews to
-`api/review.py`. The repository
-uses the root `pyproject.toml` (Python 3.11+) and includes no mandatory
-third-party runtime dependency. Vercel currently supports Python 3.12 by
-default; its deployed Python version must be verified from the build.
+- Python 3.11+ and an Aeonith source checkout on a computer you control.
+- For inference, an **already available** local text model with an OpenAI-compatible Chat Completions API. [KoboldCpp](https://github.com/LostRuins/koboldcpp) with an authorized GGUF model is one option. Consult [its API endpoint documentation](https://github.com/LostRuins/koboldcpp.net/blob/main/src/content/docs/docs/api/endpoints.mdoc); the usual route is `http://127.0.0.1:5001/v1/chat/completions`.
+- No provider API key and no cloud credentials. Do not use saved unrelated keys or tunneling credentials merely because they exist.
 
-| Public route | Function | Purpose |
-| --- | --- | --- |
-| `/` | `public/index.html` | Same-origin client UI; no embedded secrets |
-| `/healthz` | `api/index.py` → health handler | Process/packaging health; never a model-quality or provider-availability attestation |
-| `/v1/critique` | `api/index.py` → review handler | Authorized, bounded JSON review request |
+## Start the service
 
-The direct `/api/health` and `/api/review` URLs also exist as rewrites to
-`/api`, and the same handler-level protections apply. `vercel.json` rewrites
-the friendly routes above and applies restrictive same-origin CSP, frame
-blocking and no-store headers. The UI must use separately served scripts
-and CSS, not inline JavaScript, to satisfy that CSP.
+From the repository root, on the same computer as the local model:
 
-Vercel's function payload ceiling is 4.5 MB; Aeonith intentionally imposes
-a smaller application input budget. Do not raise it to accommodate entire
-books: the long-form source planner works by bounded excerpts, and neither
-the HTTP service nor its current model adapters provide whole-book
-synthesis. The Vercel function timeout is capped at 60 seconds here, so
-model transport timeouts must be shorter and genuine long-running work
-requires a separate, explicitly reviewed asynchronous architecture.
+```bash
+# Start the model runner separately, with its API bound to the local machine.
+export AEONITH_SERVICE_TOKEN="$(python3 -c 'import secrets; print(secrets.token_urlsafe(32))')"
+export AEONITH_PROVIDER_KIND=local-openai-compatible
+export AEONITH_PROVIDER_URL=http://127.0.0.1:5001/v1/chat/completions
+export AEONITH_PROVIDER_MODEL=local
+export AEONITH_ENABLE_LIVE_REVIEWS=true
+unset AEONITH_PROVIDER_API_KEY
 
-## Protection and credentials
+python3 -m aeonith.local_server --host 127.0.0.1 --port 8765
+```
 
-Resolve the account scope and project ID before any deployment. A previous
-team-scoped creation attempt returned HTTP 403, while the user subsequently
-created an `aeonith` project in the accessible personal scope. Do not create
-a duplicate project or silently switch between scopes.
+On Windows PowerShell, set the same values for the current terminal session:
 
-For any **new project creation**, set Vercel Authentication to
-`ssoProtection: { "deploymentType": "all" }` atomically with the
-GitHub repository connection. Do not rely on a presumed team default or
-auto-publish an unprotected preview. Read back the project to verify
-All-Deployments protection before allowing an inference endpoint to run.
-An existing project's `all_except_custom_domains` setting protects ordinary
-deployment URLs but is not sufficient to assert protection on future custom
-domains; verify and tighten that setting before enabling inference.
-Vercel's September 2026 update makes this protection available on every
-plan; verify current terms and settings in the owner account.
+```powershell
+$bytes = New-Object byte[] 32
+[System.Security.Cryptography.RandomNumberGenerator]::Create().GetBytes($bytes)
+$env:AEONITH_SERVICE_TOKEN = [Convert]::ToBase64String($bytes)
+$env:AEONITH_PROVIDER_KIND = 'local-openai-compatible'
+$env:AEONITH_PROVIDER_URL = 'http://127.0.0.1:5001/v1/chat/completions'
+$env:AEONITH_PROVIDER_MODEL = 'local'
+$env:AEONITH_ENABLE_LIVE_REVIEWS = 'true'
+Remove-Item Env:AEONITH_PROVIDER_API_KEY -ErrorAction SilentlyContinue
+python -m aeonith.local_server --host 127.0.0.1 --port 8765
+```
 
-Configure the following as private, server-side Vercel environment variables
-for the intended environment; none belongs in `public/*`, a repository
-commit, browser storage, build logs or client JavaScript:
+Open `http://127.0.0.1:8765/` on that computer. Enter the freshly generated bearer token to submit a passage. The UI is same-origin. It does not persist that token or manuscript text in browser storage. Do not paste the token into a publicly visible terminal transcript, issue tracker, chat, screenshot, or repository file.
 
-| Variable | Meaning |
+The local server listens on loopback only, normally `127.0.0.1:8765`; it rejects a non-loopback host rather than offering a LAN mode. **Do not route the port through a tunnel** as part of the zero-cost single-owner setup. Any remote-access design requires separate access-control, encryption, network and privacy review, even if it has no subscription fee.
+
+If the model is not ready, leave `AEONITH_ENABLE_LIVE_REVIEWS` unset or set it to `false` to run only the UI and health endpoint. Review requests fail closed rather than inventing criticism. A different local model runtime may require a different local endpoint and model label; confirm exact compatibility before enabling it. In simple KoboldCpp single-model mode the model label may be arbitrary, whereas router mode may select by name.
+
+## Configuration
+
+| Setting | Behavior |
 | --- | --- |
-| `AEONITH_SERVICE_TOKEN` | Independently generated high-entropy bearer token required by the service; use distinct values across environments |
-| `AEONITH_ENABLE_LIVE_REVIEWS` | Literal `true` is the deliberate inference-enable switch; otherwise deny model calls |
-| `AEONITH_PROVIDER_KIND` | Chosen compatible adapter, default `openai-responses` |
-| `AEONITH_PROVIDER_URL` | Fixed, trusted HTTPS inference endpoint, set by operator, never a caller-controlled URL |
-| `AEONITH_PROVIDER_MODEL` | Explicitly selected provider-compatible model |
-| `AEONITH_PROVIDER_API_KEY` | Provider credential with minimum scope and a hard spend limit when available |
-| `AEONITH_STRUCTURED_OUTPUTS` | Optional literal `true` to request strict JSON Schema from a provider that supports it; independently validated afterward |
+| `AEONITH_SERVICE_TOKEN` | Required strong server-side ASCII token, at least 32 characters; browser sends it as a bearer token for reviews |
+| `AEONITH_ENABLE_LIVE_REVIEWS` | Only literal `true` enables model dispatch; absent/`false` is safe disabled default |
+| `AEONITH_PROVIDER_KIND` | Set `local-openai-compatible` for local-only inference |
+| `AEONITH_PROVIDER_URL` | Full local HTTP URL, normally `http://127.0.0.1:5001/v1/chat/completions`; never a caller-controlled endpoint |
+| `AEONITH_PROVIDER_MODEL` | Identifier accepted by the already-running local model server |
+| `AEONITH_MAX_LENSES` | Optional selected-lens ceiling, 1–14 (default 14); not a billing budget |
+| `AEONITH_MAX_OUTPUT_TOKENS` | Optional per-call response limit, 256–8192 (default 4096) |
+| `AEONITH_PROVIDER_TIMEOUT_SECONDS` | Optional model response timeout, 1–50 seconds (default 45) |
+| `AEONITH_LOCAL_JSON_MODE` | `true` (default) requests JSON-mode Chat Completions; set literal `false` if your existing local runner does not support `response_format` |
+| `AEONITH_STRUCTURED_OUTPUTS` | Literal `false` (default) or `true`; strict schema mode requires a compatible local runner and model |
 
-The request must contain a valid `Authorization: Bearer <service token>`
-before any manuscript parsing or inference. If using an external provider,
-the caller must explicitly acknowledge disclosure via
-`X-Aeonith-Disclosure: accepted`. This is a request assertion, not
-authenticated owner authorization or proof of the author's consent.
-Models, provider URLs, API keys and token ceilings are **not** request
-parameters. CORS is not opened for other origins.
+**Do not configure** any paid-provider credential, remote model URL, Gateway OIDC, Vercel runtime marker, external admission database, or billing limit. No financial spending allowance is contemplated: the hard additional-service spending limit is **$0**. Local inference does not require Redis because the server is single-process and loopback-bound by default; this is **not** a multi-user, globally rate-limited internet deployment.
 
-Start with `AEONITH_ENABLE_LIVE_REVIEWS` unset or `false` and no provider
-key. A deployed health endpoint can be live while review attempts fail
-closed. **Do not call this a working live critique service until a
-credentials-configured, authorized end-to-end provider call passes.**
+## Route and security checks
 
-## Release and evidence gates
+| Route | Expected result |
+| --- | --- |
+| `GET /` | Local manuscript editor and static assets |
+| `GET /healthz` and `GET /api/health` | JSON process health and `review_configured` boolean; readiness does not imply a successful inference request |
+| `POST /api/review` and `POST /v1/critique` | Authenticated bounded JSON review; actual inference only if explicitly enabled and locally configured |
+| Wrong path or HTTP method | Explicit 404 or 405, not a fallthrough into model dispatch |
 
-1. Inspect the exact GitHub head, CI test and wheel jobs, changed files,
-   release scope and secrets exposure; do not promote a moved head.
-2. Create/link the Vercel project in its verified account scope with
-   All-Deployments Vercel Authentication already enabled for new projects.
-   The existing personal-scope project currently uses
-   `all_except_custom_domains`, so do not presume any new custom domain
-   receives the same protection. Keep deployment previews protected.
-3. Verify the project Git source SHA and settings, the deployed
-   `/healthz` route, and 405/4xx responses for unsupported methods,
-   unauthorized requests, malformed JSON, missing disclosure and oversized
-   bodies. Test that no manuscript or credential is echoed in errors.
-4. Configure a limited provider account only after privacy/cost approval.
-   Turn on the live review switch and run a consented, synthetic
-   provider-backed critique. Validate actual output schema and evidence
-   references, latency, errors, billing and provider retention terms.
-5. Only then promote the **same tested build** to production. Record its
-   URL, deployment ID, source SHA, protection mode, model ID, exact tests,
-   observability and rollback candidate. Keep protection in place unless
-   public serving and abuse controls are deliberately authorized.
+The application must check the authorization header before reading the review body. The HTTP request cap is 64 KiB, manuscript excerpt cap 12,000 characters, and context cap 2,000 characters; the body may contain only approved schema fields. For HTTP reviews, the caller cannot provide model URL, provider key, or destination. Response failures must not echo secrets, internal errors, or manuscripts.
 
-Changing a Vercel project's production branch or connecting Git may trigger
-new deployments. Neither a source merge nor a readiness label substitutes
-for this post-deploy probe.
+After starting the server, run a **local, non-billable** liveness probe:
 
-## Privacy, abuse and rollback
+```bash
+curl -i http://127.0.0.1:8765/healthz
+```
 
-- Treat manuscripts, model-generated analysis, source hashes and bearer
-  tokens as sensitive. Do not log request/response bodies or secrets.
-- Serverless in-process counters are not a reliable cross-instance rate
-  limiter. A bearer token and Vercel Authentication reduce exposure but
-  are **not** per-user quotas or a financial circuit breaker. Before
-  opening access to multiple users, add durable rate/cost limits and
-  provider spend caps.
-- Keep external-model retention, geographic processing and cost settings
-  under explicit operator review. The application cannot guarantee them.
-- In an incident, disable `AEONITH_ENABLE_LIVE_REVIEWS`, revoke exposed
-  service and provider credentials, inspect sanitized logs and Vercel
-  usage, and use Vercel's deployment rollback/promote controls to restore
-  a known-good deployment. Verify actual behavior after rollback; merely
-  changing an environment setting may require a redeployment.
+It should return a JSON health response; `review_configured: true` means the configuration passed initial checks, **not** that the model is responsive or capable. An unauthorized synthetic POST must return a refusal, not a critique. A fully authorized, **synthetic non-sensitive** passage can be sent only after the local model is verified to be running. Check the returned schema, exact lens selection, source quotations, transport failures, and latency manually; if it cannot generate a valid response, leave inference disabled.
 
-Official platform sources:
+If using a browser, note that local browser extensions, other local software, the model runner itself, and system backups may access submitted text. Only submit writing that you own or may process. Inspect the model runner's logging and persistence settings; Aeonith cannot promise security for third-party software merely because traffic stays on loopback.
 
-- [Python runtime](https://vercel.com/docs/functions/runtimes/python)
-- [Function limits](https://vercel.com/docs/functions/limitations)
-- [Static configuration and rewrites](https://vercel.com/docs/project-configuration/vercel-json)
-- [Deployment protection](https://vercel.com/docs/deployment-protection)
-- [All-deployments authentication update](https://vercel.com/changelog/protect-production-deployments-for-free-on-every-plan)
-- [Deployments and rollback](https://vercel.com/docs/deployments)
+## Validation, troubleshooting and rollback
+
+```bash
+python3 -m unittest discover -s tests -v
+python3 -m aeonith review --input examples/microfiction.json
+```
+
+The first command must pass before release. The second intentionally reports `provider_unavailable` without a selected provider; that is a healthy safety behavior. The tests use controlled fake providers and do not establish literary quality or a running model.
+
+- If health says reviews are unconfigured, inspect the enable switch, token length, local endpoint syntax, and model label **without printing secrets**.
+- If health is ready but requests fail, inspect only sanitized status and your local KoboldCpp availability. A configured model can still reject JSON mode, time out, or output invalid review JSON.
+- To stop all new model dispatch, unset `AEONITH_ENABLE_LIVE_REVIEWS` (or set it to `false`) **and restart** the local service. You can also stop the server with `Ctrl+C`.
+- If the service token is exposed, generate a new one and restart the local server. The old token is no longer valid after restart with a different environment.
+- To roll back code, restore a reviewed source commit through ordinary Git version-control operations, then rerun tests and the synthetic local probes.
+
+Do not equate a process that listens on a port with a safely hosted public service. Aeonith has no independently verified publicly accessible deployment, no original-GPT parity certificate, and no provider-independent assessment of literary insight. [Release criteria](RELEASE_GATES.md) distinguish source contracts, local function, and literary quality.

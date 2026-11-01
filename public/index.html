@@ -4,7 +4,7 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <meta name="color-scheme" content="light">
-  <meta name="description" content="Aeonith offers evidence-aware, model-assisted literary criticism for writing you choose to submit.">
+  <meta name="description" content="Aeonith is a self-hosted, zero-cost literary critic for locally run language models.">
   <title>Aeonith — Literary Criticism</title>
   <link rel="stylesheet" href="/styles.css">
   <script src="/app.js" defer></script>
@@ -13,14 +13,15 @@
   <a class="skip-link" href="#review-form">Skip to manuscript editor</a>
   <header class="masthead">
     <div class="brand"><span class="brand-mark" aria-hidden="true">✦</span> AEONITH</div>
-    <span class="masthead-note">THE TRANSCENDENT CRITIC · INDEPENDENT IMPLEMENTATION</span>
+    <span class="masthead-note">THE TRANSCENDENT CRITIC · LOCAL / ZERO-COST EDITION</span>
   </header>
 
   <main class="page-shell">
     <div class="intro">
       <p class="eyebrow">A close reading, not a verdict</p>
       <h1>Let the work speak.<br><em>Then question it.</em></h1>
-      <p class="introduction">Aeonith examines writing through fourteen distinct critical lenses, grounding its observations in the text you provide. Interpretations are provisional, and good criticism leaves room for disagreement.</p>
+      <p class="introduction">Aeonith examines writing through fourteen distinct critical lenses, grounding its observations in the text you provide. This independent, self-hosted implementation requires a locally running model; interpretations remain provisional.</p>
+      <p class="runtime-status" id="runtime-status" role="status" aria-live="polite">Checking local service configuration…</p>
     </div>
 
     <div class="workspace">
@@ -39,32 +40,32 @@
           <div class="field">
             <div class="field-heading">
               <label for="manuscript">Manuscript or excerpt</label>
-              <span id="character-count" class="counter" aria-live="off">0 characters</span>
+              <span id="character-count" class="counter" aria-live="off">0 / 12,000 characters</span>
             </div>
-            <textarea id="manuscript" name="manuscript" rows="15" maxlength="200000" required spellcheck="false" placeholder="Paste your writing here…" aria-describedby="manuscript-hint"></textarea>
-            <p id="manuscript-hint" class="field-note">Use a passage you own or have permission to submit. For a whole manuscript, analyze bounded excerpts rather than assuming one review knows the entire book.</p>
+            <textarea id="manuscript" name="manuscript" rows="15" required spellcheck="false" autocomplete="off" placeholder="Paste your writing here…" aria-describedby="manuscript-hint character-count"></textarea>
+            <p id="manuscript-hint" class="field-note">Submit up to 12,000 characters of writing you own or have permission to share. Longer pastes stay in the editor but cannot be submitted until shortened. For a whole manuscript, analyze bounded excerpts rather than assuming one review knows the entire book.</p>
           </div>
 
           <details class="lenses-control">
-            <summary>Critical lenses <span class="summary-aside">All fourteen selected by default</span></summary>
+            <summary>Critical lenses <span class="summary-aside">Three selected by default; fourteen available</span></summary>
             <fieldset>
               <legend class="sr-only">Choose critical lenses</legend>
-              <p class="field-note">Select at least one perspective. More lenses can require a longer model response.</p>
+              <p class="field-note">Select one to fourteen perspectives. More lenses can require a longer response and more work from your local model.</p>
               <div class="lens-grid">
-                <label><input type="checkbox" name="lenses" value="psychological" checked> Psychological</label>
+                <label><input type="checkbox" name="lenses" value="psychological"> Psychological</label>
                 <label><input type="checkbox" name="lenses" value="literary_thematic" checked> Literary &amp; thematic</label>
-                <label><input type="checkbox" name="lenses" value="narrative_structure" checked> Narrative structure</label>
-                <label><input type="checkbox" name="lenses" value="character_development" checked> Character development</label>
-                <label><input type="checkbox" name="lenses" value="historical_cultural" checked> Historical &amp; cultural</label>
-                <label><input type="checkbox" name="lenses" value="philosophical" checked> Philosophical</label>
-                <label><input type="checkbox" name="lenses" value="genre_specific" checked> Genre-specific</label>
+                <label><input type="checkbox" name="lenses" value="narrative_structure"> Narrative structure</label>
+                <label><input type="checkbox" name="lenses" value="character_development"> Character development</label>
+                <label><input type="checkbox" name="lenses" value="historical_cultural"> Historical &amp; cultural</label>
+                <label><input type="checkbox" name="lenses" value="philosophical"> Philosophical</label>
+                <label><input type="checkbox" name="lenses" value="genre_specific"> Genre-specific</label>
                 <label><input type="checkbox" name="lenses" value="stylistic" checked> Stylistic</label>
-                <label><input type="checkbox" name="lenses" value="sociological" checked> Sociological</label>
-                <label><input type="checkbox" name="lenses" value="moral_ethical" checked> Moral &amp; ethical</label>
+                <label><input type="checkbox" name="lenses" value="sociological"> Sociological</label>
+                <label><input type="checkbox" name="lenses" value="moral_ethical"> Moral &amp; ethical</label>
                 <label><input type="checkbox" name="lenses" value="symbolic" checked> Symbolic</label>
-                <label><input type="checkbox" name="lenses" value="reader_response" checked> Reader response</label>
-                <label><input type="checkbox" name="lenses" value="linguistic" checked> Linguistic</label>
-                <label><input type="checkbox" name="lenses" value="comparative" checked> Comparative</label>
+                <label><input type="checkbox" name="lenses" value="reader_response"> Reader response</label>
+                <label><input type="checkbox" name="lenses" value="linguistic"> Linguistic</label>
+                <label><input type="checkbox" name="lenses" value="comparative"> Comparative</label>
               </div>
             </fieldset>
           </details>
@@ -72,16 +73,17 @@
           <div class="access-panel">
             <label for="service-token">Service access token</label>
             <input id="service-token" name="service-token" type="password" autocomplete="off" required placeholder="Enter your access token" aria-describedby="token-note">
-            <p id="token-note" class="field-note">Required for protected reviews. Your token stays in this page's memory and is not saved by this interface.</p>
+            <p id="token-note" class="field-note">Required even on localhost. Use the secret set by the person running this Aeonith service. The interface never saves it to browser storage. Do not use an untrusted network connection.</p>
           </div>
 
           <label class="disclosure-control" for="disclosure">
             <input id="disclosure" type="checkbox" name="disclosure" required>
-            <span>I authorize sending this writing to the configured language-model provider for criticism. The provider's own retention terms may apply.</span>
+            <span>I have permission to submit this writing for analysis by the model running on the Aeonith server.</span>
           </label>
+          <p id="provider-privacy-note" class="field-note">This zero-cost setup is for a model running on your own hardware, with no paid inference API. The browser sends your writing to the Aeonith server, but does not save manuscripts, tokens, or critiques to browser storage. The server and local model still process your writing, so check their logging and retention settings before using confidential material.</p>
 
           <button id="submit-button" class="primary-action" type="submit">Critique this work <span aria-hidden="true">↗</span></button>
-          <p class="field-note below-action">No review is generated without an available model provider. Aeonith does not certify literary truth or equivalence to the original GPT.</p>
+          <p class="field-note below-action">No review is generated unless the operator explicitly enables and configures a local model. Aeonith is an independent implementation, not the original GPT and not a source of definitive literary judgments.</p>
         </form>
       </section>
 
@@ -90,7 +92,7 @@
           <p class="eyebrow">02 / The reading</p>
           <h2 id="reading-title">Critical response</h2>
         </div>
-        <p id="status" role="status" aria-live="polite">Your critique will appear here after you submit a passage.</p>
+        <p id="status" role="status" aria-live="polite">Your critique will appear here after you submit a passage to your locally hosted model.</p>
         <div id="error" class="error-message" role="alert" hidden></div>
         <section id="results" aria-labelledby="results-title" tabindex="-1" hidden>
           <h3 id="results-title">A provisional reading</h3>

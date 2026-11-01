@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "aeonith"
-version = "0.4.1"
+version = "0.6.0"
 description = "Evidence-aware, provider-neutral literary critique engine"
 readme = "README.md"
 requires-python = ">=3.11"
@@ -20,10 +20,10 @@ py-modules = ["capability_adapter"]
 
 [tool.setuptools.packages.find]
 where = ["."]
-include = ["aeonith*"]
+include = ["aeonith*", "api*"]
 
 [tool.setuptools.package-data]
 aeonith = ["schemas/*.json"]
 
-[tool.vercel]
-entrypoint = "api.index:handler"
+[tool.setuptools.data-files]
+"share/aeonith" = ["public/index.html", "public/app.js", "public/styles.css"]
