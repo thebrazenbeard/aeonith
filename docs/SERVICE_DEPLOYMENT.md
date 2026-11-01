@@ -8,7 +8,11 @@ by an external model provider, or end-to-end literary quality.
 ## Route and packaging contract
 
 The Python Vercel Functions runtime (currently beta) supports the standard
-library `BaseHTTPRequestHandler` entry point in `api/*.py`. The repository
+library `BaseHTTPRequestHandler` entry point. The Vercel project expects a
+**single** application entrypoint, selected in `pyproject.toml` as
+`[tool.vercel] entrypoint = "api.index:handler"`. That dispatcher delegates
+GET liveness to `api/health.py` and authenticated POST reviews to
+`api/review.py`. The repository
 uses the root `pyproject.toml` (Python 3.11+) and includes no mandatory
 third-party runtime dependency. Vercel currently supports Python 3.12 by
 default; its deployed Python version must be verified from the build.
@@ -16,11 +20,11 @@ default; its deployed Python version must be verified from the build.
 | Public route | Function | Purpose |
 | --- | --- | --- |
 | `/` | `public/index.html` | Same-origin client UI; no embedded secrets |
-| `/healthz` | `api/health.py` | Process/packaging health; never a model-quality or provider-availability attestation |
-| `/v1/critique` | `api/review.py` | Authorized, bounded JSON review request |
+| `/healthz` | `api/index.py` → health handler | Process/packaging health; never a model-quality or provider-availability attestation |
+| `/v1/critique` | `api/index.py` → review handler | Authorized, bounded JSON review request |
 
-The direct `/api/health` and `/api/review` function URLs also exist;
-the same handler-level protections must apply there. `vercel.json` rewrites
+The direct `/api/health` and `/api/review` URLs also exist as rewrites to
+`/api`, and the same handler-level protections apply. `vercel.json` rewrites
 the friendly routes above and applies restrictive same-origin CSP, frame
 blocking and no-store headers. The UI must use separately served scripts
 and CSS, not inline JavaScript, to satisfy that CSP.
@@ -35,16 +39,19 @@ requires a separate, explicitly reviewed asynchronous architecture.
 
 ## Protection and credentials
 
-Use the confirmed owner team `team_4yKVQ8CAcswaelgyQBineyrx`
-(`patrickallynsims-7966s-projects`). No Aeonith project existed in that
-team at the time this runbook was written. Resolve the target team and
-project again before any creation or deployment.
+Resolve the account scope and project ID before any deployment. A previous
+team-scoped creation attempt returned HTTP 403, while the user subsequently
+created an `aeonith` project in the accessible personal scope. Do not create
+a duplicate project or silently switch between scopes.
 
-For the **first project creation**, set Vercel Authentication to
+For any **new project creation**, set Vercel Authentication to
 `ssoProtection: { "deploymentType": "all" }` atomically with the
 GitHub repository connection. Do not rely on a presumed team default or
 auto-publish an unprotected preview. Read back the project to verify
 All-Deployments protection before allowing an inference endpoint to run.
+An existing project's `all_except_custom_domains` setting protects ordinary
+deployment URLs but is not sufficient to assert protection on future custom
+domains; verify and tighten that setting before enabling inference.
 Vercel's September 2026 update makes this protection available on every
 plan; verify current terms and settings in the owner account.
 

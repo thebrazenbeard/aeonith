@@ -18,11 +18,11 @@ This repository is an **independently implemented, testable starting point**—n
 - Explicit error states when no provider is configured, a request is invalid, the provider fails, or the provider returns an invalid structure. No review is fabricated on those paths.
 - A bounded, read-only JSON invocation adapter for future ecosystem integration. This adapter does not supply host authorization or a deployed service.
 - The standalone `capability_adapter.py` stdin/stdout entrypoint has no model configuration and deliberately returns `provider_unavailable`; a host must inject an explicitly configured reviewer to obtain a real critique.
-- A **v0.4 live-service candidate** adds a static, browser-based manuscript editor and an explicitly authenticated HTTP API for a single configured provider. The checked-in service code and local tests do not by themselves prove a live host or model connection.
+- A **v0.4.1 live-service candidate** adds a static, browser-based manuscript editor and an explicitly authenticated HTTP API for a single configured provider. The checked-in service code and local tests do not by themselves prove a healthy hosted service or model connection.
 
 The tests verify these contracts with local fixtures and controlled providers. **Literary quality, original-GPT parity, live-provider compatibility, and deployment have not been established by those tests.**
 
-## Browser and HTTP service (v0.4 candidate)
+## Browser and HTTP service (v0.4.1 candidate)
 
 The repository includes a dependency-free interface under `public/` and
 Python HTTP handlers under `api/`, intended for a protected Vercel deployment.
