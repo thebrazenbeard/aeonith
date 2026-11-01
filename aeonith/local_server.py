@@ -38,6 +38,7 @@ _ASSETS = {
     "/": ("index.html", "text/html; charset=utf-8"),
     "/index.html": ("index.html", "text/html; charset=utf-8"),
     "/app.js": ("app.js", "text/javascript; charset=utf-8"),
+    "/docx-import-worker.js": ("docx-import-worker.js", "text/javascript; charset=utf-8"),
     "/styles.css": ("styles.css", "text/css; charset=utf-8"),
 }
 _HEALTH_PATHS = frozenset({"/healthz", "/api/health"})
@@ -109,7 +110,7 @@ class _LocalHandler(ReviewHandler):
             self.send_header("Retry-After", str(self._retry_after))
         self.send_header("Content-Security-Policy", (
             "default-src 'none'; script-src 'self'; style-src 'self'; "
-            "connect-src 'self'; img-src 'self'; base-uri 'none'; "
+            "connect-src 'self'; img-src 'self'; worker-src 'self'; base-uri 'none'; "
             "form-action 'self'; frame-ancestors 'none'"
         ))
         self.send_header("Referrer-Policy", "no-referrer")

@@ -43,9 +43,9 @@
           </div>
 
           <div class="field import-field">
-            <label for="manuscript-file">Import a local text file <span class="optional">optional</span></label>
-            <input id="manuscript-file" type="file" accept=".txt,.text,.md,.markdown,text/plain,text/markdown" aria-describedby="import-hint import-status">
-            <p id="import-hint" class="field-note">Choose a UTF-8 TXT or Markdown file. Its text is read only in this browser and placed into the editor; the file itself is not uploaded. Up to 12,000 characters can be reviewed. Word and PDF files are not supported yet; export those as plain text first.</p>
+            <label for="manuscript-file">Import a local manuscript <span class="optional">optional</span></label>
+            <input id="manuscript-file" type="file" accept=".txt,.text,.md,.markdown,.docx,text/plain,text/markdown,application/vnd.openxmlformats-officedocument.wordprocessingml.document" aria-describedby="import-hint import-status">
+            <p id="import-hint" class="field-note">Choose a UTF-8 TXT/Markdown file or Word DOCX document. Extraction happens only inside your browser; the original file is not uploaded. Imports over 12,000 characters cannot be reviewed until shortened. Legacy .doc and PDF files are not supported; export them to DOCX or plain text first. DOCX extraction loses formatting, images, and comments.</p>
             <p id="import-status" class="import-status" role="status" aria-live="polite"></p>
           </div>
 
