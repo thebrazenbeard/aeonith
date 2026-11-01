@@ -1,9 +1,20 @@
 # Aeonith HTTP service: protected deployment runbook
 
-This describes the intended Vercel deployment of Aeonith's independently
+This describes the Vercel deployment of Aeonith's independently
 implemented literary critic. Source checks and a functioning HTTP endpoint
 are **not** proof of original-GPT parity, model suitability, safe retention
 by an external model provider, or end-to-end literary quality.
+
+**Verified 2026-11-01:** The protected, provider-disabled web shell is
+running at [aeonith-seven.vercel.app](https://aeonith-seven.vercel.app/).
+Vercel reports deployment `dpl_DrkMtyBmkP9NP8iHFSGjLNr7akgC` as `READY`
+for GitHub commit `f90a64bc18a2d285638cbbe646d546ffb396a4f8`.
+The live browser editor loaded, and `/healthz` returned `status: ok` with
+`review_configured: false`. A synthetic, unauthorized review reported
+provider unavailable. No real model request or model-quality qualification
+has taken place. The Vercel connector's private-deployment probe returned
+a permission error; browser verification succeeded. Recheck access permissions
+before relying on the connector for ongoing deployed HTTP diagnostics.
 
 ## Route and packaging contract
 
@@ -86,8 +97,11 @@ credentials-configured, authorized end-to-end provider call passes.**
 
 1. Inspect the exact GitHub head, CI test and wheel jobs, changed files,
    release scope and secrets exposure; do not promote a moved head.
-2. Create/link the Vercel project in the resolved team with All-Deployments
-   Vercel Authentication already enabled. Keep deployment preview/protected.
+2. Create/link the Vercel project in its verified account scope with
+   All-Deployments Vercel Authentication already enabled for new projects.
+   The existing personal-scope project currently uses
+   `all_except_custom_domains`, so do not presume any new custom domain
+   receives the same protection. Keep deployment previews protected.
 3. Verify the project Git source SHA and settings, the deployed
    `/healthz` route, and 405/4xx responses for unsupported methods,
    unauthorized requests, malformed JSON, missing disclosure and oversized

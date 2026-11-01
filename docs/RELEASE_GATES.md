@@ -1,8 +1,8 @@
 # Aeonith release and live-service qualification gates
 
-_2026-10-31, v0.4.1 Vercel entrypoint hotfix candidate. This document distinguishes
-merged v0.4 source evidence from pending hosted API and model qualification.
-It is not a successful deployment receipt._
+_2026-11-01, v0.4.1 hosted-shell verification. This document distinguishes
+working deployment health and browser rendering from pending authenticated
+provider-backed review qualification._
 
 The verified v0.3.0 source release was merged as [PR #6](https://github.com/thebrazenbeard/aeonith/pull/6)
 at `8980df6989219ae026d958171b8fdaf200e7edfd`. It passed **226/226** local
@@ -17,21 +17,33 @@ The v0.4 protected HTTP/browser source release merged as
 all three exact-head GitHub Actions jobs green. Vercel's first real build
 reported `PYTHON_ENTRYPOINT_NOT_FOUND` because two handler candidates existed
 without an explicit entrypoint. v0.4.1 selects `api.index:handler` and routes
-health/review through a single dispatcher; that fix awaits deployed proof.
+health/review through a single dispatcher. The fix merged as
+[PR #10](https://github.com/thebrazenbeard/aeonith/pull/10) at
+`f90a64bc18a2d285638cbbe646d546ffb396a4f8`, with **275/275** local
+tests, a built wheel, and three passing exact-head GitHub Actions jobs.
+
+Vercel production deployment `dpl_DrkMtyBmkP9NP8iHFSGjLNr7akgC` for that
+SHA reached **READY**. On 2026-11-01, the protected default production alias
+[`aeonith-seven.vercel.app`](https://aeonith-seven.vercel.app/) loaded the
+manuscript editor and `GET /healthz` returned
+`{"schema_version":"aeonith.health.v1","service":"aeonith","status":"ok","review_configured":false}`.
+An explicitly synthetic review with a noncredential test token produced a
+provider-unavailable message and **no critique**. This is a successful
+provider-disabled **web-shell** deployment, not qualified inference.
 
 ## Source and qualification state
 
 | Gate | Required evidence | Current state |
 | --- | --- | --- |
-| Reviewed source | A PR diff against exact `main` SHA, no private GPT configurations, knowledge assets or secrets in public Git | **v0.4 PR #9 merged**; pending v0.4.1 entrypoint fix |
-| Local contracts | Full Python 3.11–3.13 test matrix and wheel smoke; static and live-service tests in CI | Candidate local Python 3.12 **275/275 PASS** and wheel built; **pending exact-head GitHub v0.4.1 CI** |
-| HTTP boundary | Unauthorized requests never call providers; valid/invalid body, method, size, endpoint and error behavior exercised | **32/32 focused service/security/browser source tests passed**; deployed HTTP pending |
-| Browser interaction | Same-origin requests, no stored manuscript or credentials, safe rendering, accessible failure states | Static contract tests passed; **actual deployed browser behavior pending** |
+| Reviewed source | A PR diff against exact `main` SHA, no private GPT configurations, knowledge assets or secrets in public Git | **v0.4 PR #9 and v0.4.1 PR #10 merged**; exact running SHA recorded |
+| Local contracts | Full Python 3.11–3.13 test matrix and wheel smoke; static and live-service tests in CI | Local Python 3.12 **275/275 PASS**, wheel built; **3/3 exact-head GitHub Actions jobs passed** |
+| HTTP boundary | Unauthorized requests never call providers; valid/invalid body, method, size, endpoint and error behavior exercised | Focused service/security/browser source tests passed; hosted synthetic no-provider denial observed; full deployed negative HTTP matrix still open |
+| Browser interaction | Same-origin requests, no stored manuscript or credentials, safe rendering, accessible failure states | Browser UI visibly loaded; a noncredential synthetic review showed an explicit unavailable state; no live critique |
 | Rate/cost control | Protection against unauthenticated abuse and concurrency, model spend and invocation limits enforced outside per-process memory | **Open production gate** |
-| Privacy | Strict no-cache response policy, no manuscript/credential logging; explicit notice before external provider disclosure | **Pending live proof** |
-| Provider availability | Missing credentials/provider reject honestly without fabricated criticism | **Pending hosted proof** |
+| Privacy | Strict no-cache response policy, no manuscript/credential logging; explicit notice before external provider disclosure | Local source-tested; **full deployed headers/logs audit still open** |
+| Provider availability | Missing credentials/provider reject honestly without fabricated criticism | Hosted health `review_configured: false` and synthetic unavailable response verified |
 | Provider compatibility | A credentialed, cost-bounded call with an intentionally non-sensitive fixture, verified exact chosen model and backend | **Open; not proven by local provider fakes** |
-| Deployment identity | Hosting project and scope verified; deployed SHA matches reviewed code; exact URL, HTTP status and logs captured | Vercel project found in personal scope; first v0.4 build matched `5ccfd79` but **ERROR** (`PYTHON_ENTRYPOINT_NOT_FOUND`); v0.4.1 fix not yet deployed |
+| Deployment identity | Hosting project and scope verified; deployed SHA matches reviewed code; exact URL, HTTP status and logs captured | **READY** deployment `dpl_DrkMtyBmkP9NP8iHFSGjLNr7akgC`, source `f90a64bc…`, live `/healthz` and editor verified; runtime logs audit remains open |
 | Staging and promotion | Protected preview and tested staging build before assigning a production domain; repeatable rollback | **Open; do not silently assume hosting defaults** |
 | Post-deploy observability | Non-sensitive request/error logs and operational health, without manuscript bodies, prompt contents or credentials | **Open** |
 | Knowledge rights | Explicit owner decision on license and rights for each GPT reference asset; no third-party knowledge imported by assumption | **Open** |
@@ -76,7 +88,8 @@ health/review through a single dispatcher; that fix awaits deployed proof.
 
 ## Current decision
 
-Prepare and qualify the live-service candidate. **Do not publish an
+The protected, provider-disabled **web shell is deployed**. Continue
+qualifying the review service. **Do not publish an
 unprotected paid-inference endpoint** or claim a full live critic until the
 authentication, provider, spend, privacy and runtime gates above are
 actually exercised. Source-only status and a protected, no-provider
