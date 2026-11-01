@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+from http.client import HTTPConnection
 import os
 import threading
 import unittest
@@ -95,6 +96,27 @@ class LocalServerTests(unittest.TestCase):
                 self.assertIn("connect-src 'self'", headers["Content-Security-Policy"])
                 self.assertNotIn("Access-Control-Allow-Origin", headers)
 
+    def test_chatgpt_tracking_link_redirects_to_clean_editor(self):
+        # ChatGPT decorates app links. A safe redirect must strip the query
+        # instead of serving the editor at the decorated URL.
+        connection = HTTPConnection("127.0.0.1", self.server.server_port, timeout=4)
+        try:
+            connection.request("GET", "/?utm_source=chatgpt.com")
+            response = connection.getresponse()
+            self.assertEqual(response.status, 302)
+            self.assertEqual(response.getheader("Location"), "/")
+            self.assertEqual(response.getheader("Cache-Control"), "no-store")
+            self.assertEqual(response.read(), b"")
+        finally:
+            connection.close()
+        status, _, body = self._request("/?utm_source=chatgpt.com")
+        self.assertEqual(status, 200)
+        self.assertIn(b"review-form", body)
+        status, _, _ = self._request("/?utm_source=chatgpt.com", method="POST", body=b"{}")
+        self.assertEqual(status, 404)
+        status, _, _ = self._request("/?utm_source=chatgpt.com", headers={"Host": "attacker.example"})
+        self.assertEqual(status, 403)
+
     def test_wheel_installed_static_asset_fallback(self):
         # Simulate absence of a repository checkout beside installed package.
         public = Path(__file__).resolve().parents[1] / "public"
@@ -115,7 +137,9 @@ class LocalServerTests(unittest.TestCase):
                 self.assertFalse(payload["review_configured"])
 
     def test_rejects_unknown_methods_and_path_traversal(self):
-        for path in ("/aeonith/service.py", "/%2e%2e/README.md", "/.env", "/?token=private"):
+        for path in ("/aeonith/service.py", "/%2e%2e/README.md", "/.env",
+                     "/?token=private", "/?utm_source=chatgpt.com&token=private",
+                     "/api/review?utm_source=chatgpt.com"):
             with self.subTest(path=path):
                 status, _, body = self._request(path)
                 self.assertEqual(status, 404)

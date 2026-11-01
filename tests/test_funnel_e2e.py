@@ -13,6 +13,7 @@ import json
 import os
 import threading
 import unittest
+from http.client import HTTPConnection
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from unittest.mock import patch
 from urllib.error import HTTPError
@@ -114,6 +115,17 @@ class FunnelFullPathTests(unittest.TestCase):
     def _model_call_count(self) -> int:
         with self.model.requests_lock:
             return len(self.model.requests)
+
+    def test_chatgpt_decorated_public_link_strips_tracking_before_editor(self):
+        connection = HTTPConnection("127.0.0.1", self.aeonith.server_port, timeout=4)
+        try:
+            connection.request("GET", "/?utm_source=chatgpt.com", headers={"Host": FUNNEL_HOST})
+            response = connection.getresponse()
+            self.assertEqual(response.status, 302)
+            self.assertEqual(response.getheader("Location"), "/")
+            self.assertEqual(response.read(), b"")
+        finally:
+            connection.close()
 
     def _call(self, path: str = "/api/review", *, token: str | None = TOKEN,
               origin: str | None = FUNNEL_ORIGIN, host: str = FUNNEL_HOST,
