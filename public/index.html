@@ -39,32 +39,32 @@
           <div class="field">
             <div class="field-heading">
               <label for="manuscript">Manuscript or excerpt</label>
-              <span id="character-count" class="counter" aria-live="off">0 characters</span>
+              <span id="character-count" class="counter" aria-live="off">0 / 12,000 characters</span>
             </div>
-            <textarea id="manuscript" name="manuscript" rows="15" maxlength="200000" required spellcheck="false" placeholder="Paste your writing here…" aria-describedby="manuscript-hint"></textarea>
-            <p id="manuscript-hint" class="field-note">Use a passage you own or have permission to submit. For a whole manuscript, analyze bounded excerpts rather than assuming one review knows the entire book.</p>
+            <textarea id="manuscript" name="manuscript" rows="15" required spellcheck="false" autocomplete="off" placeholder="Paste your writing here…" aria-describedby="manuscript-hint character-count"></textarea>
+            <p id="manuscript-hint" class="field-note">Submit up to 12,000 characters of writing you own or have permission to share. Longer pastes stay in the editor but cannot be submitted until shortened. For a whole manuscript, analyze bounded excerpts rather than assuming one review knows the entire book.</p>
           </div>
 
           <details class="lenses-control">
-            <summary>Critical lenses <span class="summary-aside">All fourteen selected by default</span></summary>
+            <summary>Critical lenses <span class="summary-aside">Three selected for the pilot; fourteen available</span></summary>
             <fieldset>
               <legend class="sr-only">Choose critical lenses</legend>
-              <p class="field-note">Select at least one perspective. More lenses can require a longer model response.</p>
+              <p class="field-note">Select one to three perspectives per pilot review, from fourteen available. More lenses can require a longer model response.</p>
               <div class="lens-grid">
-                <label><input type="checkbox" name="lenses" value="psychological" checked> Psychological</label>
+                <label><input type="checkbox" name="lenses" value="psychological"> Psychological</label>
                 <label><input type="checkbox" name="lenses" value="literary_thematic" checked> Literary &amp; thematic</label>
-                <label><input type="checkbox" name="lenses" value="narrative_structure" checked> Narrative structure</label>
-                <label><input type="checkbox" name="lenses" value="character_development" checked> Character development</label>
-                <label><input type="checkbox" name="lenses" value="historical_cultural" checked> Historical &amp; cultural</label>
-                <label><input type="checkbox" name="lenses" value="philosophical" checked> Philosophical</label>
-                <label><input type="checkbox" name="lenses" value="genre_specific" checked> Genre-specific</label>
+                <label><input type="checkbox" name="lenses" value="narrative_structure"> Narrative structure</label>
+                <label><input type="checkbox" name="lenses" value="character_development"> Character development</label>
+                <label><input type="checkbox" name="lenses" value="historical_cultural"> Historical &amp; cultural</label>
+                <label><input type="checkbox" name="lenses" value="philosophical"> Philosophical</label>
+                <label><input type="checkbox" name="lenses" value="genre_specific"> Genre-specific</label>
                 <label><input type="checkbox" name="lenses" value="stylistic" checked> Stylistic</label>
-                <label><input type="checkbox" name="lenses" value="sociological" checked> Sociological</label>
-                <label><input type="checkbox" name="lenses" value="moral_ethical" checked> Moral &amp; ethical</label>
+                <label><input type="checkbox" name="lenses" value="sociological"> Sociological</label>
+                <label><input type="checkbox" name="lenses" value="moral_ethical"> Moral &amp; ethical</label>
                 <label><input type="checkbox" name="lenses" value="symbolic" checked> Symbolic</label>
-                <label><input type="checkbox" name="lenses" value="reader_response" checked> Reader response</label>
-                <label><input type="checkbox" name="lenses" value="linguistic" checked> Linguistic</label>
-                <label><input type="checkbox" name="lenses" value="comparative" checked> Comparative</label>
+                <label><input type="checkbox" name="lenses" value="reader_response"> Reader response</label>
+                <label><input type="checkbox" name="lenses" value="linguistic"> Linguistic</label>
+                <label><input type="checkbox" name="lenses" value="comparative"> Comparative</label>
               </div>
             </fieldset>
           </details>
@@ -77,8 +77,9 @@
 
           <label class="disclosure-control" for="disclosure">
             <input id="disclosure" type="checkbox" name="disclosure" required>
-            <span>I authorize sending this writing to the configured language-model provider for criticism. The provider's own retention terms may apply.</span>
+            <span>I authorize sending this writing to the configured external language-model provider and understand its processing and retention terms may apply.</span>
           </label>
+          <p id="provider-privacy-note" class="field-note">Aeonith requests <code>store: false</code> on supported Responses endpoints, but this is not a zero-retention guarantee: the provider may still process or log submissions under its terms. Do not submit confidential material until you accept the selected provider's policy.</p>
 
           <button id="submit-button" class="primary-action" type="submit">Critique this work <span aria-hidden="true">↗</span></button>
           <p class="field-note below-action">No review is generated without an available model provider. Aeonith does not certify literary truth or equivalence to the original GPT.</p>

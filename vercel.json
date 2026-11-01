@@ -9,19 +9,23 @@
   "rewrites": [
     {
       "source": "/healthz",
-      "destination": "/api"
+      "destination": "/api?aeonith_route=health",
+      "missing": [{"type": "query", "key": "aeonith_route"}]
     },
     {
       "source": "/v1/critique",
-      "destination": "/api"
+      "destination": "/api?aeonith_route=review",
+      "missing": [{"type": "query", "key": "aeonith_route"}]
     },
     {
       "source": "/api/health",
-      "destination": "/api"
+      "destination": "/api?aeonith_route=health",
+      "missing": [{"type": "query", "key": "aeonith_route"}]
     },
     {
       "source": "/api/review",
-      "destination": "/api"
+      "destination": "/api?aeonith_route=review",
+      "missing": [{"type": "query", "key": "aeonith_route"}]
     }
   ],
   "headers": [

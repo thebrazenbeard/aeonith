@@ -48,6 +48,19 @@ class CanaryContractTests(unittest.TestCase):
         self.assertIn("harbor bell", request["work"]["text"])
         self.assertEqual(live_canary.examine_review(completed_review())["lens_count"], 14)
 
+    def test_explicit_three_lens_canary_and_invalid_selection(self):
+        selection = live_canary.parse_lenses("literary_thematic,stylistic,symbolic")
+        self.assertEqual(selection, live_canary.PILOT_LENSES)
+        self.assertEqual(live_canary.canary_request(selection)["lenses"], list(selection))
+        subset = completed_review()
+        subset["lens_reviews"] = [item for item in subset["lens_reviews"] if item["lens"] in selection]
+        self.assertEqual(live_canary.examine_review(subset, selection)["lens_count"], 3)
+        with self.assertRaisesRegex(live_canary.CanaryError, "lens_coverage_invalid"):
+            live_canary.examine_review(subset)
+        for bad in ("", ",stylistic", "unknown", "stylistic,stylistic"):
+            with self.subTest(bad=bad), self.assertRaisesRegex(live_canary.CanaryError, "invalid_lenses"):
+                live_canary.parse_lenses(bad)
+
     def test_default_has_no_network_and_no_secret_requirement(self):
         stream = io.StringIO()
         with patch.object(live_canary, "invoke_canary", side_effect=AssertionError("network called")):
@@ -84,6 +97,34 @@ class CanaryContractTests(unittest.TestCase):
         ]:
             with self.subTest(url=url), self.assertRaises(live_canary.CanaryError):
                 live_canary.validate_url(url)
+
+    def test_remote_host_requires_independent_confirmation(self):
+        url = "https://aeonith-verified.vercel.app/api/review"
+        for expected in (None, "", "other.vercel.app", "https://aeonith-verified.vercel.app"):
+            with self.subTest(expected=expected), self.assertRaisesRegex(
+                live_canary.CanaryError, "remote_host_confirmation_required"
+            ):
+                live_canary.confirm_remote_host(url, expected)
+        live_canary.confirm_remote_host(url, "AEONITH-VERIFIED.VERCEL.APP")
+        live_canary.confirm_remote_host("http://127.0.0.1:8000/api/review", None)
+
+    def test_remote_rejected_before_secret_lookup_and_network(self):
+        stream = io.StringIO()
+        with patch.object(live_canary, "_secret_from_env", side_effect=AssertionError("secret read")):
+            with patch.object(live_canary, "invoke_canary", side_effect=AssertionError("network called")):
+                with redirect_stdout(stream):
+                    code = live_canary.main([
+                        "--execute", "--allow-paid-inference",
+                        "--url", "https://arbitrary.example/api/review",
+                    ])
+        self.assertEqual(code, 1)
+        self.assertEqual(json.loads(stream.getvalue())["reason"], "remote_host_confirmation_required")
+
+    def test_direct_remote_invoke_cannot_bypass_confirmation(self):
+        with self.assertRaisesRegex(live_canary.CanaryError, "remote_host_confirmation_required"):
+            live_canary.invoke_canary(
+                "https://arbitrary.example/api/review", token="synthetic-test-only", timeout=1
+            )
 
     def test_lens_mutation_rejected(self):
         result = completed_review()
@@ -140,6 +181,7 @@ class _FakeService(BaseHTTPRequestHandler):
             "authorization": self.headers.get("Authorization"),
             "disclosure": self.headers.get("X-Aeonith-Disclosure"),
             "bypass": self.headers.get("x-vercel-protection-bypass"),
+            "request_id": self.headers.get("X-Aeonith-Request-Id"),
             "body": body,
         })
         self.send_response(type(self).response_status)
@@ -193,8 +235,24 @@ class CanaryLoopbackTests(unittest.TestCase):
         self.assertEqual(observed["authorization"], f"Bearer {test_token}")
         self.assertEqual(observed["disclosure"], "accepted")
         self.assertEqual(observed["bypass"], "bypass-never-print")
+        self.assertRegex(observed["request_id"], r"^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$")
         self.assertEqual(observed["path"], "/api/review")
         self.assertEqual(json.loads(observed["body"]), live_canary.canary_request())
+
+    def test_small_pilot_canary_hits_only_requested_lenses(self):
+        subset = completed_review()
+        subset["lens_reviews"] = [row for row in subset["lens_reviews"] if row["lens"] in live_canary.PILOT_LENSES]
+        _FakeService.response_body = json.dumps(subset).encode("utf-8")
+        stream = io.StringIO()
+        with patch.dict(os.environ, {"CANARY_TEST_AUTH": "test-only-secret"}), redirect_stdout(stream):
+            code = live_canary.main([
+                "--url", self.url, "--execute", "--allow-paid-inference",
+                "--auth-env", "CANARY_TEST_AUTH",
+                "--lenses", ",".join(live_canary.PILOT_LENSES),
+            ])
+        self.assertEqual(code, 0, stream.getvalue())
+        self.assertEqual(json.loads(stream.getvalue())["lens_count"], 3)
+        self.assertEqual(json.loads(_FakeService.requests[0]["body"])["lenses"], list(live_canary.PILOT_LENSES))
 
     def test_http_error_sanitized(self):
         _FakeService.response_status = 401

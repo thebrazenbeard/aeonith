@@ -15,6 +15,8 @@ const emptyNode = byId("reading-empty");
 const countNode = byId("character-count");
 const copyButton = byId("copy-result");
 const copyStatus = byId("copy-status");
+const MAX_MANUSCRIPT_CHARS = 12000;
+const MAX_PILOT_LENSES = 3;
 
 const lensLabels = Object.freeze({
   psychological: "Psychological",
@@ -34,6 +36,7 @@ const lensLabels = Object.freeze({
 });
 
 let plainTextReview = "";
+let requestInFlight = false;
 
 function element(tag, value, className) {
   const node = document.createElement(tag);
@@ -149,27 +152,34 @@ function requestError(status, responseData) {
     400: "The request was invalid. Check the passage and selected lenses.",
     401: "Access denied. Check the service access token.",
     403: "The service declined this request. Confirm access and manuscript disclosure consent.",
-    413: "This passage exceeds the service's request-size limit. Submit a shorter excerpt.",
+    409: "This review request conflicts with another recorded or ongoing attempt. No new critique was returned; check the earlier request before resubmitting.",
+    413: "This submission exceeds a pilot limit. Try a shorter excerpt or fewer critical lenses.",
     422: "The service could not validate the proposed critique. No result will be shown.",
-    429: "The service is busy or rate-limited. Please wait before trying again.",
+    429: "The review rate or spending allowance has been reached. Wait or contact the service operator; repeated submissions will not bypass the limit.",
     500: "The service encountered an internal error. No critique was generated.",
     502: "The model provider failed or returned an unusable result. No critique was generated.",
-    503: "The model provider is unavailable. The service cannot critique this writing yet.",
+    503: "Live reviews are disabled, unconfigured, or temporarily unavailable. No critique was returned; check service readiness before retrying.",
     504: "The provider or service timed out. The request may still be processing upstream."
   };
   const fallback = fixed[status] || `The service returned HTTP ${status}; no critique was generated.`;
-  if (status >= 500 || status === 401 || status === 403 || status === 429) return fallback;
+  if (status >= 500 || [401, 403, 409, 413, 429].includes(status)) return fallback;
   const message = responseData && responseData.error && responseData.error.message;
   return typeof message === "string" && message.length <= 250 ? message : fallback;
 }
 
 manuscriptInput.addEventListener("input", () => {
   const size = manuscriptInput.value.length;
-  countNode.textContent = `${size.toLocaleString()} character${size === 1 ? "" : "s"}`;
+  countNode.textContent = `${size.toLocaleString()} / ${MAX_MANUSCRIPT_CHARS.toLocaleString()} characters`;
+  // Disclosure applies to this particular writing, not future edits.
+  consentInput.checked = false;
 });
+titleInput.addEventListener("input", () => { consentInput.checked = false; });
 
 form.addEventListener("submit", async (event) => {
   event.preventDefault();
+  // Pressing Enter or dispatching a second submit event must not start
+  // another provider request while the first is still in flight.
+  if (requestInFlight) return;
   clearError();
   resetResults();
 
@@ -178,11 +188,18 @@ form.addEventListener("submit", async (event) => {
   const lenses = Array.from(form.querySelectorAll('input[name="lenses"]:checked'), (input) => input.value);
   const token = tokenInput.value.trim();
   if (!manuscript.trim()) return showError("Paste a manuscript or excerpt before requesting criticism.");
-  if (manuscript.length > 200000) return showError("Submit an excerpt of 200,000 characters or fewer.");
+  if (manuscript.length > MAX_MANUSCRIPT_CHARS) return showError("Submit an excerpt of 12,000 characters or fewer.");
   if (title.length > 500) return showError("The title must contain 500 characters or fewer.");
   if (!lenses.length) return showError("Select at least one critical lens.");
+  if (lenses.length > MAX_PILOT_LENSES) return showError("Choose up to three lenses for this private pilot review.");
   if (!token) return showError("Enter your service access token to continue.");
   if (!consentInput.checked) return showError("Confirm that this writing may be sent to the configured language-model provider.");
+  if (!window.crypto || typeof window.crypto.randomUUID !== "function") {
+    return showError("A secure request ID cannot be generated in this browser. Use an up-to-date browser over HTTPS before submitting.");
+  }
+  // A new random UUID identifies this submission for the server's durable
+  // admission/idempotency boundary. Never derive it from the manuscript or token.
+  const requestId = window.crypto.randomUUID();
 
   const payload = {
     schema_version: "aeonith.review.v1",
@@ -191,9 +208,10 @@ form.addEventListener("submit", async (event) => {
   };
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), 120000);
+  requestInFlight = true;
   submitButton.disabled = true;
   form.setAttribute("aria-busy", "true");
-  statusNode.textContent = "The service is preparing a critical reading. This can take time for fourteen lenses…";
+  statusNode.textContent = `The service is preparing a critical reading across ${lenses.length} selected lens${lenses.length === 1 ? "" : "es"}…`;
 
   try {
     const response = await fetch("/api/review", {
@@ -202,7 +220,8 @@ form.addEventListener("submit", async (event) => {
         "Content-Type": "application/json",
         "Accept": "application/json",
         "Authorization": `Bearer ${token}`,
-        "X-Aeonith-Disclosure": "accepted"
+        "X-Aeonith-Disclosure": "accepted",
+        "X-Aeonith-Request-Id": requestId
       },
       body: JSON.stringify(payload),
       signal: controller.signal,
@@ -223,10 +242,14 @@ form.addEventListener("submit", async (event) => {
     if (error && error.name === "AbortError") {
       showError("The browser stopped waiting after two minutes. This does not guarantee the upstream model request was canceled.");
     } else {
-      showError("The service could not be reached. Check your connection and try again.");
+      showError("The service could not be reached. The earlier request might still be running and consume an allowance; check its status with the operator before resubmitting.");
     }
   } finally {
     clearTimeout(timer);
+    // Every new review attempt must receive a new, deliberate disclosure
+    // acknowledgment, even if the author submits the same passage again.
+    consentInput.checked = false;
+    requestInFlight = false;
     submitButton.disabled = false;
     form.removeAttribute("aria-busy");
   }

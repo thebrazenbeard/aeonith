@@ -19,10 +19,11 @@ This repository is an **independently implemented, testable starting point**—n
 - A bounded, read-only JSON invocation adapter for future ecosystem integration. This adapter does not supply host authorization or a deployed service.
 - The standalone `capability_adapter.py` stdin/stdout entrypoint has no model configuration and deliberately returns `provider_unavailable`; a host must inject an explicitly configured reviewer to obtain a real critique.
 - A **v0.4.1 deployed, provider-disabled web service** adds a browser-based manuscript editor and an explicitly authenticated HTTP API for a single configured provider. Its production health endpoint and editor have been checked on Vercel; no external model connection or genuine critique has been qualified.
+- **v0.5.0 pilot hardening (release candidate)** adds a cross-instance atomic daily invocation quota and seven-day request-ID replay defense, strict route/method dispatch, a 64 KiB HTTP payload limit, 12,000-character excerpt ceiling, bounded provider tokens/timeouts, and exact hosted endpoint allowlisting. It supports Vercel AI Gateway through deployment OIDC without storing a model API key. **These controls are source-tested, not yet qualified with a live provider.**
 
 The tests verify these contracts with local fixtures and controlled providers. **Literary quality, original-GPT parity, and live-provider compatibility have not been established.** Deployment health and browser rendering were verified separately against the hosted service.
 
-## Browser and HTTP service (v0.4.1 deployed shell)
+## Browser and HTTP service (v0.5.0 candidate; v0.4.1 shell deployed)
 
 The repository includes a dependency-free interface under `public/` and
 Python HTTP handlers under `api/`, deployed on Vercel with authentication
@@ -39,6 +40,10 @@ browser storage. The UI is not an anonymous, free-to-use inference service.
 
 The review endpoint rejects unsupported requests, unconfigured model services,
 oversized bodies, caller-selected model destinations, and unauthorized access.
+On a configured live invocation, it also requires a unique UUIDv4 request ID,
+reserves one daily allowance through atomic Upstash Redis before model dispatch,
+and fails closed if that cross-instance admission backend is unavailable.
+The browser sends this ID automatically and limits excerpts to 12,000 characters.
 It never substitutes an invented critique for unavailable inference. Browser
 requests are same-origin; the service does not advertise cross-origin access.
 These properties are tested with deterministic fake providers; they are **not
@@ -54,8 +59,20 @@ platform's protected secrets and variables:
 | `AEONITH_PROVIDER_KIND` | One server-selected adapter: `openai-responses` (default) or `openai-compatible` |
 | `AEONITH_PROVIDER_URL` | Trusted server-selected full provider endpoint, HTTPS when remote |
 | `AEONITH_PROVIDER_MODEL` | Explicit model identifier supported by that endpoint |
-| `AEONITH_PROVIDER_API_KEY` | Server-side credential, required by the service for remote endpoints; never enter it into the browser |
+| `AEONITH_PROVIDER_API_KEY` | Server-side credential for ordinary remote endpoints; hosted Vercel AI Gateway uses deployment OIDC instead |
 | `AEONITH_STRUCTURED_OUTPUTS` | Optional `true` to request strict model output when supported |
+| `AEONITH_ADMISSION_REDIS_URL` / `AEONITH_ADMISSION_REDIS_TOKEN` | Server-only HTTPS Upstash Redis REST admission ledger; no database means no model call |
+| `AEONITH_DAILY_REVIEW_LIMIT` | Atomic UTC daily review allowance (1–1000); distinct preview/production databases recommended |
+| `AEONITH_MAX_LENSES`, `AEONITH_MAX_OUTPUT_TOKENS`, `AEONITH_PROVIDER_TIMEOUT_SECONDS` | Optional bounded pilot limits; defaults 14, 4096, and 45 seconds |
+
+On a **hosted Vercel AI Gateway** deployment, set
+`AEONITH_PROVIDER_URL=https://ai-gateway.vercel.sh/v1/responses` and a
+namespaced Gateway model. The server requires Vercel's deployment
+`VERCEL_OIDC_TOKEN` for that exact URL and ignores ordinary provider API keys
+there so an API key cannot silently bypass a Gateway **project** budget.
+The Gateway project budget must be set and verified separately; it is a soft
+spend cap, not proof of an absolute maximum charge. See the
+[private provider-pilot checklist](docs/LIVE_PROVIDER_PILOT.md).
 
 For remote reviews the browser requires a disclosure acknowledgment before
 sending the work. The server requires the corresponding
@@ -71,12 +88,14 @@ On 2026-11-01, the production deployment for commit
 the actual browser editor rendered. A harmless, unauthorized synthetic
 review request returned a provider-unavailable message without a critique.
 This is a **live, deliberately disabled review shell**, not a qualified
-model-backed criticism service. The account's protection setting currently
-exempts possible future custom domains; review that setting before adding one.
+model-backed criticism service. The Vercel project was subsequently updated
+to `ssoProtection.deploymentType=all` and read back successfully, covering
+all deployments, including any custom domains added later.
 
-**Enabling model-backed production reviews is gated separately.** A bearer token and local
-request-size limit do not enforce a durable rate or cost budget across
-serverless instances. Require hosting-level access controls, rate and model
+**Enabling model-backed production reviews is gated separately.** The atomic
+invocation ledger enforces a cross-instance call allowance but **does not
+measure dollars**. Require hosting-level access controls, independently
+enforced provider spend limits, model
 spend limits, exact-SHA checks, protected preview smoke tests, live-provider
 qualification and rollback readiness before making paid inference public.
 See [live-service release gates](docs/RELEASE_GATES.md) and the

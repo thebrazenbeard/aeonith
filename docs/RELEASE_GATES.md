@@ -1,8 +1,8 @@
 # Aeonith release and live-service qualification gates
 
-_2026-11-01, v0.4.1 hosted-shell verification. This document distinguishes
-working deployment health and browser rendering from pending authenticated
-provider-backed review qualification._
+_v0.4.1 hosted-shell evidence plus v0.5.0 model-pilot hardening candidate.
+This document distinguishes working deployment health and browser rendering
+from pending authenticated provider-backed review qualification._
 
 The verified v0.3.0 source release was merged as [PR #6](https://github.com/thebrazenbeard/aeonith/pull/6)
 at `8980df6989219ae026d958171b8fdaf200e7edfd`. It passed **226/226** local
@@ -31,19 +31,34 @@ An explicitly synthetic review with a noncredential test token produced a
 provider-unavailable message and **no critique**. This is a successful
 provider-disabled **web-shell** deployment, not qualified inference.
 
+The subsequent [PR #11](https://github.com/thebrazenbeard/aeonith/pull/11)
+merged deployment documentation at
+`afaa29abb82ccc3936b33db67c82de67cc4915bd`; Vercel's current
+production shell deployment `dpl_6CtH7QLjnoyPUqvdNVHuvxgvYsfg` is **READY**.
+The project's Vercel Authentication scope was later tightened and independently
+read back as `deploymentType: all`.
+
+The v0.5.0 **source candidate** adds exact route-method dispatch, bounded
+paid-pilot payload/output sizes, a seven-day UUID replay defense, cross-instance
+daily admission with one atomic Upstash Redis EVAL, and trusted Vercel AI
+Gateway OIDC routing. Its current local suite passed **309/309** tests,
+including new integration proofs that denied admission cannot invoke the
+model. This is not yet a GitHub CI or deployed receipt, and not an authorized
+live model call. See [the private pilot checklist](LIVE_PROVIDER_PILOT.md).
+
 ## Source and qualification state
 
 | Gate | Required evidence | Current state |
 | --- | --- | --- |
-| Reviewed source | A PR diff against exact `main` SHA, no private GPT configurations, knowledge assets or secrets in public Git | **v0.4 PR #9 and v0.4.1 PR #10 merged**; exact running SHA recorded |
-| Local contracts | Full Python 3.11–3.13 test matrix and wheel smoke; static and live-service tests in CI | Local Python 3.12 **275/275 PASS**, wheel built; **3/3 exact-head GitHub Actions jobs passed** |
-| HTTP boundary | Unauthorized requests never call providers; valid/invalid body, method, size, endpoint and error behavior exercised | Focused service/security/browser source tests passed; hosted synthetic no-provider denial observed; full deployed negative HTTP matrix still open |
-| Browser interaction | Same-origin requests, no stored manuscript or credentials, safe rendering, accessible failure states | Browser UI visibly loaded; a noncredential synthetic review showed an explicit unavailable state; no live critique |
-| Rate/cost control | Protection against unauthenticated abuse and concurrency, model spend and invocation limits enforced outside per-process memory | **Open production gate** |
+| Reviewed source | A PR diff against exact `main` SHA, no private GPT configurations, knowledge assets or secrets in public Git | **v0.4.1 merged**, v0.5.0 pilot changes not yet merged/reviewed |
+| Local contracts | Full Python 3.11–3.13 test matrix and wheel smoke; static and live-service tests in CI | v0.5.0 local Python 3.12 **309/309 PASS**; **exact-head multi-version CI pending** |
+| HTTP boundary | Unauthorized requests never call providers; valid/invalid body, method, size, endpoint and error behavior exercised | Local negative matrix now includes route/method, replay, bounded input and admission-denial checks; **deployed matrix pending** |
+| Browser interaction | Same-origin requests, no stored manuscript or credentials, safe rendering, accessible failure states | v0.4.1 hosted editor loaded; v0.5.0 new editor/nonce behavior **preview pending** |
+| Rate/cost control | Protection against unauthenticated abuse and concurrency, model spend and invocation limits enforced outside per-process memory | Source-level atomic Redis daily admission and replay checks passed; **real Redis, Gateway project $1 budget and WAF/observability not configured or verified** |
 | Privacy | Strict no-cache response policy, no manuscript/credential logging; explicit notice before external provider disclosure | Local source-tested; **full deployed headers/logs audit still open** |
 | Provider availability | Missing credentials/provider reject honestly without fabricated criticism | Hosted health `review_configured: false` and synthetic unavailable response verified |
 | Provider compatibility | A credentialed, cost-bounded call with an intentionally non-sensitive fixture, verified exact chosen model and backend | **Open; not proven by local provider fakes** |
-| Deployment identity | Hosting project and scope verified; deployed SHA matches reviewed code; exact URL, HTTP status and logs captured | **READY** deployment `dpl_DrkMtyBmkP9NP8iHFSGjLNr7akgC`, source `f90a64bc…`, live `/healthz` and editor verified; runtime logs audit remains open |
+| Deployment identity | Hosting project and scope verified; deployed SHA matches reviewed code; exact URL, HTTP status and logs captured | v0.4.1 shell now at **READY** deployment `dpl_6CtH7QLjnoyPUqvdNVHuvxgvYsfg`, source `afaa29ab…`; v0.5.0 preview pending |
 | Staging and promotion | Protected preview and tested staging build before assigning a production domain; repeatable rollback | **Open; do not silently assume hosting defaults** |
 | Post-deploy observability | Non-sensitive request/error logs and operational health, without manuscript bodies, prompt contents or credentials | **Open** |
 | Knowledge rights | Explicit owner decision on license and rights for each GPT reference asset; no third-party knowledge imported by assumption | **Open** |
@@ -88,8 +103,9 @@ provider-disabled **web-shell** deployment, not qualified inference.
 
 ## Current decision
 
-The protected, provider-disabled **web shell is deployed**. Continue
-qualifying the review service. **Do not publish an
+The protected, provider-disabled **web shell is deployed**. v0.5.0 pilot
+hardening is source-tested but has not satisfied its hosted model/billing
+gates. Continue qualifying the review service. **Do not publish an
 unprotected paid-inference endpoint** or claim a full live critic until the
 authentication, provider, spend, privacy and runtime gates above are
 actually exercised. Source-only status and a protected, no-provider

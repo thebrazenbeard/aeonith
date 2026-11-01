@@ -5,7 +5,7 @@ implemented literary critic. Source checks and a functioning HTTP endpoint
 are **not** proof of original-GPT parity, model suitability, safe retention
 by an external model provider, or end-to-end literary quality.
 
-**Verified 2026-11-01:** The protected, provider-disabled web shell is
+**Verified 2026-11-01 (UTC):** The protected, provider-disabled web shell is
 running at [aeonith-seven.vercel.app](https://aeonith-seven.vercel.app/).
 Vercel reports deployment `dpl_DrkMtyBmkP9NP8iHFSGjLNr7akgC` as `READY`
 for GitHub commit `f90a64bc18a2d285638cbbe646d546ffb396a4f8`.
@@ -62,7 +62,8 @@ auto-publish an unprotected preview. Read back the project to verify
 All-Deployments protection before allowing an inference endpoint to run.
 An existing project's `all_except_custom_domains` setting protects ordinary
 deployment URLs but is not sufficient to assert protection on future custom
-domains; verify and tighten that setting before enabling inference.
+domains. **Aeonith's project has since been updated and read back with
+`ssoProtection.deploymentType=all`.** Keep it there for the private pilot.
 Vercel's September 2026 update makes this protection available on every
 plan; verify current terms and settings in the owner account.
 
@@ -77,8 +78,13 @@ commit, browser storage, build logs or client JavaScript:
 | `AEONITH_PROVIDER_KIND` | Chosen compatible adapter, default `openai-responses` |
 | `AEONITH_PROVIDER_URL` | Fixed, trusted HTTPS inference endpoint, set by operator, never a caller-controlled URL |
 | `AEONITH_PROVIDER_MODEL` | Explicitly selected provider-compatible model |
-| `AEONITH_PROVIDER_API_KEY` | Provider credential with minimum scope and a hard spend limit when available |
+| `AEONITH_PROVIDER_API_KEY` | Credential for an ordinary, explicitly chosen provider; hosted Vercel AI Gateway requires OIDC instead |
 | `AEONITH_STRUCTURED_OUTPUTS` | Optional literal `true` to request strict JSON Schema from a provider that supports it; independently validated afterward |
+| `AEONITH_ADMISSION_REDIS_URL` / `AEONITH_ADMISSION_REDIS_TOKEN` | Permanent Upstash Redis REST admission ledger and server-side write token; fail-closed when absent |
+| `AEONITH_DAILY_REVIEW_LIMIT` | Atomic global per-UTC-day invocation allowance, 1–1000; separate by environment |
+| `AEONITH_MAX_LENSES` | Optional bounded lens count (1–14; default 14) |
+| `AEONITH_MAX_OUTPUT_TOKENS` | Optional bounded output ceiling (256–8192; default 4096) |
+| `AEONITH_PROVIDER_TIMEOUT_SECONDS` | Optional bounded model timeout (1–50; default 45) |
 
 The request must contain a valid `Authorization: Bearer <service token>`
 before any manuscript parsing or inference. If using an external provider,
@@ -87,6 +93,16 @@ the caller must explicitly acknowledge disclosure via
 authenticated owner authorization or proof of the author's consent.
 Models, provider URLs, API keys and token ceilings are **not** request
 parameters. CORS is not opened for other origins.
+
+For the intended first Vercel AI Gateway pilot, set the exact provider URL
+`https://ai-gateway.vercel.sh/v1/responses` and namespaced model
+`openai/gpt-6-luna`. The Vercel worker uses its injected `VERCEL_OIDC_TOKEN`
+for that exact route, **not** an ordinary Gateway/API key that would bypass
+the Gateway **project** budget. Do not enable paid reviews until a $1
+non-resetting project budget is saved and read back in the owner dashboard;
+it is a soft cap with possible in-flight overrun. Upstash admission must also
+be configured, and its remote success is required before provider dispatch.
+See the [private model-pilot release checklist](LIVE_PROVIDER_PILOT.md).
 
 Start with `AEONITH_ENABLE_LIVE_REVIEWS` unset or `false` and no provider
 key. A deployed health endpoint can be live while review attempts fail
@@ -99,9 +115,8 @@ credentials-configured, authorized end-to-end provider call passes.**
    release scope and secrets exposure; do not promote a moved head.
 2. Create/link the Vercel project in its verified account scope with
    All-Deployments Vercel Authentication already enabled for new projects.
-   The existing personal-scope project currently uses
-   `all_except_custom_domains`, so do not presume any new custom domain
-   receives the same protection. Keep deployment previews protected.
+   The existing personal-scope project's mode was tightened and read back as
+   `all`; retain this setting for all domains. Keep previews protected.
 3. Verify the project Git source SHA and settings, the deployed
    `/healthz` route, and 405/4xx responses for unsupported methods,
    unauthorized requests, malformed JSON, missing disclosure and oversized

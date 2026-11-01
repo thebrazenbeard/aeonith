@@ -52,11 +52,13 @@ class BrowserContractTests(unittest.TestCase):
         self.assertEqual(doc.form_attrs[0].get("method"), "post")
         self.assertEqual(doc.form_attrs[0].get("action"), "/api/review")
         self.assertEqual(doc.textareas[0].get("spellcheck"), "false")
+        self.assertNotIn("maxlength", doc.textareas[0])  # Never silently truncate a pasted manuscript.
         self.assertTrue({"manuscript", "work-title", "service-token", "disclosure", "results", "status"}.issubset(doc.ids))
         lens_inputs = [input_ for input_ in doc.inputs if input_.get("name") == "lenses"]
         self.assertEqual({input_["value"] for input_ in lens_inputs}, set(CANONICAL_LENSES))
         self.assertEqual(len(lens_inputs), len(CANONICAL_LENSES))
-        self.assertTrue(all("checked" in input_ for input_ in lens_inputs))
+        self.assertEqual({entry["value"] for entry in lens_inputs if "checked" in entry},
+                         {"literary_thematic", "stylistic", "symbolic"})
         self.assertTrue(any(input_.get("type") == "password" and input_.get("id") == "service-token" for input_ in doc.inputs))
         self.assertTrue(any(input_.get("type") == "checkbox" and input_.get("id") == "disclosure" for input_ in doc.inputs))
         self.assertEqual(doc.scripts, ["/app.js"])
@@ -64,11 +66,26 @@ class BrowserContractTests(unittest.TestCase):
 
     def test_client_discloses_and_never_stores_or_interprets_model_html(self):
         script = (ROOT / "app.js").read_text(encoding="utf-8")
+        markup = (ROOT / "index.html").read_text(encoding="utf-8")
         self.assertIn('"/api/review"', script)
         self.assertIn("X-Aeonith-Disclosure", script)
+        self.assertIn("X-Aeonith-Request-Id", script)
+        self.assertIn("crypto.randomUUID", script)
+        self.assertIn('titleInput.addEventListener("input"', script)
+        self.assertIn("consentInput.checked = false", script)
         self.assertIn("Authorization", script)
+        self.assertIn("MAX_MANUSCRIPT_CHARS = 12000", script)
+        self.assertIn("MAX_PILOT_LENSES = 3", script)
+        self.assertIn("lenses.length > MAX_PILOT_LENSES", script)
+        self.assertIn("409, 413, 429", script)
+        self.assertIn("409:", script)
+        self.assertIn("429:", script)
+        self.assertIn("503:", script)
+        self.assertIn("store: false", markup)
+        self.assertIn("zero-retention", markup)
         self.assertIn("textContent", script)
         self.assertNotRegex(script, r"\b(?:localStorage|sessionStorage|indexedDB|document\.cookie|innerHTML|outerHTML|eval)\b")
+        self.assertNotRegex(script, r"Math\.random\s*\(")
         self.assertNotRegex(script, r"https?://")
         self.assertNotIn("document.write", script)
 

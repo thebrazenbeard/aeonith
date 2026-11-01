@@ -14,6 +14,7 @@ import os
 import re
 import sys
 import time
+import uuid
 from http.client import HTTPException
 from urllib.error import HTTPError, URLError
 from urllib.parse import urlsplit
@@ -29,6 +30,7 @@ CANARY_TEXT = (
     "At noon the harbor bell rang thirteen times. "
     "The fishermen laughed at the mistake, but the tide did not."
 )
+PILOT_LENSES = ("literary_thematic", "stylistic", "symbolic")
 MAX_RESPONSE_BYTES = 4_000_000
 MAX_TIMEOUT_SECONDS = 120.0
 ENV_VAR = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*$")
@@ -43,11 +45,22 @@ class _NoRedirect(HTTPRedirectHandler):
         raise CanaryError("redirect_refused")
 
 
-def canary_request() -> dict[str, Any]:
+def parse_lenses(value: str) -> tuple[str, ...]:
+    """Accept a short, explicit canary selection without caller-defined lenses."""
+    if value == "all":
+        return CANONICAL_LENSES
+    lenses = tuple(part.strip() for part in value.split(","))
+    if (not lenses or any(not item or item not in CANONICAL_LENSES for item in lenses)
+            or len(lenses) != len(set(lenses))):
+        raise CanaryError("invalid_lenses")
+    return lenses
+
+
+def canary_request(lenses: tuple[str, ...] = CANONICAL_LENSES) -> dict[str, Any]:
     return {
         "schema_version": SCHEMA,
         "work": {"title": CANARY_TITLE, "text": CANARY_TEXT},
-        "lenses": list(CANONICAL_LENSES),
+        "lenses": list(lenses),
     }
 
 
@@ -70,6 +83,16 @@ def validate_url(url: str) -> None:
         raise CanaryError("invalid_url")
     if parsed.scheme == "http" and parsed.hostname not in {"127.0.0.1", "localhost", "::1"}:
         raise CanaryError("https_required")
+
+
+def confirm_remote_host(url: str, expected_host: str | None) -> None:
+    """Require a separate operator confirmation before sending remote secrets."""
+    validate_url(url)
+    host = urlsplit(url).hostname
+    if host in {"127.0.0.1", "localhost", "::1"}:
+        return
+    if not expected_host or expected_host.lower() != host:
+        raise CanaryError("remote_host_confirmation_required")
 
 
 def _secret_from_env(name: str) -> str:
@@ -110,14 +133,14 @@ def _strict_json(data: bytes) -> Any:
         raise CanaryError("invalid_response_json") from exc
 
 
-def examine_review(result: Any) -> dict[str, int]:
+def examine_review(result: Any, expected_lenses: tuple[str, ...] = CANONICAL_LENSES) -> dict[str, int]:
     """Check a completed response against the synthetic request, without LLM judging."""
     if not isinstance(result, dict) or result.get("schema_version") != SCHEMA:
         raise CanaryError("response_schema_mismatch")
     if result.get("status") != "completed" or result.get("error") is not None:
         raise CanaryError("response_not_completed")
     reviews = result.get("lens_reviews")
-    if not isinstance(reviews, list) or len(reviews) != len(CANONICAL_LENSES):
+    if not isinstance(reviews, list) or len(reviews) != len(expected_lenses):
         raise CanaryError("lens_coverage_invalid")
     observed: list[str] = []
     anchors = 0
@@ -125,7 +148,7 @@ def examine_review(result: Any) -> dict[str, int]:
         if not isinstance(review, dict):
             raise CanaryError("lens_row_invalid")
         lens = review.get("lens")
-        if not isinstance(lens, str) or lens not in CANONICAL_LENSES:
+        if not isinstance(lens, str) or lens not in expected_lenses:
             raise CanaryError("lens_row_invalid")
         observed.append(lens)
         if not isinstance(review.get("analysis"), str) or not review["analysis"].strip():
@@ -147,7 +170,7 @@ def examine_review(result: Any) -> dict[str, int]:
             raise CanaryError("textual_lens_unanchored")
         if basis == "insufficient_text" and not review.get("limitations"):
             raise CanaryError("insufficient_lens_unexplained")
-    if set(observed) != set(CANONICAL_LENSES) or len(set(observed)) != len(observed):
+    if set(observed) != set(expected_lenses) or len(set(observed)) != len(observed):
         raise CanaryError("lens_coverage_invalid")
     if anchors == 0:
         raise CanaryError("no_textual_evidence_anchor")
@@ -161,8 +184,10 @@ def examine_review(result: Any) -> dict[str, int]:
     return {"lens_count": len(reviews), "work_quote_anchors": anchors}
 
 
-def invoke_canary(url: str, *, token: str, timeout: float, bypass_token: str | None = None) -> dict[str, int]:
-    validate_url(url)
+def invoke_canary(url: str, *, token: str, timeout: float, bypass_token: str | None = None,
+                  lenses: tuple[str, ...] = CANONICAL_LENSES,
+                  expected_host: str | None = None) -> dict[str, int]:
+    confirm_remote_host(url, expected_host)
     if isinstance(timeout, bool) or not isinstance(timeout, (int, float)) or not math.isfinite(timeout) or not 0 < timeout <= MAX_TIMEOUT_SECONDS:
         raise CanaryError("timeout_out_of_bounds")
     headers = {
@@ -172,12 +197,15 @@ def invoke_canary(url: str, *, token: str, timeout: float, bypass_token: str | N
         # The CLI's separate paid-inference flag acknowledges disclosure of
         # this fixed synthetic text to the operator-configured remote model.
         "X-Aeonith-Disclosure": "accepted",
+        # A unique key lets a durable quota reject accidental replay without
+        # re-sending synthetic text to a potentially billable model.
+        "X-Aeonith-Request-Id": str(uuid.uuid4()),
     }
     if bypass_token:
         headers["x-vercel-protection-bypass"] = bypass_token
     request = Request(
         url,
-        data=json.dumps(canary_request(), ensure_ascii=False, allow_nan=False).encode("utf-8"),
+        data=json.dumps(canary_request(lenses), ensure_ascii=False, allow_nan=False).encode("utf-8"),
         headers=headers,
         method="POST",
     )
@@ -194,17 +222,19 @@ def invoke_canary(url: str, *, token: str, timeout: float, bypass_token: str | N
         raise CanaryError(f"http_status_{status}")
     if len(raw) > MAX_RESPONSE_BYTES:
         raise CanaryError("response_too_large")
-    return examine_review(_strict_json(raw))
+    return examine_review(_strict_json(raw), lenses)
 
 
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description="Opt-in canary for a deployed Aeonith critique service. Never outputs manuscript or review text.")
     parser.add_argument("--url", help="Explicit trusted full service critique URL, e.g. https://your-project.example/api/review")
+    parser.add_argument("--expected-host", help="Required for remote URLs: exact independently verified deployment hostname, without scheme or path")
     parser.add_argument("--execute", action="store_true", help="Actually make the HTTP request; omitted by default")
     parser.add_argument("--allow-paid-inference", action="store_true", help="Acknowledge a paid-model invocation and disclosure of synthetic canary text")
     parser.add_argument("--auth-env", default="AEONITH_SERVICE_TOKEN", help="Environment variable holding the service bearer secret (not its value)")
     parser.add_argument("--vercel-bypass-env", help="Optional environment variable holding a protected-preview bypass secret")
     parser.add_argument("--timeout", type=float, default=90.0, help="HTTP timeout in seconds, >0 and <=120 (default: 90)")
+    parser.add_argument("--lenses", default="all", help="all, or comma-separated canonical lenses; initial small pilot: literary_thematic,stylistic,symbolic")
     return parser
 
 
@@ -219,11 +249,13 @@ def main(argv: list[str] | None = None) -> int:
         return 2
     try:
         # Validate URL and consent before reading secrets or making a call.
-        validate_url(args.url)
+        confirm_remote_host(args.url, args.expected_host)
+        lenses = parse_lenses(args.lenses)
         token = _secret_from_env(args.auth_env)
         bypass = _secret_from_env(args.vercel_bypass_env) if args.vercel_bypass_env else None
         start = time.monotonic()
-        counts = invoke_canary(args.url, token=token, timeout=args.timeout, bypass_token=bypass)
+        counts = invoke_canary(args.url, token=token, timeout=args.timeout,
+                               bypass_token=bypass, lenses=lenses, expected_host=args.expected_host)
     except CanaryError as exc:
         print(json.dumps({"status": "failed", "reason": str(exc)}, sort_keys=True))
         return 1

@@ -194,7 +194,10 @@ class ServiceHTTPTests(unittest.TestCase):
         self.assertEqual(json.loads(raw)["error"]["code"], "method_not_allowed")
 
     def test_authenticated_post_is_a_real_http_json_endpoint(self):
-        with patch("aeonith.service._construct_provider", return_value=FakeProvider()):
+        # Only this fake-provider HTTP test bypasses an actual Redis call.
+        # Production requires a successful distributed reservation.
+        with patch("aeonith.service._construct_provider", return_value=FakeProvider()), \
+             patch("aeonith.service.admit_request", return_value=(None, None)):
             status, headers, raw = self._serve(
                 ReviewHandler, "/api/review", method="POST",
                 data=json.dumps(WORK).encode("utf-8"), headers=HEADERS,
