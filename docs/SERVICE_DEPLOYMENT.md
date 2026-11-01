@@ -40,7 +40,7 @@ Remove-Item Env:AEONITH_PROVIDER_API_KEY -ErrorAction SilentlyContinue
 python -m aeonith.local_server --host 127.0.0.1 --port 8765
 ```
 
-Open `http://127.0.0.1:8765/` on that computer. Enter the freshly generated bearer token to submit a passage. The UI is same-origin. It does not persist that token or manuscript text in browser storage. Do not paste the token into a publicly visible terminal transcript, issue tracker, chat, screenshot, or repository file.
+Open `http://127.0.0.1:8765/` on that computer. Enter the freshly generated bearer token to submit a passage. The UI is same-origin and does not persist that bearer token or manuscript text in browser storage. An operator-configured public HTTPS Funnel additionally supports an optional seven-day, signed, secure browser-session cookie issued after valid bearer sign-in; the cookie is not the underlying bearer token. Do not paste the token into a publicly visible terminal transcript, issue tracker, chat, screenshot, or repository file.
 
 The local server listens on loopback only, normally `127.0.0.1:8765`; it rejects a non-loopback host rather than offering a LAN mode. **Do not expose the local port directly.** For an optional public HTTPS endpoint, use the [separate Tailscale Funnel runbook](TAILSCALE_FUNNEL.md): it requires an exact Tailscale hostname allowlist, local resource protections, a qualifying $0 Tailscale account, and a verified external HTTPS test. A public Funnel is not equivalent to a private tailnet connection.
 
@@ -50,7 +50,7 @@ If the model is not ready, leave `AEONITH_ENABLE_LIVE_REVIEWS` unset or set it t
 
 | Setting | Behavior |
 | --- | --- |
-| `AEONITH_SERVICE_TOKEN` | Required strong server-side ASCII token, at least 32 characters; browser sends it as a bearer token for reviews |
+| `AEONITH_SERVICE_TOKEN` | Required strong server-side ASCII token, at least 32 characters; browser sends it as a bearer for reviews or to establish an optional Funnel browser session |
 | `AEONITH_ENABLE_LIVE_REVIEWS` | Only literal `true` enables model dispatch; absent/`false` is safe disabled default |
 | `AEONITH_PROVIDER_KIND` | Set `local-openai-compatible` for local-only inference |
 | `AEONITH_PROVIDER_URL` | Full local HTTP URL, normally `http://127.0.0.1:5001/v1/chat/completions`; never a caller-controlled endpoint |
@@ -73,7 +73,7 @@ If the model is not ready, leave `AEONITH_ENABLE_LIVE_REVIEWS` unset or set it t
 | `POST /api/review` and `POST /v1/critique` | Authenticated bounded JSON review; actual inference only if explicitly enabled and locally configured |
 | Wrong path or HTTP method | Explicit 404 or 405, not a fallthrough into model dispatch |
 
-The application must check the authorization header before reading the review body. The HTTP request cap is 64 KiB, manuscript excerpt cap 12,000 characters, and context cap 2,000 characters; the body may contain only approved schema fields. For HTTP reviews, the caller cannot provide model URL, provider key, or destination. Response failures must not echo secrets, internal errors, or manuscripts.
+The application must check the bearer token or a valid, origin-bound HTTPS Funnel session before reading the review body. The HTTP request cap is 64 KiB, manuscript excerpt cap 12,000 characters, and context cap 2,000 characters; the body may contain only approved schema fields. For HTTP reviews, the caller cannot provide model URL, provider key, or destination. Response failures must not echo secrets, internal errors, or manuscripts. Cookie-authenticated reviews require exact HTTPS `Origin`, and a session never bypasses review quotas.
 
 After starting the server, run a **local, non-billable** liveness probe:
 
@@ -100,4 +100,4 @@ The first command must pass before release. The second intentionally reports `pr
 - If the service token is exposed, generate a new one and restart the local server. The old token is no longer valid after restart with a different environment.
 - To roll back code, restore a reviewed source commit through ordinary Git version-control operations, then rerun tests and the synthetic local probes.
 
-Do not equate a process that listens on a port with a safely hosted public service. A public Funnel deployment must pass its own external route/authentication and model qualification steps, and cannot rely on an earlier localhost test. Aeonith has no independently verified publicly accessible deployment, no original-GPT parity certificate, and no provider-independent assessment of literary insight. [Release criteria](RELEASE_GATES.md) distinguish source contracts, local function, public access, and literary quality.
+Do not equate a process that listens on a port with a safely hosted public service. A public Funnel deployment must pass its own external route/authentication and model qualification steps, and cannot rely on an earlier localhost test. The VN1 HTTPS endpoint and local model configuration were checked on 2026-11-01, but operational availability can change; this check is **not** an original-GPT parity certificate, a model-quality assessment, or an assurance that any particular critique will succeed. [Release criteria](RELEASE_GATES.md) distinguish source contracts, local function, public access, and literary quality.

@@ -188,5 +188,135 @@ class LocalServerTests(unittest.TestCase):
         self.assertEqual(payload["provenance"]["provider_name"], "fixture_local_model")
 
 
+class PublicSessionTests(unittest.TestCase):
+    """Real HTTP handling of a signed, host-pinned Funnel browser session."""
+
+    _origin = "https://vn1.tail86ea75.ts.net"
+    _host = "vn1.tail86ea75.ts.net"
+
+    @classmethod
+    def setUpClass(cls):
+        cls.server = create_server(port=0, funnel_origin=cls._origin)
+        cls.thread = threading.Thread(target=cls.server.serve_forever, daemon=True)
+        cls.thread.start()
+
+    @classmethod
+    def tearDownClass(cls):
+        cls.server.shutdown()
+        cls.server.server_close()
+        cls.thread.join(timeout=5)
+
+    def _request(self, path, *, method="GET", body=None, headers=None):
+        request_headers = {"Host": self._host}
+        if method == "POST":
+            request_headers["Origin"] = self._origin
+        request_headers.update(headers or {})
+        conn = HTTPConnection("127.0.0.1", self.server.server_port, timeout=4)
+        try:
+            conn.request(method, path, body=body, headers=request_headers)
+            response = conn.getresponse()
+            return response.status, dict(response.getheaders()), response.read()
+        finally:
+            conn.close()
+
+    def _login(self):
+        status, headers, raw = self._request(
+            "/api/session", method="POST", headers={"Authorization": "Bearer " + _TOKEN},
+        )
+        self.assertEqual(status, 200, raw)
+        payload = json.loads(raw)
+        self.assertEqual(payload, {"authenticated": True, "available": True})
+        cookie_header = headers["Set-Cookie"]
+        self.assertTrue(cookie_header.startswith("__Host-AeonithSession="))
+        self.assertIn("; Path=/; Secure; HttpOnly; SameSite=Strict", cookie_header)
+        self.assertIn("Max-Age=604800", cookie_header)
+        self.assertNotIn("Domain=", cookie_header)
+        self.assertEqual(headers["Cache-Control"], "no-store")
+        return cookie_header.split(";", 1)[0]
+
+    def test_login_status_review_and_logout(self):
+        with patch.dict(os.environ, _CONFIG, clear=True), \
+             patch("aeonith.service._construct_provider", return_value=_FakeLocalModel()):
+            cookie = self._login()
+            status, headers, raw = self._request("/api/session", headers={"Cookie": cookie})
+            self.assertEqual(status, 200)
+            self.assertEqual(json.loads(raw)["authenticated"], True)
+            self.assertEqual(headers["Cache-Control"], "no-store")
+            status, _, raw = self._request(
+                "/api/review", method="POST", body=json.dumps(_WORK).encode("utf-8"),
+                headers={"Cookie": cookie, "Content-Type": "application/json"},
+            )
+            self.assertEqual(status, 200, raw)
+            self.assertEqual(json.loads(raw)["status"], "completed")
+            status, headers, raw = self._request("/api/session/logout", method="POST", headers={"Cookie": cookie})
+            self.assertEqual(status, 200)
+            self.assertFalse(json.loads(raw)["authenticated"])
+            self.assertTrue(headers["Set-Cookie"].startswith("__Host-AeonithSession=; Max-Age=0;"))
+            self.assertNotIn("Domain=", headers["Set-Cookie"])
+            # Browser discards the expired cookie. The following request has no credential.
+            status, _, raw = self._request(
+                "/api/review", method="POST", body=b"{}", headers={"Content-Type": "application/json"},
+            )
+            self.assertEqual(status, 401)
+
+    def test_cookie_tampering_expiry_duplication_and_bad_bearer_cannot_authenticate(self):
+        with patch.dict(os.environ, _CONFIG, clear=True):
+            cookie = self._login()
+            name, value = cookie.split("=", 1)
+            self.assertTrue(local_server._session_valid(value, _TOKEN, self._host))
+            self.assertFalse(local_server._session_valid(value, _TOKEN, "other.tail.ts.net"))
+            self.assertFalse(local_server._session_valid(value, "U" * 48, self._host))
+            wrong = value[:-1] + ("A" if value[-1] != "A" else "B")
+            for bad_cookie in (
+                f"{name}={wrong}", f"{cookie}; {cookie}",
+                f"{name}=v1.99999999999.{'N' * 32}.{'A' * 43}",
+                f"{name}=v1.1.{'N' * 32}.{'A' * 43}",
+            ):
+                with self.subTest(cookie=bad_cookie[:40]):
+                    status, _, raw = self._request("/api/session", headers={"Cookie": bad_cookie})
+                    self.assertEqual(status, 200)
+                    self.assertFalse(json.loads(raw)["authenticated"])
+                    status, _, raw = self._request(
+                        "/api/review", method="POST", body=b"private",
+                        headers={"Cookie": bad_cookie, "Content-Type": "application/json"},
+                    )
+                    self.assertEqual(status, 401)
+            status, _, raw = self._request(
+                "/api/review", method="POST", body=b"private",
+                headers={"Cookie": cookie, "Authorization": "Bearer incorrect"},
+            )
+            self.assertEqual(status, 401)
+
+    def test_cross_origin_login_session_and_replay_are_denied(self):
+        with patch.dict(os.environ, _CONFIG, clear=True):
+            cookie = self._login()
+            for method, path, headers in (
+                ("POST", "/api/session", {"Authorization": "Bearer " + _TOKEN, "Origin": "https://evil.example"}),
+                ("POST", "/api/review", {"Cookie": cookie, "Origin": "https://evil.example"}),
+                ("POST", "/api/review", {"Cookie": cookie, "Origin": ""}),
+                ("POST", "/api/session/logout", {"Cookie": cookie, "Origin": "https://evil.example"}),
+                ("POST", "/api/review", {"Cookie": cookie, "Host": "evil.example"}),
+            ):
+                with self.subTest(path=path, headers=headers):
+                    status, _, raw = self._request(path, method=method, body=b"private", headers=headers)
+                    self.assertEqual(status, 403)
+                    self.assertEqual(json.loads(raw)["error"]["code"], "forbidden_origin")
+
+    def test_login_failures_never_issue_cookies_or_read_bodies(self):
+        with patch.dict(os.environ, _CONFIG, clear=True):
+            for headers, body, expected in (
+                ({}, None, 401),
+                ({"Authorization": "Bearer incorrect"}, None, 401),
+                ({"Authorization": "Bearer " + _TOKEN}, b"manuscript", 400),
+                ({"Authorization": "Bearer " + _TOKEN, "Transfer-Encoding": "chunked"}, None, 400),
+            ):
+                with self.subTest(headers=headers, body=body):
+                    status, response_headers, raw = self._request(
+                        "/api/session", method="POST", body=body, headers=headers,
+                    )
+                    self.assertEqual(status, expected, raw)
+                    self.assertNotIn("Set-Cookie", response_headers)
+
+
 if __name__ == "__main__":
     unittest.main()

@@ -16,12 +16,18 @@ the service environment variables before submitting any manuscript.
 from __future__ import annotations
 
 import argparse
+import base64
+import hashlib
+import hmac
 import ipaddress
+import json
 import os
 import re
+import secrets
 import socket
 import sysconfig
 import threading
+import time
 from http.server import ThreadingHTTPServer
 from pathlib import Path
 from urllib.parse import urlsplit
@@ -43,6 +49,11 @@ _ASSETS = {
 }
 _HEALTH_PATHS = frozenset({"/healthz", "/api/health"})
 _REVIEW_PATHS = frozenset({"/api/review", "/v1/critique"})
+_SESSION_PATH = "/api/session"
+_SESSION_LOGOUT_PATH = "/api/session/logout"
+_SESSION_COOKIE = "__Host-AeonithSession"
+_SESSION_LIFETIME = 7 * 24 * 60 * 60
+_SESSION_PATTERN = re.compile(r"v1\.([0-9]{1,11})\.([A-Za-z0-9_-]{32})\.([A-Za-z0-9_-]{43})\Z")
 _MAX_ASSET_BYTES = 2_000_000
 _MAX_CONNECTIONS = 16
 _IDLE_SOCKET_TIMEOUT_SECONDS = 15
@@ -94,6 +105,69 @@ def _asset_root() -> Path:
     return _INSTALLED_PUBLIC
 
 
+def _session_secret() -> str | None:
+    """Derive session signatures from the existing operator-owned bearer.
+
+    The bearer itself is never put into the cookie. Rotating it invalidates
+    every session without adding a second credential or persistent store.
+    """
+    secret = os.environ.get("AEONITH_SERVICE_TOKEN", "")
+    if not isinstance(secret, str) or len(secret) < 32 or not secret.strip() or not secret.isascii():
+        return None
+    return secret
+
+
+def _session_signature(secret: str, unsigned: str, funnel_host: str) -> str:
+    digest = hmac.new(secret.encode("ascii"),
+                      b"aeonith-session-v1\x00" + funnel_host.encode("ascii")
+                      + b"\x00" + unsigned.encode("ascii"), hashlib.sha256).digest()
+    return base64.urlsafe_b64encode(digest).decode("ascii").rstrip("=")
+
+
+def _new_session(secret: str, funnel_host: str) -> str:
+    unsigned = f"v1.{int(time.time()) + _SESSION_LIFETIME}.{secrets.token_urlsafe(24)}"
+    return f"{unsigned}.{_session_signature(secret, unsigned, funnel_host)}"
+
+
+def _session_valid(token: str, secret: str, funnel_host: str) -> bool:
+    if not isinstance(token, str) or len(token) > 128:
+        return False
+    match = _SESSION_PATTERN.fullmatch(token)
+    if match is None:
+        return False
+    expires = int(match.group(1))
+    now = int(time.time())
+    if expires <= now or expires > now + _SESSION_LIFETIME:
+        return False
+    unsigned, signature = token.rsplit(".", 1)
+    return hmac.compare_digest(_session_signature(secret, unsigned, funnel_host), signature)
+
+
+class _AuthorizedHeaderView:
+    """Only downstream in-process review validation sees the verified bearer.
+
+    The untrusted request headers are not modified or forwarded, and the
+    view exists only inside the authenticated review call's try/finally.
+    """
+
+    def __init__(self, headers: object, secret: str):
+        self._headers = headers
+        self._authorization = "Bearer " + secret
+
+    def get_all(self, name: str, default=None):
+        if name.lower() == "authorization":
+            return [self._authorization]
+        return self._headers.get_all(name, default)
+
+    def get(self, name: str, default=None):
+        if name.lower() == "authorization":
+            return self._authorization
+        return self._headers.get(name, default)
+
+    def __getattr__(self, name: str):
+        return getattr(self._headers, name)
+
+
 class _LocalHandler(ReviewHandler):
     """Restricted local routes; never serves arbitrary filesystem paths."""
 
@@ -134,7 +208,89 @@ class _LocalHandler(ReviewHandler):
             return "health"
         if path.path in _REVIEW_PATHS:
             return "review"
+        if path.path == _SESSION_PATH:
+            return "session"
+        if path.path == _SESSION_LOGOUT_PATH:
+            return "session_logout"
         return None
+
+    def _funnel_session_origin(self) -> bool:
+        """Session cookies are only issued/accepted at the pinned HTTPS host."""
+        return bool(self.server.funnel_host
+                    and self.headers.get("Host") == self.server.funnel_host)
+
+    def _session_cookie_value(self) -> str | None:
+        cookies = self.headers.get_all("Cookie", [])
+        if len(cookies) != 1 or len(cookies[0]) > 2048:
+            return None
+        matches = []
+        for part in cookies[0].split(";"):
+            name, separator, value = part.strip().partition("=")
+            if separator and name == _SESSION_COOKIE:
+                matches.append(value)
+        return matches[0] if len(matches) == 1 else None
+
+    def _has_session(self) -> bool:
+        if not self._funnel_session_origin():
+            return False
+        token = self._session_cookie_value()
+        secret = _session_secret()
+        return bool(token and secret and _session_valid(token, secret, self.server.funnel_host))
+
+    def _empty_session_body(self) -> bool:
+        """No session endpoint accepts request bodies or ambiguous framing."""
+        lengths = self.headers.get_all("Content-Length", [])
+        valid = (not self.headers.get_all("Transfer-Encoding", [])
+                 and (not lengths or (len(lengths) == 1 and lengths[0] == "0")))
+        if not valid:
+            self.close_connection = True
+            self._respond(400, _error("invalid_body", "Session requests must have no body"))
+        return valid
+
+    def _session_response(self, authenticated: bool, *, cookie: str | None = None) -> None:
+        payload = {"authenticated": authenticated, "available": self._funnel_session_origin()}
+        body = json.dumps(payload, separators=(",", ":")).encode("ascii")
+        self.send_response(200)
+        self.send_header("Content-Type", "application/json; charset=utf-8")
+        self.send_header("Cache-Control", "no-store")
+        if cookie is not None:
+            self.send_header("Set-Cookie", cookie)
+        self.send_header("Content-Length", str(len(body)))
+        self.end_headers()
+        self.wfile.write(body)
+
+    def _start_session(self) -> None:
+        if not self._empty_session_body():
+            return
+        if not self._funnel_session_origin():
+            self._respond(403, _error("forbidden_origin", "HTTPS Funnel is required for browser sessions"))
+            return
+        status, result = authorize(self.headers)
+        if status is not None:
+            admission = self.server.public_limiter
+            if admission is not None and status == 401:
+                allowed, retry_after = admission.auth_attempt_allowed()
+                if not allowed:
+                    self._rate_limited("authentication_rate_limited", retry_after)
+                    return
+                admission.record_auth_failure()
+            self._respond(status, result or _error("unauthorized", "Authorization required"))
+            return
+        secret = _session_secret()
+        if secret is None:
+            self._respond(503, _error("service_unconfigured", "Service token is not configured"))
+            return
+        value = _new_session(secret, self.server.funnel_host)
+        cookie = (f"{_SESSION_COOKIE}={value}; Max-Age={_SESSION_LIFETIME}; "
+                  "Path=/; Secure; HttpOnly; SameSite=Strict")
+        self._session_response(True, cookie=cookie)
+
+    def _end_session(self) -> None:
+        if not self._empty_session_body():
+            return
+        cookie = (f"{_SESSION_COOKIE}=; Max-Age=0; Path=/; "
+                  "Secure; HttpOnly; SameSite=Strict")
+        self._session_response(False, cookie=cookie)
 
     def _same_host(self) -> bool:
         """Block DNS rebinding; accept only local or explicitly pinned Funnel origin."""
@@ -247,6 +403,8 @@ class _LocalHandler(ReviewHandler):
         route = self._route()
         if route == "health":
             HealthHandler.do_GET(self)
+        elif route == "session":
+            self._session_response(self._has_session())
         elif route == "asset":
             self._serve_asset(urlsplit(self.path).path)
         else:
@@ -256,6 +414,12 @@ class _LocalHandler(ReviewHandler):
         if not self._dispatch_allowed():
             return
         route = self._route()
+        if route == "session":
+            self._start_session()
+            return
+        if route == "session_logout":
+            self._end_session()
+            return
         if route == "review":
             admission = self.server.public_limiter
             if admission is None:
@@ -266,6 +430,16 @@ class _LocalHandler(ReviewHandler):
             # Public mode has a global local throttle, independent of Host
             # spelling. A forged Host: localhost header cannot evade quotas.
             status, result = authorize(self.headers)
+            original_headers = self.headers
+            session_headers = None
+            # A supplied but invalid Authorization header cannot be forgiven
+            # by an otherwise valid cookie. This prevents auth ambiguity.
+            if (status == 401 and not original_headers.get_all("Authorization", [])
+                    and self._has_session()):
+                secret = _session_secret()
+                if secret is not None:
+                    session_headers = _AuthorizedHeaderView(original_headers, secret)
+                    status, result = authorize(session_headers)
             if status is not None:
                 if status == 401:
                     allowed, retry_after = admission.auth_attempt_allowed()
@@ -285,7 +459,14 @@ class _LocalHandler(ReviewHandler):
             # A valid bearer and a reserved allowance precede body reads.
             # The reusable handler rechecks authorization before reading.
             with reservation:
-                ReviewHandler.do_POST(self)
+                if session_headers is None:
+                    ReviewHandler.do_POST(self)
+                else:
+                    try:
+                        self.headers = session_headers
+                        ReviewHandler.do_POST(self)
+                    finally:
+                        self.headers = original_headers
         else:
             self._unknown_or_wrong_method(route)
 
