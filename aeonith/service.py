@@ -1,8 +1,8 @@
-"""Restricted HTTP-service boundary for the Aeonith literary critic.
+"""Private, local-only HTTP review boundary for the Aeonith literary critic.
 
-This module is not the authenticated multi-tenant host gate. It operates with
-a single server-owned bearer secret and a single server-selected model
-destination, and deliberately has no public endpoint-selection capability.
+No paid API, hosted model, Redis admission service, cloud credential, or
+arbitrary provider URL is supported by this service. Inference is explicitly
+opted into by the operator and can reach only a loopback model server.
 """
 
 from __future__ import annotations
@@ -15,24 +15,26 @@ from collections.abc import Mapping
 from typing import Any
 from urllib.parse import urlsplit
 
-from .admission import admission_ready, admit_request
 from .core import SCHEMA, _parse_request, critique
-from .providers import OpenAICompatibleProvider, OpenAIResponsesProvider
+from .providers import LocalOpenAICompatibleProvider
 
-# A paid HTTP pilot accepts bounded excerpts, not full-book or large evidence
-# batches. CLI workflows retain the separate 1 MiB aggregate request limit.
+# The local HTTP interface accepts bounded excerpts; the separate CLI retains
+# its 1 MiB aggregate request limit.
 MAX_BODY_BYTES = 64 * 1024
-# Conservative paid-pilot limits. The CLI and long-form planner are unaffected.
-MAX_PILOT_WORK_CHARS = 12_000
-MAX_PILOT_CONTEXT_CHARS = 2_000
+MAX_REVIEW_WORK_CHARS = 12_000
+MAX_REVIEW_CONTEXT_CHARS = 2_000
 _DEFAULT_MAX_OUTPUT_TOKENS = 4_096
 _DEFAULT_PROVIDER_TIMEOUT_SECONDS = 45.0
-_OFFICIAL_RESPONSES_ENDPOINT = "https://api.openai.com/v1/responses"
-_VERCEL_GATEWAY_RESPONSES_ENDPOINT = "https://ai-gateway.vercel.sh/v1/responses"
 _ALLOWED_REQUEST_KEYS = frozenset({
     "schema_version", "work", "proposition", "context", "lenses", "claims",
 })
-_LOCAL_HOSTS = frozenset({"localhost", "127.0.0.1", "::1"})
+_LOCAL_HOSTS = frozenset({"127.0.0.1", "::1"})
+_CLOUD_CONFIGURATION_KEYS = (
+    "AEONITH_PROVIDER_API_KEY", "AI_GATEWAY_API_KEY", "VERCEL_OIDC_TOKEN",
+    "AEONITH_REQUIRE_VERCEL_GATEWAY_OIDC", "AEONITH_ADMISSION_REDIS_URL",
+    "AEONITH_ADMISSION_REDIS_TOKEN", "AEONITH_ALLOWED_PROVIDER_URLS",
+    "VERCEL", "VERCEL_ENV",
+)
 
 
 def _error(code: str, message: str, *, status: str = "invalid_request") -> dict[str, Any]:
@@ -106,13 +108,21 @@ def _strict_json(raw: bytes) -> Any:
                       parse_constant=bad_constant, parse_float=finite_float)
 
 
-def _remote_provider(env: Mapping[str, str]) -> bool:
+def _local_provider_url(env: Mapping[str, str]) -> bool:
+    """Allow only literal loopback IPs and the standard chat endpoint.
+
+    Avoid DNS, redirects and userinfo so even hostile local environment
+    settings cannot silently turn manuscript requests into paid network calls.
+    """
     try:
-        return urlsplit(env.get("AEONITH_PROVIDER_URL", "")).hostname not in _LOCAL_HOSTS
-    except ValueError:
-        # Invalid endpoint is rejected by the provider constructor, but never
-        # silently bypass the disclosure gate.
-        return True
+        parts = urlsplit(env.get("AEONITH_PROVIDER_URL", ""))
+        return (parts.scheme == "http" and parts.hostname in _LOCAL_HOSTS
+                and parts.port is not None and parts.port > 0
+                and parts.path == "/v1/chat/completions"
+                and parts.username is None and parts.password is None
+                and not parts.query and not parts.fragment)
+    except (TypeError, ValueError):
+        return False
 
 
 def _bounded_int_env(env: Mapping[str, str], name: str, default: int,
@@ -129,7 +139,7 @@ def _bounded_int_env(env: Mapping[str, str], name: str, default: int,
     return result
 
 
-def _pilot_settings(env: Mapping[str, str]) -> tuple[int, int, float]:
+def _review_settings(env: Mapping[str, str]) -> tuple[int, int, float]:
     """Fail closed on malformed operator limits, even when the model is ready."""
     max_lenses = _bounded_int_env(env, "AEONITH_MAX_LENSES", 14, 1, 14)
     max_output_tokens = _bounded_int_env(
@@ -150,118 +160,49 @@ def _pilot_settings(env: Mapping[str, str]) -> tuple[int, int, float]:
     return max_lenses, max_output_tokens, timeout
 
 
-def _hosted_runtime(env: Mapping[str, str]) -> bool:
-    return (env.get("VERCEL") == "1"
-            or env.get("VERCEL_ENV") in {"production", "preview", "development"}
-            or env.get("AEONITH_ENFORCE_PROVIDER_ALLOWLIST") == "true")
+def _bool_setting(env: Mapping[str, str], name: str, default: bool) -> bool:
+    value = env.get(name)
+    if value is None:
+        return default
+    if value not in ("true", "false"):
+        raise ValueError(f"invalid {name}")
+    return value == "true"
 
 
-def _gateway_oidc_required(env: Mapping[str, str]) -> bool:
-    """Treat an invalid pilot budget-lock flag as a configuration failure."""
-    flag = env.get("AEONITH_REQUIRE_VERCEL_GATEWAY_OIDC")
-    if flag is None or flag == "false":
-        return False
-    if flag != "true":
-        raise ValueError("invalid Gateway OIDC requirement")
-    return True
-
-
-def _validate_gateway_oidc_lock(env: Mapping[str, str], kind: str, url: str) -> bool:
-    """Pin the paid pilot to project-budgeted OIDC independent of Vercel markers."""
-    if not _gateway_oidc_required(env):
-        return False
-    if (kind != "openai-responses"
-            or url != _VERCEL_GATEWAY_RESPONSES_ENDPOINT
-            or not env.get("VERCEL_OIDC_TOKEN")
-            or env.get("AEONITH_PROVIDER_API_KEY")
-            or env.get("AI_GATEWAY_API_KEY")):
-        raise ValueError("Gateway pilot requires exact endpoint and OIDC only")
-    return True
-
-
-def _validate_hosted_provider_endpoint(env: Mapping[str, str], kind: str, url: str) -> None:
-    """A hosted worker may send writing only to an explicitly allowed URL.
-
-    The Vercel-provided environment identity is trusted configuration, never
-    request data. Local fake-provider tests remain compatible outside Vercel.
-    Self-hosted operators can also opt into this restriction with the literal
-    ``AEONITH_ENFORCE_PROVIDER_ALLOWLIST=true``.
-    """
-    if not _hosted_runtime(env):
-        return
-    try:
-        parsed = urlsplit(url)
-        _ = parsed.port
-    except (TypeError, ValueError) as exc:
-        raise ValueError("invalid hosted provider endpoint") from exc
-    if (parsed.scheme != "https" or parsed.hostname in _LOCAL_HOSTS
-            or parsed.username is not None or parsed.password is not None
-            or parsed.query or parsed.fragment):
-        raise ValueError("hosted provider endpoint must be trusted HTTPS")
-    allowed = ({_OFFICIAL_RESPONSES_ENDPOINT, _VERCEL_GATEWAY_RESPONSES_ENDPOINT}
-               if kind == "openai-responses" else set())
-    configured = env.get("AEONITH_ALLOWED_PROVIDER_URLS", "")
-    if configured:
-        entries = [entry.strip() for entry in configured.split(",")]
-        if len(entries) > 8 or any(not entry or len(entry) > 2_048 for entry in entries):
-            raise ValueError("invalid provider endpoint allowlist")
-        allowed.update(entries)
-    if url not in allowed:
-        raise ValueError("provider endpoint is not explicitly allowlisted")
-
-
-def _pilot_request_exceeds_limits(request: dict[str, Any], max_lenses: int) -> bool:
+def _request_exceeds_limits(request: dict[str, Any], max_lenses: int) -> bool:
     work = request.get("work", request.get("proposition"))
     text = work.get("text") if isinstance(work, dict) else work
     context = request.get("context")
     lenses = request.get("lenses")
     return bool(
-        (isinstance(text, str) and len(text) > MAX_PILOT_WORK_CHARS)
-        or (isinstance(context, str) and len(context) > MAX_PILOT_CONTEXT_CHARS)
+        (isinstance(text, str) and len(text) > MAX_REVIEW_WORK_CHARS)
+        or (isinstance(context, str) and len(context) > MAX_REVIEW_CONTEXT_CHARS)
         or (isinstance(lenses, list) and len(lenses) > max_lenses)
         or (lenses is None and max_lenses < 14)
     )
 
 
 def _construct_provider(env: Mapping[str, str]) -> Any:
-    kind = env.get("AEONITH_PROVIDER_KIND", "openai-responses")
-    url = env.get("AEONITH_PROVIDER_URL", "")
-    model = env.get("AEONITH_PROVIDER_MODEL", "")
-    oidc_locked = _validate_gateway_oidc_lock(env, kind, url)
-    # Vercel project budgets apply to deployment OIDC calls, not calls using
-    # an API key. Require OIDC for the hosted gateway rather than silently
-    # switching to a key that would bypass the configured project budget.
-    if oidc_locked or (url == _VERCEL_GATEWAY_RESPONSES_ENDPOINT and _hosted_runtime(env)):
-        api_key = env.get("VERCEL_OIDC_TOKEN") or None
-    else:
-        # Ambient Vercel OIDC may never be sent to a different host.
-        api_key = (env.get("AEONITH_PROVIDER_API_KEY")
-                   or (env.get("VERCEL_OIDC_TOKEN")
-                       if url == _VERCEL_GATEWAY_RESPONSES_ENDPOINT else None))
-    _max_lenses, max_tokens, timeout = _pilot_settings(env)
-    _validate_hosted_provider_endpoint(env, kind, url)
-    # Model destination and all paid inference settings are server-owned.
-    common = {
-        "url": url, "model": model, "api_key": api_key,
-        "timeout": timeout, "max_tokens": max_tokens,
-        "structured_outputs": env.get("AEONITH_STRUCTURED_OUTPUTS") == "true",
-    }
-    if kind == "openai-responses":
-        return OpenAIResponsesProvider(**common)
-    if kind == "openai-compatible":
-        return OpenAICompatibleProvider(
-            **common, token_field="max_tokens", temperature=0.2, json_mode=True,
-        )
-    raise ValueError("unsupported configured provider")
+    if env.get("AEONITH_PROVIDER_KIND") != "local-openai-compatible":
+        raise ValueError("only a local OpenAI-compatible model is supported")
+    if any(env.get(key) for key in _CLOUD_CONFIGURATION_KEYS):
+        raise ValueError("cloud credentials and hosted configuration are unsupported")
+    if not _local_provider_url(env):
+        raise ValueError("provider must be a literal loopback chat-completions endpoint")
+    _max_lenses, max_tokens, timeout = _review_settings(env)
+    return LocalOpenAICompatibleProvider(
+        url=env["AEONITH_PROVIDER_URL"],
+        model=env.get("AEONITH_PROVIDER_MODEL", ""),
+        timeout=timeout,
+        max_tokens=max_tokens,
+        json_mode=_bool_setting(env, "AEONITH_LOCAL_JSON_MODE", True),
+        structured_outputs=_bool_setting(env, "AEONITH_STRUCTURED_OUTPUTS", False),
+    )
 
 
 def is_ready(environ: Mapping[str, str] | None = None) -> bool:
-    """Conservative configuration readiness; not evidence of model success."""
+    """Local-only configuration readiness; not evidence of model success."""
     env = _env(environ)
-    try:
-        oidc_locked = _gateway_oidc_required(env)
-    except ValueError:
-        return False
     secret = env.get("AEONITH_SERVICE_TOKEN", "")
     if (env.get("AEONITH_ENABLE_LIVE_REVIEWS") != "true"
             or not isinstance(secret, str) or len(secret) < 32
@@ -269,22 +210,7 @@ def is_ready(environ: Mapping[str, str] | None = None) -> bool:
             or not env.get("AEONITH_PROVIDER_URL")
             or not env.get("AEONITH_PROVIDER_MODEL")):
         return False
-    url = env.get("AEONITH_PROVIDER_URL")
-    if _remote_provider(env):
-        if oidc_locked or (url == _VERCEL_GATEWAY_RESPONSES_ENDPOINT and _hosted_runtime(env)):
-            if not env.get("VERCEL_OIDC_TOKEN"):
-                return False
-        elif not (env.get("AEONITH_PROVIDER_API_KEY")
-                  or (url == _VERCEL_GATEWAY_RESPONSES_ENDPOINT
-                      and env.get("VERCEL_OIDC_TOKEN"))):
-            return False
-    # The public hosted health flag must never advertise review readiness
-    # without a configured cross-instance admission gate. Configuration alone
-    # is not a Redis availability test; the actual EVAL remains fail-closed.
-    if (_hosted_runtime(env) or oidc_locked) and not admission_ready(env):
-        return False
     try:
-        _pilot_settings(env)
         _construct_provider(env)
     except (TypeError, ValueError):
         return False
@@ -322,45 +248,29 @@ def process_review(
     if set(request) - _ALLOWED_REQUEST_KEYS:
         return 400, _error("invalid_request", "Unknown request fields are not permitted")
     try:
-        max_lenses, _max_output_tokens, _timeout = _pilot_settings(env)
+        max_lenses, _max_output_tokens, _timeout = _review_settings(env)
     except ValueError:
         return 503, _error("service_unconfigured", "Review service limits are not configured",
                            status="provider_unavailable")
-    if _pilot_request_exceeds_limits(request, max_lenses):
-        return 413, _error("pilot_limit_exceeded", "Review exceeds the configured pilot limits")
+    if _request_exceeds_limits(request, max_lenses):
+        return 413, _error("review_limit_exceeded", "Review exceeds the configured service limits")
     # Check the core schema, evidence-reference integrity and lens set before
-    # consuming a distributed allowance. Otherwise a malformed-but-framed
-    # authorized request could exhaust the daily budget without model usage.
+    # any model invocation.
     try:
         parsed_request, _reason = _parse_request(request)
     except (TypeError, ValueError, RecursionError):
         parsed_request = None
     if parsed_request is None:
         return 400, _error("invalid_request", "Review request is invalid")
-    # Never invoke paid inference unless an explicit operator switch is on.
+    # Never invoke inference unless an explicit operator switch is on.
     if env.get("AEONITH_ENABLE_LIVE_REVIEWS") != "true":
         return 503, _error("service_disabled", "Live reviews are disabled",
                            status="provider_unavailable")
     if not is_ready(env):
         return 503, _error("provider_unavailable", "Review provider is not configured",
                            status="provider_unavailable")
-    if _remote_provider(env):
-        disclosure = _single_header(headers, "X-Aeonith-Disclosure")
-        if disclosure != "accepted":
-            return 403, _error(
-                "disclosure_required",
-                "Explicit external-provider disclosure acknowledgment required",
-            )
-    # Reserve one distributed daily invocation before constructing or calling
-    # any real provider. The injected fake-provider seam is only used by local
-    # non-hosted tests; hosted workers enforce admission even when injected.
-    if provider is None or _hosted_runtime(env) or _gateway_oidc_required(env):
-        admission_status, admission_error = admit_request(headers, env)
-        if admission_status is not None:
-            return admission_status, admission_error or _error(
-                "admission_unavailable", "Review admission is unavailable",
-                status="provider_unavailable",
-            )
+    # Local providers consume no paid account quota. No Redis or other cloud
+    # admission round-trip is ever made, including in production requests.
     if provider is None:
         try:
             provider = _construct_provider(env)

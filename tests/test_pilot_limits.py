@@ -1,4 +1,4 @@
-"""Pilot cost-exposure bounds; all providers are local fakes, with no network."""
+"""Local-service resource bounds; all providers are fakes, with no network."""
 
 from __future__ import annotations
 
@@ -12,20 +12,13 @@ TOKEN = "t" * 48
 ENV = {
     "AEONITH_SERVICE_TOKEN": TOKEN,
     "AEONITH_ENABLE_LIVE_REVIEWS": "true",
-    "AEONITH_PROVIDER_KIND": "openai-responses",
-    "AEONITH_PROVIDER_URL": "https://provider.example.test/v1/responses",
-    "AEONITH_PROVIDER_MODEL": "synthetic-test-model",
-    "AEONITH_PROVIDER_API_KEY": "not-a-real-credential",
-    # Readiness is now deliberately false on Vercel without a configured
-    # distributed admission gate. These are syntactically valid test fixtures.
-    "AEONITH_ADMISSION_REDIS_URL": "https://test-ledger-123.upstash.io",
-    "AEONITH_ADMISSION_REDIS_TOKEN": "not-a-real-redis-token",
-    "AEONITH_DAILY_REVIEW_LIMIT": "2",
+    "AEONITH_PROVIDER_KIND": "local-openai-compatible",
+    "AEONITH_PROVIDER_URL": "http://127.0.0.1:5001/v1/chat/completions",
+    "AEONITH_PROVIDER_MODEL": "local",
 }
 HEADERS = {
     "Authorization": f"Bearer {TOKEN}",
     "Content-Type": "application/json",
-    "X-Aeonith-Disclosure": "accepted",
 }
 
 
@@ -63,7 +56,7 @@ def run(request: dict, *, env: dict | None = None, provider: CountingProvider | 
     )
 
 
-class PilotLimitTests(unittest.TestCase):
+class LocalLimitTests(unittest.TestCase):
     def test_http_body_limit_is_bounded_below_cli_megabyte_budget(self):
         self.assertEqual(MAX_BODY_BYTES, 64 * 1024)
         provider = CountingProvider()
@@ -79,7 +72,7 @@ class PilotLimitTests(unittest.TestCase):
                 provider = CountingProvider()
                 status, result = run({"schema_version": "aeonith.review.v1", "work": work}, provider=provider)
                 self.assertEqual(status, 413)
-                self.assertEqual(result["error"]["code"], "pilot_limit_exceeded")
+                self.assertEqual(result["error"]["code"], "review_limit_exceeded")
                 self.assertEqual(provider.calls, 0)
 
     def test_work_boundary_allows_twelve_thousand_characters(self):
@@ -100,7 +93,7 @@ class PilotLimitTests(unittest.TestCase):
             "context": "C" * 2_001,
         }, provider=provider)
         self.assertEqual(status, 413)
-        self.assertEqual(result["error"]["code"], "pilot_limit_exceeded")
+        self.assertEqual(result["error"]["code"], "review_limit_exceeded")
         self.assertEqual(provider.calls, 0)
 
     def test_configured_lens_cap_prevents_excessive_work(self):
@@ -110,10 +103,10 @@ class PilotLimitTests(unittest.TestCase):
             "lenses": ["symbolic", "philosophical"],
         }, env={**ENV, "AEONITH_MAX_LENSES": "1"}, provider=provider)
         self.assertEqual(status, 413)
-        self.assertEqual(result["error"]["code"], "pilot_limit_exceeded")
+        self.assertEqual(result["error"]["code"], "review_limit_exceeded")
         self.assertEqual(provider.calls, 0)
 
-    def test_invalid_host_limits_fail_closed_before_paid_inference(self):
+    def test_invalid_host_limits_fail_closed_before_local_inference(self):
         for key, value in (
             ("AEONITH_MAX_LENSES", "0"),
             ("AEONITH_MAX_LENSES", "15"),
@@ -122,6 +115,8 @@ class PilotLimitTests(unittest.TestCase):
             ("AEONITH_MAX_OUTPUT_TOKENS", "garbage"),
             ("AEONITH_PROVIDER_TIMEOUT_SECONDS", "nan"),
             ("AEONITH_PROVIDER_TIMEOUT_SECONDS", "61"),
+            ("AEONITH_LOCAL_JSON_MODE", "invalid"),
+            ("AEONITH_STRUCTURED_OUTPUTS", "yes"),
         ):
             with self.subTest(variable=key, value=value):
                 env = {**ENV, key: value}
@@ -142,63 +137,46 @@ class PilotLimitTests(unittest.TestCase):
         self.assertLessEqual(_construct_provider(ENV).max_tokens, 8192)
         self.assertLessEqual(_construct_provider(ENV).timeout, 50)
 
-    def test_vercel_responses_endpoint_is_exact_allowlisted(self):
-        hosted = {**ENV, "VERCEL": "1"}
-        self.assertFalse(is_ready(hosted))
-        provider = CountingProvider()
-        code, _ = run({"schema_version": "aeonith.review.v1", "work": "A"},
-                      env=hosted, provider=provider)
-        self.assertEqual(code, 503)
-        self.assertEqual(provider.calls, 0)
-        self.assertTrue(is_ready({**hosted, "AEONITH_PROVIDER_URL": "https://api.openai.com/v1/responses"}))
+    def test_local_json_mode_can_be_disabled_for_older_runners(self):
+        self.assertTrue(_construct_provider(ENV).json_mode)
+        no_json_mode = {**ENV, "AEONITH_LOCAL_JSON_MODE": "false"}
+        self.assertTrue(is_ready(no_json_mode))
+        self.assertFalse(_construct_provider(no_json_mode).json_mode)
 
-    def test_custom_exact_endpoint_requires_explicit_host_allowlist(self):
-        hosted = {**ENV, "VERCEL_ENV": "production"}
-        self.assertFalse(is_ready(hosted))
-        permitted = {**hosted, "AEONITH_ALLOWED_PROVIDER_URLS": ENV["AEONITH_PROVIDER_URL"]}
-        self.assertTrue(is_ready(permitted))
-        self.assertFalse(is_ready({**hosted, "AEONITH_ALLOWED_PROVIDER_URLS": "https://provider.example.test/"}))
-
-    def test_hosted_allowlist_does_not_override_https_and_secret_safety(self):
+    def test_remote_provider_urls_cannot_activate_review_service(self):
         for url in (
-            "http://localhost:8000/v1/responses",
-            "http://127.0.0.1:8000/v1/responses",
-            "https://provider.example.test/v1/responses?token=embedded",
-            "https://provider.example.test/v1/responses#fragment",
-            "https://user:password@provider.example.test/v1/responses",
+            "https://api.openai.com/v1/responses",
+            "https://ai-gateway.vercel.sh/v1/responses",
+            "https://provider.example.test/v1/chat/completions",
+            "http://192.168.1.10:5001/v1/chat/completions",
+            "http://127.0.0.1.evil.test:5001/v1/chat/completions",
+            "http://user:pass@127.0.0.1:5001/v1/chat/completions",
+            "http://127.0.0.1:5001/v1/chat/completions?token=wrong",
+            "http://127.0.0.1:5001/v1/chat/completions#fragment",
         ):
             with self.subTest(url=url):
-                self.assertFalse(is_ready({
-                    **ENV, "VERCEL_ENV": "production",
-                    "AEONITH_PROVIDER_URL": url,
-                    "AEONITH_ALLOWED_PROVIDER_URLS": url,
-                }))
+                self.assertFalse(is_ready({**ENV, "AEONITH_PROVIDER_URL": url}))
 
-    def test_hosted_vercel_gateway_requires_oidc_to_keep_project_budget_lane(self):
-        gateway = "https://ai-gateway.vercel.sh/v1/responses"
-        hosted = {**ENV, "VERCEL": "1", "AEONITH_PROVIDER_URL": gateway}
-        # A conventional key is explicitly insufficient on Vercel: otherwise
-        # this request would escape a project-scoped OIDC spending budget.
-        self.assertFalse(is_ready(hosted))
-        with_oidc = {**hosted, "VERCEL_OIDC_TOKEN": "nonsecret-test-oidc-token"}
-        self.assertTrue(is_ready(with_oidc))
-        self.assertEqual(_construct_provider(with_oidc).api_key, "nonsecret-test-oidc-token")
-        self.assertFalse(is_ready({**hosted, "AEONITH_PROVIDER_API_KEY": ""}))
+    def test_paid_provider_kind_and_key_never_activate_service(self):
+        for changes in (
+            {"AEONITH_PROVIDER_KIND": "openai-responses"},
+            {"AEONITH_PROVIDER_KIND": "openai-compatible"},
+            {"AEONITH_PROVIDER_API_KEY": "synthetic-key"},
+            {"AEONITH_PROVIDER_URL": "https://api.openai.com/v1/responses",
+             "AEONITH_PROVIDER_API_KEY": "synthetic-key"},
+        ):
+            with self.subTest(changes=changes):
+                self.assertFalse(is_ready({**ENV, **changes}))
 
-    def test_oidc_token_is_never_forwarded_to_other_provider_host(self):
-        gateway = "https://ai-gateway.vercel.sh/v1/responses"
-        env = {
-            **ENV, "VERCEL": "1", "VERCEL_OIDC_TOKEN": "nonsecret-test-oidc-token",
-            "AEONITH_PROVIDER_API_KEY": "",
-            "AEONITH_PROVIDER_URL": "https://api.openai.com/v1/responses",
-        }
-        self.assertFalse(is_ready(env))
-        self.assertIsNone(_construct_provider(env).api_key)
-        self.assertTrue(is_ready({**env, "AEONITH_PROVIDER_URL": gateway}))
-
-    def test_local_fake_provider_workflow_remains_compatible(self):
+    def test_local_fake_provider_workflow_remains_compatible_without_cloud_ledger(self):
         self.assertTrue(is_ready(ENV))
-        self.assertEqual(_construct_provider(ENV).url, ENV["AEONITH_PROVIDER_URL"])
+        provider = _construct_provider(ENV)
+        self.assertEqual(provider.url, ENV["AEONITH_PROVIDER_URL"])
+        self.assertIsNone(provider.api_key)
+        status, result = run({"schema_version": "aeonith.review.v1", "work": "A",
+                              "lenses": ["symbolic"]}, provider=CountingProvider())
+        self.assertEqual(status, 200)
+        self.assertEqual(result["status"], "completed")
 
 
 if __name__ == "__main__":

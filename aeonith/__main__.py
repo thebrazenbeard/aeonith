@@ -4,12 +4,11 @@ from __future__ import annotations
 
 import argparse
 import json
-import os
 import sys
 from pathlib import Path
 
 from .core import critique
-from .providers import OpenAICompatibleProvider, OpenAIResponsesProvider
+from .providers import LocalOpenAICompatibleProvider
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -17,15 +16,13 @@ def main(argv: list[str] | None = None) -> int:
     commands = parser.add_subparsers(dest="command", required=True)
     review = commands.add_parser("review", help="critique a written work using JSON input")
     review.add_argument("--input", required=True, help="request JSON file, or - for stdin")
-    review.add_argument("--provider", choices=("none", "openai-compatible", "openai-responses"), default="none")
-    review.add_argument("--url", help="full provider endpoint; HTTPS or unauthenticated localhost")
-    review.add_argument("--model", help="model name recognized by the configured provider")
-    review.add_argument("--api-key-env", default="AEONITH_PROVIDER_API_KEY", help="environment variable containing API key")
-    review.add_argument("--max-output-tokens", type=int, default=8_192, help="provider output-token budget")
-    review.add_argument("--token-field", choices=("max_tokens", "max_completion_tokens", "none"), default="max_tokens", help="chat-completions token field; choose explicitly for your model")
+    review.add_argument("--provider", choices=("none", "local-openai-compatible"), default="none",
+                        help="model use is opt-in and restricted to a locally running model")
+    review.add_argument("--url", help="uncredentialed literal loopback /v1/chat/completions URL")
+    review.add_argument("--model", help="loaded local model name (default: local)")
+    review.add_argument("--max-output-tokens", type=int, default=4_096, help="maximum local model output tokens")
     review.add_argument("--omit-temperature", action="store_true", help="omit chat-completions temperature for models that do not support it")
-    review.add_argument("--json-mode", action="store_true", help="request chat-completions JSON mode when supported")
-    review.add_argument("--no-json-mode", action="store_true", help="disable default Responses JSON mode for a compatible endpoint")
+    review.add_argument("--no-json-mode", action="store_true", help="disable default chat-completions JSON mode if unsupported")
     review.add_argument("--structured-outputs", action="store_true", help="opt in to strict JSON Schema format; requires a compatible model")
     args = parser.parse_args(argv)
 
@@ -40,23 +37,12 @@ def main(argv: list[str] | None = None) -> int:
             raise ValueError("request JSON exceeds 1 MB")
         data = json.loads(raw)
         provider = None
-        if args.provider == "openai-compatible":
-            provider = OpenAICompatibleProvider(
-                url=args.url or os.environ.get("AEONITH_PROVIDER_URL", ""),
-                model=args.model or os.environ.get("AEONITH_PROVIDER_MODEL", ""),
-                api_key=os.environ.get(args.api_key_env),
+        if args.provider == "local-openai-compatible":
+            provider = LocalOpenAICompatibleProvider(
+                url=args.url or "http://127.0.0.1:5001/v1/chat/completions",
+                model=args.model or "local",
                 max_tokens=args.max_output_tokens,
-                token_field=args.token_field,
                 temperature=None if args.omit_temperature else 0.2,
-                json_mode=args.json_mode,
-                structured_outputs=args.structured_outputs,
-            )
-        elif args.provider == "openai-responses":
-            provider = OpenAIResponsesProvider(
-                url=args.url or os.environ.get("AEONITH_PROVIDER_URL", ""),
-                model=args.model or os.environ.get("AEONITH_PROVIDER_MODEL", ""),
-                api_key=os.environ.get(args.api_key_env),
-                max_tokens=args.max_output_tokens,
                 json_mode=not args.no_json_mode,
                 structured_outputs=args.structured_outputs,
             )

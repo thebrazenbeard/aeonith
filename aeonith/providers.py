@@ -231,6 +231,66 @@ class OpenAICompatibleProvider:
         return candidate
 
 
+class LocalOpenAICompatibleProvider(OpenAICompatibleProvider):
+    """No-cost inference against a process on the same machine only.
+
+    KoboldCpp exposes an OpenAI-compatible chat endpoint on port 5001 by
+    default. Require a numeric loopback address instead of resolving a host
+    name, and reject all credentials and non-chat paths *before* a request
+    containing manuscript text can be constructed. Transport itself also
+    disables inherited proxies and refuses redirects.
+
+    This is a network-location and credential boundary, not a guarantee that
+    the local process is trustworthy or that its outputs pass core validation.
+    """
+
+    name = "local_openai_compatible"
+
+    def __init__(
+        self,
+        *,
+        url: str = "http://127.0.0.1:5001/v1/chat/completions",
+        model: str = "local",
+        api_key: str | None = None,
+        timeout: float = 45,
+        max_tokens: int = 4_096,
+        temperature: float | None = 0.2,
+        json_mode: bool = True,
+        structured_outputs: bool = False,
+    ) -> None:
+        if not isinstance(url, str) or not 1 <= len(url) <= 2_048:
+            raise ValueError("local provider endpoint must be a bounded URL")
+        try:
+            parts = urlsplit(url)
+            port = parts.port
+        except ValueError as exc:
+            raise ValueError("invalid local provider endpoint") from exc
+        literal_host = "127.0.0.1" if parts.hostname == "127.0.0.1" else "[::1]"
+        canonical_url = f"http://{literal_host}:{port}/v1/chat/completions"
+        if (
+            parts.scheme != "http"
+            or parts.hostname not in {"127.0.0.1", "::1"}
+            or port is None or port < 1
+            or parts.username is not None or parts.password is not None
+            or parts.path != "/v1/chat/completions"
+            or parts.query or parts.fragment
+            or api_key is not None
+            or url != canonical_url
+        ):
+            raise ValueError("local provider requires an uncredentialed loopback chat endpoint")
+        super().__init__(
+            url=url,
+            model=model,
+            api_key=None,
+            timeout=timeout,
+            max_tokens=max_tokens,
+            token_field="max_tokens",
+            temperature=temperature,
+            json_mode=json_mode,
+            structured_outputs=structured_outputs,
+        )
+
+
 class OpenAIResponsesProvider:
     """Explicit OpenAI Responses API transport; no implicit tools or retrieval.
 

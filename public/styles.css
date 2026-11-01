@@ -40,6 +40,8 @@ h1, h2, h3, .reading-empty { font-family: Georgia, Cambria, "Times New Roman", s
 h1 { font-size: clamp(2.8rem, 5vw, 4.8rem); line-height: 1.08; letter-spacing: -.038em; margin: 0 0 1.4rem; }
 h1 em { font-weight: 400; color: var(--accent-dark); }
 .introduction { max-width: 67ch; color: #4f4d55; font-size: 1.03rem; margin: 0; line-height: 1.8; }
+.runtime-status { display: inline-block; margin: 1.6rem 0 0; padding: .5rem .8rem; color: #594c69; background: #eeeaf2; border: 1px solid #d9d0e2; border-radius: 5px; font-size: .77rem; line-height: 1.6; }
+.runtime-status.runtime-ready { color: #28523b; border-color: #bcd7c5; background: #e8f4eb; }
 
 .workspace { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1.07fr); gap: clamp(2rem, 5vw, 5.5rem); padding-top: 1.5rem; border-top: 1px solid var(--line); align-items: start; }
 .section-heading { margin: 0 0 1.8rem; }

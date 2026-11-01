@@ -8,6 +8,7 @@ const manuscriptInput = byId("manuscript");
 const tokenInput = byId("service-token");
 const consentInput = byId("disclosure");
 const submitButton = byId("submit-button");
+const runtimeStatusNode = byId("runtime-status");
 const statusNode = byId("status");
 const errorNode = byId("error");
 const resultsNode = byId("results");
@@ -16,7 +17,7 @@ const countNode = byId("character-count");
 const copyButton = byId("copy-result");
 const copyStatus = byId("copy-status");
 const MAX_MANUSCRIPT_CHARS = 12000;
-const MAX_PILOT_LENSES = 3;
+const MAX_LENSES = 14;
 
 const lensLabels = Object.freeze({
   psychological: "Psychological",
@@ -37,6 +38,30 @@ const lensLabels = Object.freeze({
 
 let plainTextReview = "";
 let requestInFlight = false;
+
+async function checkLocalService() {
+  // Readiness is configuration only: this probe sends no writing or token and
+  // never calls the model. An enabled model can still fail during inference.
+  try {
+    const response = await fetch("/healthz", {
+      method: "GET", credentials: "same-origin", redirect: "error", cache: "no-store"
+    });
+    if (!response.ok) throw new Error("health unavailable");
+    const status = await response.json();
+    if (status && status.service === "aeonith" && status.review_configured === true) {
+      runtimeStatusNode.textContent = "Local model configured · A successful review is not guaranteed.";
+      runtimeStatusNode.classList.add("runtime-ready");
+    } else if (status && status.service === "aeonith" && status.review_configured === false) {
+      runtimeStatusNode.textContent = "Local model disabled or unconfigured · Set up a local model to enable reviews.";
+    } else {
+      runtimeStatusNode.textContent = "Local service returned an unexpected health result.";
+    }
+  } catch {
+    runtimeStatusNode.textContent = "Local service readiness unavailable · Reviews may not be available.";
+  }
+}
+
+void checkLocalService();
 
 function element(tag, value, className) {
   const node = document.createElement(tag);
@@ -151,18 +176,16 @@ function requestError(status, responseData) {
   const fixed = {
     400: "The request was invalid. Check the passage and selected lenses.",
     401: "Access denied. Check the service access token.",
-    403: "The service declined this request. Confirm access and manuscript disclosure consent.",
-    409: "This review request conflicts with another recorded or ongoing attempt. No new critique was returned; check the earlier request before resubmitting.",
-    413: "This submission exceeds a pilot limit. Try a shorter excerpt or fewer critical lenses.",
+    403: "The local service declined this request. Check that you opened the page on the same local host.",
+    413: "This submission exceeds a local service limit. Try a shorter excerpt or fewer critical lenses.",
     422: "The service could not validate the proposed critique. No result will be shown.",
-    429: "The review rate or spending allowance has been reached. Wait or contact the service operator; repeated submissions will not bypass the limit.",
     500: "The service encountered an internal error. No critique was generated.",
     502: "The model provider failed or returned an unusable result. No critique was generated.",
-    503: "Live reviews are disabled, unconfigured, or temporarily unavailable. No critique was returned; check service readiness before retrying.",
-    504: "The provider or service timed out. The request may still be processing upstream."
+    503: "Local model reviews are disabled, unconfigured, or temporarily unavailable. No critique was returned; check service readiness before retrying.",
+    504: "The local model or service timed out. The request may still be processing on your computer."
   };
   const fallback = fixed[status] || `The service returned HTTP ${status}; no critique was generated.`;
-  if (status >= 500 || [401, 403, 409, 413, 429].includes(status)) return fallback;
+  if (status >= 500 || [401, 403, 413].includes(status)) return fallback;
   const message = responseData && responseData.error && responseData.error.message;
   return typeof message === "string" && message.length <= 250 ? message : fallback;
 }
@@ -191,16 +214,9 @@ form.addEventListener("submit", async (event) => {
   if (manuscript.length > MAX_MANUSCRIPT_CHARS) return showError("Submit an excerpt of 12,000 characters or fewer.");
   if (title.length > 500) return showError("The title must contain 500 characters or fewer.");
   if (!lenses.length) return showError("Select at least one critical lens.");
-  if (lenses.length > MAX_PILOT_LENSES) return showError("Choose up to three lenses for this private pilot review.");
+  if (lenses.length > MAX_LENSES) return showError("Choose no more than fourteen lenses for a review.");
   if (!token) return showError("Enter your service access token to continue.");
-  if (!consentInput.checked) return showError("Confirm that this writing may be sent to the configured language-model provider.");
-  if (!window.crypto || typeof window.crypto.randomUUID !== "function") {
-    return showError("A secure request ID cannot be generated in this browser. Use an up-to-date browser over HTTPS before submitting.");
-  }
-  // A new random UUID identifies this submission for the server's durable
-  // admission/idempotency boundary. Never derive it from the manuscript or token.
-  const requestId = window.crypto.randomUUID();
-
+  if (!consentInput.checked) return showError("Confirm that you have permission to submit this writing to the local model.");
   const payload = {
     schema_version: "aeonith.review.v1",
     work: { title, text: manuscript },
@@ -219,9 +235,7 @@ form.addEventListener("submit", async (event) => {
       headers: {
         "Content-Type": "application/json",
         "Accept": "application/json",
-        "Authorization": `Bearer ${token}`,
-        "X-Aeonith-Disclosure": "accepted",
-        "X-Aeonith-Request-Id": requestId
+        "Authorization": `Bearer ${token}`
       },
       body: JSON.stringify(payload),
       signal: controller.signal,
@@ -240,14 +254,13 @@ form.addEventListener("submit", async (event) => {
     }
   } catch (error) {
     if (error && error.name === "AbortError") {
-      showError("The browser stopped waiting after two minutes. This does not guarantee the upstream model request was canceled.");
+      showError("The browser stopped waiting after two minutes. The local model request may still be running.");
     } else {
-      showError("The service could not be reached. The earlier request might still be running and consume an allowance; check its status with the operator before resubmitting.");
+      showError("The local service could not be reached. The earlier request might still be running; check its status with the operator before resubmitting.");
     }
   } finally {
     clearTimeout(timer);
-    // Every new review attempt must receive a new, deliberate disclosure
-    // acknowledgment, even if the author submits the same passage again.
+    // Local model consent is specific to the submitted text, not future edits.
     consentInput.checked = false;
     requestInFlight = false;
     submitButton.disabled = false;

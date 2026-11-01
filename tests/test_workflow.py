@@ -73,34 +73,32 @@ class WorkflowTests(unittest.TestCase):
         self.assertEqual(error, "")
         self.assertEqual(FakeProvider.reviews, [])
 
-    def test_external_provider_requires_explicit_disclosure_before_instantiation(self):
-        with patch("aeonith.workflow.OpenAICompatibleProvider", FakeProvider):
-            code, output, error = self.invoke(
-                "--provider", "openai-compatible",
-                "--url", "https://remote.example/v1/chat/completions",
-                "--model", "mock",
-            )
-        self.assertEqual(code, 2)
-        self.assertEqual(output, "")
-        self.assertIn("--allow-external-disclosure", error)
-        self.assertEqual(FakeProvider.constructions, [])
-
-    def test_missing_endpoint_reports_configuration_error_without_network(self):
-        with patch.dict(os.environ, {}, clear=True):
-            code, output, error = self.invoke("--provider", "openai-responses", "--model", "chosen")
+    def test_remote_provider_endpoint_rejected_before_invocation(self):
+        code, output, error = self.invoke(
+            "--provider", "local-openai-compatible",
+            "--url", "https://remote.example/v1/chat/completions",
+            "--model", "mock",
+        )
         self.assertEqual(code, 2)
         self.assertEqual(output, "")
         self.assertIn("invalid manuscript or provider configuration", error)
-        self.assertNotIn("--allow-external-disclosure", error)
+        self.assertEqual(FakeProvider.constructions, [])
 
-    def test_explicit_external_disclosure_and_chat_provider_can_render(self):
-        with patch("aeonith.workflow.OpenAICompatibleProvider", FakeProvider):
+    def test_malformed_endpoint_reports_configuration_error_without_network(self):
+        code, output, error = self.invoke(
+            "--provider", "local-openai-compatible", "--url", "http://example.test/v1/chat/completions",
+        )
+        self.assertEqual(code, 2)
+        self.assertEqual(output, "")
+        self.assertIn("invalid manuscript or provider configuration", error)
+
+    def test_explicit_local_provider_can_render(self):
+        with patch("aeonith.workflow.LocalOpenAICompatibleProvider", FakeProvider):
             code, output, error = self.invoke(
-                "--provider", "openai-compatible",
-                "--url", "https://remote.example/v1/chat/completions",
+                "--provider", "local-openai-compatible",
+                "--url", "http://127.0.0.1:4242/v1/chat/completions",
                 "--model", "mock",
-                "--allow-external-disclosure", "--title", "Wave",
-                "--token-field", "max_completion_tokens", "--omit-temperature",
+                "--title", "Wave", "--omit-temperature",
             )
         self.assertEqual(code, 0, error)
         self.assertIn("# Wave", output)
@@ -109,44 +107,44 @@ class WorkflowTests(unittest.TestCase):
         self.assertEqual(len(FakeProvider.reviews), 1)
         self.assertEqual(FakeProvider.reviews[0]["task"]["work"]["text"],
                          "Every dawn Mara looked at the 🌊 sea.")
-        self.assertEqual(FakeProvider.constructions[0]["token_field"], "max_completion_tokens")
+        self.assertEqual(FakeProvider.constructions[0]["url"], "http://127.0.0.1:4242/v1/chat/completions")
+        self.assertTrue(FakeProvider.constructions[0]["json_mode"])
         self.assertIsNone(FakeProvider.constructions[0]["temperature"])
 
     def test_opt_in_structured_mode_is_forwarded_to_provider(self):
-        with patch("aeonith.workflow.OpenAIResponsesProvider", FakeProvider):
+        with patch("aeonith.workflow.LocalOpenAICompatibleProvider", FakeProvider):
             code, _, error = self.invoke(
-                "--provider", "openai-responses",
-                "--url", "https://remote.example/v1/responses", "--model", "mock",
-                "--allow-external-disclosure", "--structured-outputs",
+                "--provider", "local-openai-compatible",
+                "--url", "http://127.0.0.1:4242/v1/chat/completions", "--model", "mock",
+                "--structured-outputs",
             )
         self.assertEqual(code, 0, error)
         self.assertIs(FakeProvider.constructions[0]["structured_outputs"], True)
 
-    def test_localhost_does_not_require_external_disclosure(self):
-        with patch("aeonith.workflow.OpenAICompatibleProvider", FakeProvider):
-            code, output, error = self.invoke(
-                "--provider", "openai-compatible",
-                "--url", "http://localhost:4242/v1/chat/completions",
-                "--model", "local-fixture",
-            )
-        self.assertEqual(code, 0, error)
-        self.assertIn("## Overall synthesis", output)
-
-    def test_ambient_remote_url_still_requires_disclosure_when_provider_selected(self):
-        with patch.dict(os.environ, {"AEONITH_PROVIDER_URL": "https://ambient.example/v1/responses",
-                                     "AEONITH_PROVIDER_MODEL": "ambient-model"}), \
-             patch("aeonith.workflow.OpenAIResponsesProvider", FakeProvider):
-            code, output, error = self.invoke("--provider", "openai-responses")
+    def test_ambiguous_localhost_alias_is_rejected(self):
+        code, output, error = self.invoke(
+            "--provider", "local-openai-compatible",
+            "--url", "http://localhost:4242/v1/chat/completions",
+        )
         self.assertEqual(code, 2)
         self.assertEqual(output, "")
-        self.assertIn("--allow-external-disclosure", error)
-        self.assertEqual(FakeProvider.constructions, [])
+        self.assertIn("invalid manuscript or provider configuration", error)
+
+    def test_ambient_remote_url_is_ignored_in_local_mode(self):
+        with patch.dict(os.environ, {"AEONITH_PROVIDER_URL": "https://ambient.example/v1/responses",
+                                     "AEONITH_PROVIDER_MODEL": "ambient-model"}), \
+             patch("aeonith.workflow.LocalOpenAICompatibleProvider", FakeProvider):
+            code, output, error = self.invoke("--provider", "local-openai-compatible")
+        self.assertEqual(code, 0, error)
+        self.assertIn("## Overall synthesis", output)
+        self.assertEqual(FakeProvider.constructions[0]["url"], "http://127.0.0.1:5001/v1/chat/completions")
+        self.assertEqual(FakeProvider.constructions[0]["model"], "local")
 
     def test_focus_lenses_are_passed_to_core_and_duplicate_lenses_rejected(self):
-        with patch("aeonith.workflow.OpenAICompatibleProvider", FakeProvider):
+        with patch("aeonith.workflow.LocalOpenAICompatibleProvider", FakeProvider):
             code, output, error = self.invoke(
-                "--provider", "openai-compatible",
-                "--url", "http://localhost:4242/v1/chat/completions",
+                "--provider", "local-openai-compatible",
+                "--url", "http://127.0.0.1:4242/v1/chat/completions",
                 "--model", "local", "--lens", "symbolic", "--lens", "stylistic",
             )
         self.assertEqual(code, 0, error)
@@ -154,10 +152,10 @@ class WorkflowTests(unittest.TestCase):
         self.assertIn("## Symbolic", output)
         self.assertNotIn("## Psychological", output)
         FakeProvider.reviews.clear()
-        with patch("aeonith.workflow.OpenAICompatibleProvider", FakeProvider):
+        with patch("aeonith.workflow.LocalOpenAICompatibleProvider", FakeProvider):
             duplicate_code, _, duplicate_error = self.invoke(
-                "--provider", "openai-compatible",
-                "--url", "http://localhost:4242/v1/chat/completions",
+                "--provider", "local-openai-compatible",
+                "--url", "http://127.0.0.1:4242/v1/chat/completions",
                 "--model", "local", "--lens", "symbolic", "--lens", "symbolic",
             )
         self.assertEqual(duplicate_code, 2)
@@ -166,10 +164,10 @@ class WorkflowTests(unittest.TestCase):
 
     def test_multiline_title_rejected_before_provider_invocation(self):
         for title in ("Good\n## Forged heading", "Good\u2028## Forged heading", "NUL\x00"):
-            with self.subTest(title=repr(title)), patch("aeonith.workflow.OpenAICompatibleProvider", FakeProvider):
+            with self.subTest(title=repr(title)), patch("aeonith.workflow.LocalOpenAICompatibleProvider", FakeProvider):
                 code, output, error = self.invoke(
-                    "--provider", "openai-compatible",
-                    "--url", "http://localhost:4242/v1/chat/completions",
+                    "--provider", "local-openai-compatible",
+                    "--url", "http://127.0.0.1:4242/v1/chat/completions",
                     "--model", "local", "--title", title,
                 )
             self.assertEqual(code, 2)
@@ -177,12 +175,11 @@ class WorkflowTests(unittest.TestCase):
             self.assertNotIn("Forged heading", error)
             self.assertEqual(FakeProvider.reviews, [])
 
-    def test_responses_adapter_is_opt_in_and_json_report_is_machine_readable(self):
-        with patch("aeonith.workflow.OpenAIResponsesProvider", FakeProvider):
+    def test_local_adapter_is_opt_in_and_json_report_is_machine_readable(self):
+        with patch("aeonith.workflow.LocalOpenAICompatibleProvider", FakeProvider):
             code, output, error = self.invoke(
-                "--provider", "openai-responses", "--format", "json",
-                "--url", "https://api.example/v1/responses", "--model", "model",
-                "--allow-external-disclosure",
+                "--provider", "local-openai-compatible", "--format", "json",
+                "--url", "http://127.0.0.1:4242/v1/chat/completions", "--model", "local",
             )
         self.assertEqual(code, 0, error)
         result = json.loads(output)
@@ -193,10 +190,10 @@ class WorkflowTests(unittest.TestCase):
     def test_existing_output_file_never_overwritten_or_provider_invoked(self):
         output_path = self.root / "existing.md"
         output_path.write_text("DO NOT REPLACE", encoding="utf-8")
-        with patch("aeonith.workflow.OpenAICompatibleProvider", FakeProvider):
+        with patch("aeonith.workflow.LocalOpenAICompatibleProvider", FakeProvider):
             code, output, error = self.invoke(
-                "--provider", "openai-compatible",
-                "--url", "http://localhost:4242/v1/chat/completions",
+                "--provider", "local-openai-compatible",
+                "--url", "http://127.0.0.1:4242/v1/chat/completions",
                 "--model", "local", "--output", str(output_path),
             )
         self.assertEqual(code, 2)
@@ -216,10 +213,10 @@ class WorkflowTests(unittest.TestCase):
 
     def test_invalid_utf8_rejected_without_output_or_provider(self):
         self.manuscript.write_bytes(b"\xff\xfe")
-        with patch("aeonith.workflow.OpenAICompatibleProvider", FakeProvider):
+        with patch("aeonith.workflow.LocalOpenAICompatibleProvider", FakeProvider):
             code, output, error = self.invoke(
-                "--provider", "openai-compatible",
-                "--url", "http://localhost:4242/v1/chat/completions",
+                "--provider", "local-openai-compatible",
+                "--url", "http://127.0.0.1:4242/v1/chat/completions",
                 "--model", "local",
             )
         self.assertEqual(code, 2)
@@ -232,10 +229,10 @@ class WorkflowTests(unittest.TestCase):
             def review(self, payload):
                 raise RuntimeError("private manuscript and secret")
 
-        with patch("aeonith.workflow.OpenAICompatibleProvider", CrashingProvider):
+        with patch("aeonith.workflow.LocalOpenAICompatibleProvider", CrashingProvider):
             code, output, error = self.invoke(
-                "--provider", "openai-compatible",
-                "--url", "http://localhost:4242/v1/chat/completions",
+                "--provider", "local-openai-compatible",
+                "--url", "http://127.0.0.1:4242/v1/chat/completions",
                 "--model", "local",
             )
         self.assertEqual(code, 4)

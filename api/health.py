@@ -7,7 +7,7 @@ from http.server import BaseHTTPRequestHandler
 from aeonith.service import encode_result, is_ready
 
 
-class handler(BaseHTTPRequestHandler):  # Vercel Python runtime entrypoint
+class handler(BaseHTTPRequestHandler):
     def log_message(self, _format: str, *args: object) -> None:
         # No request-target/header logging from the app itself.
         return
