@@ -39,6 +39,12 @@ class ZeroCostPolicyTests(unittest.TestCase):
             "AEONITH_PROVIDER_API_KEY": "not-a-real-token",
         }
         self.assertFalse(is_ready(env))
+        # A publicly reachable TLS origin changes only the browser ingress.
+        # It must never make a remote or metered inference provider available.
+        self.assertFalse(is_ready({
+            **env,
+            "AEONITH_FUNNEL_ORIGIN": "https://critic.example-tailnet.ts.net",
+        }))
 
     def test_ci_never_starts_billable_private_repo_runner(self):
         workflows = sorted((ROOT / ".github" / "workflows").glob("*.yml"))

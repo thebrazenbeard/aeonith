@@ -1,6 +1,6 @@
 # Aeonith local-service runbook — no paid infrastructure
 
-Aeonith's supported operating model is **self-hosted on an already-owned computer with zero new service/API spending**. The former Vercel shell and paid-provider pilot are retired; account deletion means historical deployment `READY` records are not evidence of a current live endpoint. No Vercel account, Gateway, Upstash Redis database, cloud tunnel, subscription, or paid model key is part of this setup.
+Aeonith's supported operating model is **self-hosted on an already-owned computer with zero new service/API spending**. The former Vercel shell and paid-provider pilot are retired; account deletion means historical deployment `READY` records are not evidence of a current live endpoint. No Vercel account, Gateway, Upstash Redis database, subscription, or paid model key is part of this setup. An optional existing **free-plan Tailscale Funnel** can expose the web interface over public HTTPS; it is not enabled by default and requires separate verification.
 
 The source includes a browser UI and a stdlib Python server, but it does not ship model weights. A provider-disabled shell is not a functioning AI critic. Actual criticism requires a locally running, capable, compatible model.
 
@@ -42,7 +42,7 @@ python -m aeonith.local_server --host 127.0.0.1 --port 8765
 
 Open `http://127.0.0.1:8765/` on that computer. Enter the freshly generated bearer token to submit a passage. The UI is same-origin. It does not persist that token or manuscript text in browser storage. Do not paste the token into a publicly visible terminal transcript, issue tracker, chat, screenshot, or repository file.
 
-The local server listens on loopback only, normally `127.0.0.1:8765`; it rejects a non-loopback host rather than offering a LAN mode. **Do not route the port through a tunnel** as part of the zero-cost single-owner setup. Any remote-access design requires separate access-control, encryption, network and privacy review, even if it has no subscription fee.
+The local server listens on loopback only, normally `127.0.0.1:8765`; it rejects a non-loopback host rather than offering a LAN mode. **Do not expose the local port directly.** For an optional public HTTPS endpoint, use the [separate Tailscale Funnel runbook](TAILSCALE_FUNNEL.md): it requires an exact Tailscale hostname allowlist, local resource protections, a qualifying $0 Tailscale account, and a verified external HTTPS test. A public Funnel is not equivalent to a private tailnet connection.
 
 If the model is not ready, leave `AEONITH_ENABLE_LIVE_REVIEWS` unset or set it to `false` to run only the UI and health endpoint. Review requests fail closed rather than inventing criticism. A different local model runtime may require a different local endpoint and model label; confirm exact compatibility before enabling it. In simple KoboldCpp single-model mode the model label may be arbitrary, whereas router mode may select by name.
 
@@ -60,8 +60,9 @@ If the model is not ready, leave `AEONITH_ENABLE_LIVE_REVIEWS` unset or set it t
 | `AEONITH_PROVIDER_TIMEOUT_SECONDS` | Optional model response timeout, 1–50 seconds (default 45) |
 | `AEONITH_LOCAL_JSON_MODE` | `true` (default) requests JSON-mode Chat Completions; set literal `false` if your existing local runner does not support `response_format` |
 | `AEONITH_STRUCTURED_OUTPUTS` | Literal `false` (default) or `true`; strict schema mode requires a compatible local runner and model |
+| `AEONITH_FUNNEL_ORIGIN` | Optional exact HTTPS origin `https://machine.tailnet.ts.net` for the user's own Tailscale Funnel. Unset by default; never a wildcard or arbitrary domain |
 
-**Do not configure** any paid-provider credential, remote model URL, Gateway OIDC, Vercel runtime marker, external admission database, or billing limit. No financial spending allowance is contemplated: the hard additional-service spending limit is **$0**. Local inference does not require Redis because the server is single-process and loopback-bound by default; this is **not** a multi-user, globally rate-limited internet deployment.
+**Do not configure** any paid-provider credential, remote model URL, Gateway OIDC, Vercel runtime marker, external admission database, or billing limit. No financial spending allowance is contemplated: the hard additional-service spending limit is **$0**. Local inference does not require Redis because the server is single-process and loopback-bound by default; the optional public Funnel is still **not** a multi-user identity system or globally rate-limited internet deployment.
 
 ## Route and security checks
 
@@ -99,4 +100,4 @@ The first command must pass before release. The second intentionally reports `pr
 - If the service token is exposed, generate a new one and restart the local server. The old token is no longer valid after restart with a different environment.
 - To roll back code, restore a reviewed source commit through ordinary Git version-control operations, then rerun tests and the synthetic local probes.
 
-Do not equate a process that listens on a port with a safely hosted public service. Aeonith has no independently verified publicly accessible deployment, no original-GPT parity certificate, and no provider-independent assessment of literary insight. [Release criteria](RELEASE_GATES.md) distinguish source contracts, local function, and literary quality.
+Do not equate a process that listens on a port with a safely hosted public service. A public Funnel deployment must pass its own external route/authentication and model qualification steps, and cannot rely on an earlier localhost test. Aeonith has no independently verified publicly accessible deployment, no original-GPT parity certificate, and no provider-independent assessment of literary insight. [Release criteria](RELEASE_GATES.md) distinguish source contracts, local function, public access, and literary quality.
