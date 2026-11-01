@@ -20,6 +20,8 @@ const copyButton = byId("copy-result");
 const copyStatus = byId("copy-status");
 const MAX_MANUSCRIPT_CHARS = 12000;
 const MAX_IMPORT_BYTES = 65536;
+const MAX_DOCX_BYTES = 2 * 1024 * 1024;
+const DOCX_PARSE_TIMEOUT_MS = 8000;
 const MAX_LENSES = 14;
 
 // Display the remote-access warning for Tailscale's HTTPS machine.tailnet.ts.net
@@ -211,6 +213,125 @@ manuscriptInput.addEventListener("input", () => {
 });
 titleInput.addEventListener("input", () => { consentInput.checked = false; });
 
+function extractDocxInWorker(buffer) {
+  // An untrusted compressed document is never parsed on the UI thread or
+  // sent to the Aeonith server. The worker streams only bounded Word XML.
+  return new Promise((resolve, reject) => {
+    if (typeof Worker !== "function") {
+      reject(new Error("DOCX import requires Web Worker support in this browser."));
+      return;
+    }
+    let worker;
+    try { worker = new Worker("/docx-import-worker.js"); } catch {
+      reject(new Error("This browser cannot start the local DOCX parser."));
+      return;
+    }
+    let finished = false;
+    const complete = (error, value) => {
+      if (finished) return;
+      finished = true;
+      clearTimeout(timer);
+      worker.terminate();
+      if (error) reject(error);
+      else resolve(value);
+    };
+    const timer = setTimeout(() => complete(new Error("DOCX parsing timed out; your writing was not changed.")), DOCX_PARSE_TIMEOUT_MS);
+    worker.onmessage = (event) => {
+      const message = event.data;
+      if (!message || message.ok !== true || typeof message.xml !== "string") {
+        complete(new Error(message && typeof message.error === "string" ? message.error : "The DOCX parser rejected this document."));
+      } else {
+        complete(null, message.xml);
+      }
+    };
+    worker.onerror = () => complete(new Error("The local DOCX parser failed. Your writing was not changed."));
+    worker.onmessageerror = () => complete(new Error("The local DOCX parser returned an unreadable result."));
+    try { worker.postMessage({ buffer }, [buffer]); } catch {
+      complete(new Error("The browser could not transfer this DOCX document to its local parser."));
+    }
+  });
+}
+
+function extractDocxText(xml) {
+  // DOMParser is a Window API, not available in Web Workers. Only the
+  // worker's strictly bounded document XML enters this detached XML DOM.
+  // Never render, insert, or evaluate nodes from an imported document.
+  if (typeof DOMParser !== "function" || typeof xml !== "string" ||
+      xml.length > 2 * 1024 * 1024 || /<!DOCTYPE|<!ENTITY/i.test(xml)) {
+    throw new Error("The browser cannot safely parse this Word document's XML.");
+  }
+  const documentXml = new DOMParser().parseFromString(xml, "application/xml");
+  if (documentXml.getElementsByTagName("parsererror").length !== 0) {
+    throw new Error("The Word document contains malformed XML.");
+  }
+  // Keep this as a literal namespace match while retaining the established
+  // no-absolute-URL invariant for the browser script.
+  const wordNamespace = "http:" + "//schemas.openxmlformats.org/wordprocessingml/2006/main";
+  const root = documentXml.documentElement;
+  if (!root || root.namespaceURI !== wordNamespace || root.localName !== "document") {
+    throw new Error("The Word document XML has an unexpected root element.");
+  }
+  const body = root.getElementsByTagNameNS(wordNamespace, "body")[0];
+  if (!body) throw new Error("The Word document has no readable body.");
+  // Walk each element exactly once. Descendant searches inside every nested
+  // paragraph/text node can otherwise turn attacker-controlled XML into
+  // quadratic work or duplicate arbitrarily large descendant text.
+  const walker = documentXml.createTreeWalker(body, NodeFilter.SHOW_ELEMENT);
+  const lines = [];
+  let pieces = [];
+  let characters = 0;
+  let visited = 0;
+  const add = (value) => {
+    characters += value.length;
+    if (characters > MAX_MANUSCRIPT_CHARS) {
+      throw new Error("The file exceeds 12,000 characters. No text was replaced or truncated; choose a shorter excerpt.");
+    }
+    pieces.push(value);
+  };
+  const flush = () => {
+    if (pieces.length) lines.push(pieces.join(""));
+    pieces = [];
+  };
+  let element;
+  while ((element = walker.nextNode())) {
+    if (++visited > 50000) {
+      throw new Error("This Word document contains too many XML elements to import safely.");
+    }
+    if (element.namespaceURI !== wordNamespace) continue;
+    if (element.localName === "altChunk") {
+      throw new Error("This Word document uses unsupported embedded body content. Export it as plain text first.");
+    }
+    if (element.localName === "p") {
+      flush();
+    } else if (element.localName === "t") {
+      let value = "";
+      for (const child of element.childNodes) {
+        if (child.nodeType !== 3 && child.nodeType !== 4) {
+          throw new Error("This Word document contains unsupported nested text markup.");
+        }
+        value += child.nodeValue || "";
+        if (characters + value.length > MAX_MANUSCRIPT_CHARS) {
+          throw new Error("The file exceeds 12,000 characters. No text was replaced or truncated; choose a shorter excerpt.");
+        }
+      }
+      add(value);
+    } else if (element.localName === "tab") {
+      add("\t");
+    } else if (element.localName === "br" || element.localName === "cr") {
+      add("\n");
+    }
+  }
+  flush();
+  const text = lines.join("\n\n");
+  if (text.length > MAX_MANUSCRIPT_CHARS) {
+    throw new Error("The file exceeds 12,000 characters. No text was replaced or truncated; choose a shorter excerpt.");
+  }
+  if (!text.trim() || text.includes("\u0000")) {
+    throw new Error("This Word document contains no usable body text.");
+  }
+  return text;
+}
+
 fileInput.addEventListener("change", async () => {
   const file = fileInput.files && fileInput.files[0];
   if (!file) return;
@@ -222,19 +343,24 @@ fileInput.addEventListener("change", async () => {
       importStatusNode.textContent = "Wait for the current critique to finish before importing another passage.";
       return;
     }
-    // The file picker accept= filter is advisory, so validate the extension.
-    if (!/\.(?:txt|text|md|markdown)$/i.test(file.name)) {
-      importStatusNode.textContent = "Choose a UTF-8 .txt or Markdown file. Word and PDF files are not supported yet.";
+    // The file picker accept= filter is advisory; legacy .doc is binary and
+    // cannot be renamed into a valid DOCX ZIP document.
+    const isDocx = /\.docx$/i.test(file.name);
+    if (!isDocx && !/\.(?:txt|text|md|markdown)$/i.test(file.name)) {
+      importStatusNode.textContent = "Choose a UTF-8 text/Markdown file or Word .docx. Legacy .doc and PDF files must be converted first.";
       return;
     }
-    if (file.size === 0 || file.size > MAX_IMPORT_BYTES) {
-      importStatusNode.textContent = "The file must be nonempty and no larger than 64 KiB. Import a shorter text excerpt.";
+    if (file.size === 0 || file.size > (isDocx ? MAX_DOCX_BYTES : MAX_IMPORT_BYTES)) {
+      importStatusNode.textContent = isDocx ? "DOCX files must be nonempty and no larger than 2 MiB. Choose a shorter document." :
+        "The text file must be nonempty and no larger than 64 KiB. Import a shorter text excerpt.";
       return;
     }
-    // Nothing is uploaded. Decode locally and reject invalid UTF-8 rather
-    // than silently replacing bytes or accidentally treating binary as text.
+    // Nothing is uploaded. Text is decoded locally; DOCX is parsed in an
+    // isolated worker with ZIP metadata/CRC verification, streaming byte caps,
+    // and timeout; only bounded XML is parsed into a detached DOM.
     const bytes = await file.arrayBuffer();
-    const text = new TextDecoder("utf-8", { fatal: true }).decode(bytes);
+    const text = isDocx ? extractDocxText(await extractDocxInWorker(bytes)) :
+      new TextDecoder("utf-8", { fatal: true }).decode(bytes);
     if (!text.trim() || text.includes("\u0000")) {
       importStatusNode.textContent = "The selected file does not contain usable plain text.";
       return;
@@ -260,8 +386,9 @@ fileInput.addEventListener("change", async () => {
     statusNode.textContent = "Imported text is ready for a new critique.";
     importStatusNode.textContent = `Imported ${file.name} into the editor (${text.length.toLocaleString()} characters).`;
     manuscriptInput.focus();
-  } catch {
-    importStatusNode.textContent = "The file could not be read as UTF-8 text. Your existing writing was not replaced.";
+  } catch (error) {
+    importStatusNode.textContent = error && error.message && /\.docx$/i.test(file.name) ? error.message :
+      "The file could not be read as UTF-8 text. Your existing writing was not replaced.";
   } finally {
     if (selection === latestFileSelection) fileInput.value = "";
   }

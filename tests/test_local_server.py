@@ -84,6 +84,7 @@ class LocalServerTests(unittest.TestCase):
             ("/", "text/html", b"review-form"),
             ("/index.html", "text/html", b"review-form"),
             ("/app.js", "text/javascript", b"textContent"),
+            ("/docx-import-worker.js", "text/javascript", b"inspectDocxZip"),
             ("/styles.css", "text/css", b"prefers-reduced-motion"),
         ):
             with self.subTest(path=path):
@@ -94,6 +95,7 @@ class LocalServerTests(unittest.TestCase):
                 self.assertEqual(headers["Cache-Control"], "no-store")
                 self.assertEqual(headers["X-Frame-Options"], "DENY")
                 self.assertIn("connect-src 'self'", headers["Content-Security-Policy"])
+                self.assertIn("worker-src 'self'", headers["Content-Security-Policy"])
                 self.assertNotIn("Access-Control-Allow-Origin", headers)
 
     def test_chatgpt_tracking_link_redirects_to_clean_editor(self):

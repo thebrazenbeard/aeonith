@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "aeonith"
-version = "0.7.3"
+version = "0.8.0"
 description = "Evidence-aware, provider-neutral literary critique engine"
 readme = "README.md"
 requires-python = ">=3.11"
@@ -26,4 +26,4 @@ include = ["aeonith*", "api*"]
 aeonith = ["schemas/*.json"]
 
 [tool.setuptools.data-files]
-"share/aeonith" = ["public/index.html", "public/app.js", "public/styles.css"]
+"share/aeonith" = ["public/index.html", "public/app.js", "public/styles.css", "public/docx-import-worker.js"]
