@@ -57,16 +57,21 @@ class ZeroCostPolicyTests(unittest.TestCase):
                 content = path.read_text(encoding="utf-8")
                 # Job-level guard is required: step-level guards start a
                 # runner first and could incur billable private minutes.
-                self.assertRegex(
-                    content,
+                guards = re.findall(
                     r"(?m)^    if: \$\{\{ github\.event\.repository\.private == false \}\}$",
+                    content,
                 )
+                self.assertEqual(2, len(guards))
+                self.assertEqual(2, len(re.findall(r"(?m)^    runs-on: (?:ubuntu-latest|windows-latest)$", content)))
                 self.assertIn("permissions:\n  contents: read", content)
                 self.assertNotIn("vercel", content.lower())
                 # Deliberately no third-party deployment, model, or billing
                 # action. New actions require explicit policy review.
                 actions = re.findall(r"(?m)^\s*- uses:\s*(\S+)", content)
-                self.assertEqual(["actions/checkout@v4", "actions/setup-python@v5"], actions)
+                self.assertEqual(
+                    ["actions/checkout@v4", "actions/setup-python@v5"] * 2,
+                    actions,
+                )
 
 
 if __name__ == "__main__":

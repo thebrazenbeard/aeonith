@@ -44,7 +44,7 @@ Open `http://127.0.0.1:8765/` on that computer. Enter the freshly generated bear
 
 The local server listens on loopback only, normally `127.0.0.1:8765`; it rejects a non-loopback host rather than offering a LAN mode. **Do not expose the local port directly.** For an optional public HTTPS endpoint, use the [separate Tailscale Funnel runbook](TAILSCALE_FUNNEL.md): it requires an exact Tailscale hostname allowlist, local resource protections, a qualifying $0 Tailscale account, and a verified external HTTPS test. A public Funnel is not equivalent to a private tailnet connection.
 
-If the model is not ready, leave `AEONITH_ENABLE_LIVE_REVIEWS` unset or set it to `false` to run only the UI and health endpoint. Review requests fail closed rather than inventing criticism. A different local model runtime may require a different local endpoint and model label; confirm exact compatibility before enabling it. In simple KoboldCpp single-model mode the model label may be arbitrary, whereas router mode may select by name.
+If the model is not ready, leave `AEONITH_ENABLE_LIVE_REVIEWS` unset or set it to `false` to run only the UI and health endpoint. Review requests fail closed rather than inventing criticism. A different local model runtime may require a different local endpoint and model label; confirm exact compatibility before enabling it. In simple KoboldCpp single-model mode the model label may be arbitrary, whereas router mode may select by name. For an existing Ollama install, the corresponding local URL is `http://127.0.0.1:11434/v1/chat/completions`; use an exact name from `ollama list`. Model compatibility must be demonstrated by a complete *validated Aeonith review*, not a raw chat-completions response.
 
 ## Configuration
 

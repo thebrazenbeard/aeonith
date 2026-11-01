@@ -63,3 +63,21 @@ jobs:
           aeonith-critique --help
           aeonith-longform --help
           python -c "from aeonith.evidence import locate_quote; assert locate_quote('A🌊B', '🌊')['match_count'] == 1"
+
+  # Funnel may run on the owner's Windows workstation. Test Windows socket
+  # rejection and Unicode stdin behavior on free public-repository runners.
+  windows-host-contract:
+    if: ${{ github.event.repository.private == false }}
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
+      - name: Run full Windows offline and HTTP contract suite
+        run: python -m unittest discover -s tests -v
+      - name: Verify Windows local server packaging and JS
+        run: |
+          python -m compileall -q aeonith api
+          python -m pip wheel --no-deps . --wheel-dir wheelhouse
+          node --check public/app.js
