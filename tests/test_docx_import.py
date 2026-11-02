@@ -26,7 +26,10 @@ const vm = require('node:vm');
 const raw = fs.readFileSync(0);
 const buffer = raw.buffer.slice(raw.byteOffset, raw.byteOffset + raw.byteLength);
 const sandbox = {
-  postMessage: result => { process.stdout.write(JSON.stringify(result)); },
+  // A browser worker stays alive to receive later messages; this one-shot
+  // Node test must exit after its response. Explicitly finish the write so
+  // Windows CI cannot time out waiting for lingering stream handles.
+  postMessage: result => { process.stdout.write(JSON.stringify(result), () => process.exit(0)); },
   TextDecoder, DataView, Uint8Array, ArrayBuffer, Promise,
   DecompressionStream, setTimeout, clearTimeout, Blob, Set
 };
@@ -155,7 +158,7 @@ class BrowserDocxWorkerTests(unittest.TestCase):
             input=binary,
             capture_output=True,
             check=False,
-            timeout=10,
+            timeout=30,
         )
         self.assertEqual(outcome.returncode, 0, outcome.stderr.decode("utf-8", "replace"))
         return json.loads(outcome.stdout.decode("utf-8"))
