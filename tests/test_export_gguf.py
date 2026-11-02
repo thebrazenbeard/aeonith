@@ -84,7 +84,9 @@ class GGUFHandoffTests(unittest.TestCase):
         self.assertEqual(plan["conversion_env"]["HF_HUB_OFFLINE"], "1")
         self.assertIn("--base", plan["conversion_argv_not_executed"])
         self.assertIn("--outtype", plan["conversion_argv_not_executed"])
-        self.assertIn(str(self.adapter), plan["conversion_argv_not_executed"])
+        # Windows CI may create its temp root through an 8.3 alias while the
+        # guarded planner intentionally resolves to the canonical long path.
+        self.assertIn(str(self.adapter.resolve()), plan["conversion_argv_not_executed"])
         self.assertTrue(plan["conversion_operator_approval_required"])
         self.assertFalse(any(self.out.glob("*.gguf")))
         self.assertNotIn(str(self.root), json.dumps(report))
