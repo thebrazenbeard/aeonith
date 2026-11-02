@@ -5,6 +5,12 @@ implemented `aeonith.review.v1` response contract. It does not invoke a model,
 require a key, transmit manuscript text, validate external citations, or claim
 to measure literary truth. Python standard library only.
 
+For multi-seed **frozen base versus adapter** trials, see
+[PAIRED_BENCH.md](PAIRED_BENCH.md). That optional offline tool validates
+caller-supplied run evidence, keeps failed attempts in the denominator, and
+prepares private blinded comparisons. It does not execute or authenticate
+models or establish that a holdout was genuinely unseen.
+
 ## What it checks
 
 1. Every explicitly requested canonical lens appears exactly once; support and

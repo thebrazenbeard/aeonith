@@ -5,6 +5,19 @@ trained model or a qualification result. It has not been run against Lappy's
 real accelerator or any official full-size checkpoint. It is **not** installed
 as a mandatory dependency of Aeonith's standard-library application.
 
+Related optional, independently gated source tools:
+
+- [ADMISSION.md](ADMISSION.md): review-pending critique proposals → private
+  JSONL only after recorded rights, stewardship and editorial decisions.
+- [BASE_PROVENANCE.md](BASE_PROVENANCE.md): compare local official Qwen3.5
+  checkpoint bytes against a separately obtained expected-file manifest;
+  this does not authenticate the manifest's publisher.
+- [LOW_MEMORY.md](LOW_MEMORY.md): experimental CUDA NF4/QLoRA option for
+  Qwen3.5-0.8B. **4 GiB compatibility has not been demonstrated.**
+- [GGUF_HANDOFF.md](GGUF_HANDOFF.md): inspect a saved PEFT adapter and prepare
+  a private, unexecuted llama.cpp conversion recipe. No GGUF output is built
+  by this source tool.
+
 The current route targets the **text tower** of the official
 [`Qwen/Qwen3.5-0.8B`](https://huggingface.co/Qwen/Qwen3.5-0.8B),
 [`Qwen/Qwen3.5-2B`](https://huggingface.co/Qwen/Qwen3.5-2B) or
