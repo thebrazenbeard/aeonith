@@ -109,6 +109,32 @@ if (scenario === 'normal') {
   rawXml = '<!DOCTYPE w:document [<!ENTITY e "payload">]><w:document/>';
 } else if (scenario === 'embedded_body') {
   elements.push(node('altChunk'));
+} else if (scenario === 'tracked_deletion') {
+  elements.push(node('p'));
+  pushText('retained text');
+  elements.push(node('del'));
+  elements.push(node('delText', [textNode('removed text')]));
+} else if (scenario === 'tracked_insertion') {
+  elements.push(node('p'));
+  elements.push(node('ins'));
+  pushText('not yet accepted');
+} else if (scenario === 'moved_from') {
+  elements.push(node('p'));
+  elements.push(node('moveFrom'));
+  pushText('obsolete location');
+} else if (scenario === 'moved_range') {
+  elements.push(node('p'));
+  elements.push(node('moveFromRangeStart'));
+  pushText('ambiguous location');
+} else if (scenario === 'hidden_run') {
+  elements.push(node('p'));
+  elements.push(node('rPr'));
+  elements.push(node('vanish'));
+  pushText('hidden from readers');
+} else if (scenario === 'web_hidden') {
+  elements.push(node('p'));
+  elements.push(node('webHidden'));
+  pushText('hidden online');
 } else if (scenario === 'wrong_namespace') {
   elements.push(node('p'));
   elements.push(node('t', [textNode('spoof')], 'urn:wrong-namespace'));
@@ -140,7 +166,8 @@ try {
 """
 
 
-def make_docx(text: str, *, duplicate_document: bool = False) -> bytes:
+def make_docx(text: str, *, duplicate_document: bool = False,
+              raw_body: str | None = None) -> bytes:
     contents = (
         '<?xml version="1.0" encoding="UTF-8" standalone="yes"?>'
         '<Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types">'
@@ -158,8 +185,9 @@ def make_docx(text: str, *, duplicate_document: bool = False) -> bytes:
     doc = (
         '<?xml version="1.0" encoding="UTF-8" standalone="yes"?>'
         '<w:document xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main">'
-        '<w:body><w:p><w:r><w:t>' + escape(text) +
-        '</w:t></w:r></w:p></w:body></w:document>'
+        '<w:body>' + (raw_body if raw_body is not None else
+        '<w:p><w:r><w:t>' + escape(text) + '</w:t></w:r></w:p>') +
+        '</w:body></w:document>'
     )
     output = BytesIO()
     with ZipFile(output, "w", ZIP_DEFLATED) as archive:
@@ -188,9 +216,14 @@ class BrowserDocxWorkerTests(unittest.TestCase):
         return json.loads(outcome.stdout.decode("utf-8"))
 
     def _inspect_directory(self, binary: bytes) -> dict:
+        # This driver has no asynchronous worker lifecycle and exits
+        # synchronously after its ZIP-directory assertion. Windows CI can
+        # nevertheless delay Node process startup/stdio long enough for the
+        # old 10-second harness timeout to flake; retain a bounded 30-second
+        # subprocess cap without weakening the pre-decompression security test.
         outcome = subprocess.run(
             ["node", "-e", NODE_ZIP_DIRECTORY_DRIVER],
-            cwd=ROOT, input=binary, capture_output=True, check=False, timeout=10,
+            cwd=ROOT, input=binary, capture_output=True, check=False, timeout=30,
         )
         self.assertEqual(outcome.returncode, 0, outcome.stderr.decode("utf-8", "replace"))
         return json.loads(outcome.stdout.decode("utf-8"))
@@ -201,6 +234,25 @@ class BrowserDocxWorkerTests(unittest.TestCase):
         root = ElementTree.fromstring(result["xml"])
         runs = root.findall(".//{http://schemas.openxmlformats.org/wordprocessingml/2006/main}t")
         self.assertEqual([run.text for run in runs], ["A lantern, a threshold, and a choice."])
+
+    def test_real_docx_revision_and_hidden_markup_survives_bounded_worker(self):
+        # Real ZIP/XML fixtures establish that the worker does not suppress
+        # revision markers; the Window extractor is responsible for rejection.
+        cases = (
+            ('<w:p><w:r><w:t>current</w:t></w:r>'
+             '<w:del w:id="3"><w:r><w:delText>old</w:delText></w:r></w:del></w:p>', 'del'),
+            ('<w:p><w:moveFrom w:id="2"><w:r><w:t>moved</w:t></w:r>'
+             '</w:moveFrom></w:p>', 'moveFrom'),
+            ('<w:p><w:r><w:rPr><w:vanish/></w:rPr>'
+             '<w:t>hidden</w:t></w:r></w:p>', 'vanish'),
+        )
+        namespace = '{http://schemas.openxmlformats.org/wordprocessingml/2006/main}'
+        for body, local_name in cases:
+            with self.subTest(local_name=local_name):
+                result = self._run(make_docx('', raw_body=body))
+                self.assertTrue(result['ok'], result)
+                root = ElementTree.fromstring(result['xml'])
+                self.assertTrue(root.findall(f'.//{namespace}{local_name}'))
 
     def test_legacy_doc_binary_is_not_mislabeled_as_docx(self):
         result = self._run(bytes.fromhex("D0CF11E0A1B11AE1") + b"legacy word binary")
@@ -247,7 +299,7 @@ class BrowserDocxWorkerTests(unittest.TestCase):
     def _run_browser_xml(self, scenario: str) -> dict:
         outcome = subprocess.run(
             ["node", "-e", NODE_XML_DRIVER, scenario],
-            cwd=ROOT, capture_output=True, check=False, timeout=10,
+            cwd=ROOT, capture_output=True, check=False, timeout=30,
         )
         self.assertEqual(outcome.returncode, 0, outcome.stderr.decode("utf-8", "replace"))
         return json.loads(outcome.stdout.decode("utf-8"))
@@ -266,6 +318,16 @@ class BrowserDocxWorkerTests(unittest.TestCase):
         result = self._run_browser_xml("nested_text")
         self.assertFalse(result["ok"], result)
         self.assertIn("unsupported nested text markup", result["error"])
+
+    def test_window_extractor_rejects_ambiguous_revision_and_hidden_text(self):
+        for scenario in (
+            'tracked_deletion', 'tracked_insertion', 'moved_from',
+            'moved_range', 'hidden_run', 'web_hidden',
+        ):
+            with self.subTest(scenario=scenario):
+                result = self._run_browser_xml(scenario)
+                self.assertFalse(result['ok'], result)
+                self.assertIn('tracked changes or hidden text', result['error'])
 
     def test_window_xml_extractor_rejects_oversize_and_complex_documents(self):
         for scenario, expected in (
