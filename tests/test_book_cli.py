@@ -54,7 +54,9 @@ class BookCliTests(unittest.TestCase):
         )
         self.input_path = self.root / "book.md"
         self.output_path = self.root / "review.json"
-        self.input_path.write_text(self.source, encoding="utf-8")
+        # Preserve exact source bytes on Windows; Path.write_text translates
+        # LF to CRLF in text mode and would invalidate Unicode offsets.
+        self.input_path.write_bytes(self.source.encode("utf-8"))
         FakeLocalProvider.calls.clear()
         FakeLocalProvider.constructions.clear()
         FakeLocalProvider.bad_at = None
@@ -148,7 +150,7 @@ class BookCliTests(unittest.TestCase):
 
     def test_checkpoint_excludes_private_prefix_and_marker(self):
         secret = "PRIVATE_PREFIX_SHOULD_NOT_REACH_MODEL"
-        self.input_path.write_text(secret + "[ps]" + self.source, encoding="utf-8")
+        self.input_path.write_bytes((secret + "[ps]" + self.source).encode("utf-8"))
         code, stdout, stderr = self.invoke(
             "--provider", "local-openai-compatible", "--after-marker", "[ps]",
             "--max-segments", "2",
@@ -164,7 +166,7 @@ class BookCliTests(unittest.TestCase):
     def test_missing_or_duplicate_checkpoint_fails_preflight(self):
         for source in ("No checkpoint", "One[ps]Two[ps]Three"):
             with self.subTest(source=source):
-                self.input_path.write_text(source, encoding="utf-8")
+                self.input_path.write_bytes(source.encode("utf-8"))
                 code, stdout, stderr = self.invoke(
                     "--after-marker", "[ps]", "--provider", "local-openai-compatible"
                 )
