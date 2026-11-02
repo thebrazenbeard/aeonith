@@ -39,6 +39,30 @@ vm.runInContext(fs.readFileSync('./public/docx-import-worker.js', 'utf8'), conte
 sandbox.onmessage({ data: { buffer } });
 """
 
+# The ZIP-bomb fixture tests a synchronous *directory metadata* rejection.
+# Invoke that exact production boundary without spawning the worker's async
+# message/DecompressionStream lifecycle; doing so avoids intermittent Windows
+# Node subprocess hangs unrelated to ZIP admission correctness.
+NODE_ZIP_DIRECTORY_DRIVER = r"""
+const fs = require('node:fs');
+const vm = require('node:vm');
+const raw = fs.readFileSync(0);
+const buffer = raw.buffer.slice(raw.byteOffset, raw.byteOffset + raw.byteLength);
+const context = vm.createContext({
+  buffer, TextDecoder, DataView, Uint8Array, ArrayBuffer, Set, self: {}
+});
+vm.runInContext(fs.readFileSync('./public/docx-import-worker.js', 'utf8'), context);
+let result;
+try {
+  vm.runInContext('inspectDocxZip(buffer)', context);
+  result = { ok: true };
+} catch (error) {
+  result = { ok: false, error: error && error.message || String(error) };
+}
+fs.writeSync(1, JSON.stringify(result));
+process.exit(0);
+"""
+
 # Exercise the actual browser extraction function in a Window-like VM without
 # relying on network-loaded DOM libraries. The fake XML tree deliberately
 # throws on `.textContent` and descendant searches, catching quadratic work.
@@ -163,6 +187,14 @@ class BrowserDocxWorkerTests(unittest.TestCase):
         self.assertEqual(outcome.returncode, 0, outcome.stderr.decode("utf-8", "replace"))
         return json.loads(outcome.stdout.decode("utf-8"))
 
+    def _inspect_directory(self, binary: bytes) -> dict:
+        outcome = subprocess.run(
+            ["node", "-e", NODE_ZIP_DIRECTORY_DRIVER],
+            cwd=ROOT, input=binary, capture_output=True, check=False, timeout=10,
+        )
+        self.assertEqual(outcome.returncode, 0, outcome.stderr.decode("utf-8", "replace"))
+        return json.loads(outcome.stdout.decode("utf-8"))
+
     def test_real_docx_streams_verified_document_xml(self):
         result = self._run(make_docx("A lantern, a threshold, and a choice."))
         self.assertTrue(result["ok"], result)
@@ -176,8 +208,9 @@ class BrowserDocxWorkerTests(unittest.TestCase):
 
     def test_compressed_docx_bomb_is_rejected_before_extraction(self):
         # The archive is tiny, but its XML would inflate beyond the 4 MiB
-        # per-entry limit. The worker rejects its directory metadata first.
-        result = self._run(make_docx("A" * (5 * 1024 * 1024)))
+        # per-entry limit. Call the real directory inspector directly, with
+        # no decompression API available, to prove rejection *pre-extraction*.
+        result = self._inspect_directory(make_docx("A" * (5 * 1024 * 1024)))
         self.assertFalse(result["ok"], result)
         self.assertTrue("oversized ZIP entry" in result["error"] or
                         "XML exceeds safe limits" in result["error"], result)
