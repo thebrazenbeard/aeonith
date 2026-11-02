@@ -156,9 +156,18 @@ def _offline_environment() -> None:
     for key, value in {
         "HF_HUB_OFFLINE": "1", "TRANSFORMERS_OFFLINE": "1",
         "HF_DATASETS_OFFLINE": "1", "HF_HUB_DISABLE_TELEMETRY": "1",
-        "WANDB_DISABLED": "true",
+        "WANDB_DISABLED": "true", "CUDA_VISIBLE_DEVICES": "-1",
     }.items():
         os.environ[key] = value
+
+
+def _require_cpu_smoke(device: str) -> None:
+    """An opt-in smoke test is not a host-owned allocation of a shared GPU."""
+    if device != "cpu":
+        raise VerificationError(
+            "CUDA smoke verification is disabled: no host-owned GPU allocation "
+            "gate is implemented; use --device cpu after checking host resources"
+        )
 
 
 def _token_digest(tokens: list[int]) -> str:
@@ -168,17 +177,15 @@ def _token_digest(tokens: list[int]) -> str:
 def smoke_reload(base: Path, adapter: Path, verification: dict[str, Any], *,
                  device: str, max_new_tokens: int) -> dict[str, Any]:
     """Reload the base and adapter in this new CLI process, then generate no prose logs."""
+    _require_cpu_smoke(device)
     _offline_environment()
     import torch
     from peft import PeftModel
     from transformers import AutoModelForCausalLM, AutoTokenizer
 
-    if device == "cuda" and not torch.cuda.is_available():
-        raise VerificationError("CUDA explicitly requested but not available")
-    dtype = torch.float16 if device == "cuda" else torch.float32
     model = AutoModelForCausalLM.from_pretrained(
         str(base), local_files_only=True, trust_remote_code=False,
-        use_safetensors=True, dtype=dtype,
+        use_safetensors=True, dtype=torch.float32,
     ).to(device)
     tokenizer = AutoTokenizer.from_pretrained(str(base), local_files_only=True, trust_remote_code=False)
     inputs = tokenizer.apply_chat_template(
@@ -222,7 +229,8 @@ def main(argv: list[str] | None = None) -> int:
         command.add_argument("--output", type=Path)
         if name == "smoke":
             command.add_argument("--execute", action="store_true")
-            command.add_argument("--device", choices=("cpu", "cuda"), default="cpu")
+            command.add_argument("--device", choices=("cpu", "cuda"), default="cpu",
+                                 help="CPU only; CUDA is refused until host-owned allocation exists")
             command.add_argument("--max-new-tokens", type=int, default=48)
     args = parser.parse_args(argv)
     if args.command == "smoke":
@@ -231,6 +239,8 @@ def main(argv: list[str] | None = None) -> int:
         if not 1 <= args.max_new_tokens <= 128:
             parser.error("--max-new-tokens must be between 1 and 128")
     try:
+        if args.command == "smoke":
+            _require_cpu_smoke(args.device)
         result = inspect_adapter_receipt(args.base, args.adapter, args.receipt)
         if args.command == "smoke":
             try:

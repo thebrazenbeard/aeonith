@@ -10,7 +10,10 @@ import sys
 import tempfile
 import unittest
 
-from training.verify_adapter import VerificationError, inspect_adapter_receipt, write_report_exclusive
+from training.verify_adapter import (
+    VerificationError, _require_cpu_smoke, inspect_adapter_receipt,
+    smoke_reload, write_report_exclusive,
+)
 
 
 def _fingerprint(path: Path) -> dict[str, object]:
@@ -150,6 +153,26 @@ class AdapterReloadTests(unittest.TestCase):
         )
         self.assertNotEqual(result.returncode, 0)
         self.assertIn("--execute", result.stderr)
+
+    def test_cuda_smoke_rejected_before_loading_model_or_creating_output(self) -> None:
+        destination = self.root / "smoke.json"
+        result = subprocess.run(
+            [sys.executable, "-m", "training.verify_adapter", "smoke", "--base", str(self.base),
+             "--adapter", str(self.adapter), "--receipt", str(self.receipt),
+             "--device", "cuda", "--execute", "--output", str(destination)],
+            cwd=Path(__file__).resolve().parents[1], capture_output=True, text=True, check=False,
+        )
+        self.assertEqual(result.returncode, 2, result.stderr)
+        self.assertIn("CUDA smoke verification is disabled", result.stderr)
+        self.assertFalse(destination.exists())
+        self.assertNotIn("adapter weights fixture", result.stdout + result.stderr)
+
+    def test_direct_smoke_api_cannot_bypass_cuda_prohibition(self) -> None:
+        with self.assertRaisesRegex(VerificationError, "CUDA smoke verification is disabled"):
+            _require_cpu_smoke("cuda")
+        with self.assertRaisesRegex(VerificationError, "CUDA smoke verification is disabled"):
+            smoke_reload(self.base, self.adapter, {}, device="cuda", max_new_tokens=1)
+        self.assertIsNone(_require_cpu_smoke("cpu"))
 
 
 if __name__ == "__main__":

@@ -43,9 +43,12 @@ python -m training.verify_adapter smoke \
 
 The output file must not exist, and it cannot be placed within the Aeonith
 checkout. Omit `--output` to write only the sanitized JSON to stdout. **CPU
-is the default** to avoid unexpected contention with other GPU tasks. Only
-use `--device cuda` when a host resource check and authorized GPU budget
-support it. A 4 GiB GPU is not assumed to accommodate any checkpoint.
+is the default** to avoid unexpected contention with other GPU tasks.
+`--device cuda` is currently rejected even with `--execute`: a CLI switch
+cannot establish a host-owned GPU allocation or safe available capacity.
+GPU smoke verification requires a future host-enforced lease and measured
+resource limits. CPU smoke verification still requires checking system RAM,
+disk, and concurrent workloads; no checkpoint size is assumed to fit.
 
 The smoke disables Hugging Face network access and telemetry via offline
 environment settings, loads the local base with `trust_remote_code=False`
