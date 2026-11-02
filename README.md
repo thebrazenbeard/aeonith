@@ -80,7 +80,8 @@ For an already-installed Ollama base, [`models/aeonith-critic/`](models/aeonith-
 python scripts/create-aeonith-model.py --check --base EXISTING_LOCAL_OLLAMA_TAG
 python scripts/create-aeonith-model.py --create --base EXISTING_LOCAL_OLLAMA_TAG
 python -m evaluation.model_pilot --model aeonith-critic:0.1 \
-  --url http://127.0.0.1:11434/v1/chat/completions --lens symbolic --repeats 3
+  --url http://127.0.0.1:11434/v1/chat/completions \
+  --lens symbolic --repeats 1 --max-tokens 2048 --structured-outputs
 ```
 
 The creator refuses to overwrite an existing model tag. The pilot runs only against a numeric loopback endpoint, reports real completion/failure and quote-structure observations without retaining manuscript or critique prose, and explicitly leaves literary quality **unassessed**. See the [model recipe](docs/LOCAL_MODEL.md) and [model pilot](docs/MODEL_PILOT.md). Neither a successful build nor valid JSON means Aeonith has learned new literary ability.
@@ -107,7 +108,8 @@ For a bounded review of a long manuscript or Canto collection, explicitly select
 ```bash
 python -m aeonith.book_cli --input manuscript.md --output ../private-segment-reviews.json \
   --provider local-openai-compatible --url http://127.0.0.1:11434/v1/chat/completions \
-  --model aeonith-critic:0.1 --lens symbolic --max-segments 8
+  --model aeonith-critic:0.1 --lens symbolic --max-segments 8 \
+  --max-output-tokens 2048 --structured-outputs
 ```
 
 The output contains individual excerpts' critiques and may contain private manuscript quotations; keep it outside Git repositories. `--after-marker '[ps]'` restricts model inputs to material strictly after a unique checkpoint marker. The [book-review runbook](docs/BOOK_REVIEW_BATCH.md) specifies exact boundaries and failure codes.

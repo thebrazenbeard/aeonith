@@ -86,6 +86,13 @@ The manifest records the local quantization's license and provenance as
 producer, hash, or redistribution terms. Weights must not be copied to GitHub
 without checking the exact local artifact's origin and legal rights.
 
+One [sanitized Lappy runtime pilot](HOST_PILOT_20261102.md) subsequently
+confirmed a real single-lens structural completion using a locally created
+`aeonith-critic:0.1` based on installed `qwen3:4b-instruct`, **only** with
+JSON-schema output and a 2,048-token request budget. An earlier 800-token
+JSON-object attempt failed validation. This is not a quality or training pass,
+and does not qualify the default Windows launcher settings.
+
 ### Candidate: Granite literary writer
 
 One possible evaluation candidate is
