@@ -26,7 +26,10 @@ const vm = require('node:vm');
 const raw = fs.readFileSync(0);
 const buffer = raw.buffer.slice(raw.byteOffset, raw.byteOffset + raw.byteLength);
 const sandbox = {
-  postMessage: result => { process.stdout.write(JSON.stringify(result)); },
+  // The browser terminates this Worker immediately after its one response.
+  // Mirror that lifecycle in Node: flush the result synchronously, then exit,
+  // instead of waiting for unrelated Node stream/VM handles to become idle.
+  postMessage: result => { fs.writeSync(1, JSON.stringify(result)); process.exit(0); },
   TextDecoder, DataView, Uint8Array, ArrayBuffer, Promise,
   DecompressionStream, setTimeout, clearTimeout, Blob, Set
 };
