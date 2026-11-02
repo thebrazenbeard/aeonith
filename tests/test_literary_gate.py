@@ -113,7 +113,7 @@ class LiteraryGateTests(unittest.TestCase):
             make_packets(self.plan, str(a), str(b), seed="not-for-annotation")
         # Force the Windows CRLF failure mode on every platform: text-mode
         # newline normalization must not turn a terminal CR into an LF.
-        a.write_bytes(a.read_bytes().replace(b"\n", b"\r\n"))
+        a.write_bytes(a.read_bytes().replace(b"\r\n", b"\n").replace(b"\n", b"\r\n"))
         result, _ = account(self.plan, str(a), str(b))
         self.assertEqual(result["journals_with_discarded_incomplete_tails"], 1)
         self.assertEqual(result["candidates"]["candidate-A"]["interrupted"], 1)
