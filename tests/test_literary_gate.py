@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import hashlib
 import os
 from pathlib import Path
 import subprocess
@@ -51,11 +52,13 @@ class LiteraryGateTests(unittest.TestCase):
         self.root = Path(self.tmp.name)
         self.plan = make_plan(["candidate-B", "candidate-A"], "screen")
 
-    def journal(self, candidate: str, *, provider=None):
+    def journal(self, candidate: str, *, provider=None, model=None, artifact_file=None):
         path = self.root / f"{candidate}.jsonl"
         fake = provider or FakeProvider()
-        run_candidate(self.plan, candidate, provider=fake, model="fake-unchanged",
-                      lane="production", journal_path=str(path))
+        run_candidate(self.plan, candidate, provider=fake,
+                      model=model if model is not None else f"fake-{candidate}",
+                      lane="production", journal_path=str(path),
+                      artifact_file=str(artifact_file) if artifact_file else None)
         return path, fake
 
     def test_frozen_stimuli_match_written_literary_gate_and_full_denominators(self):
@@ -82,6 +85,9 @@ class LiteraryGateTests(unittest.TestCase):
         self.assertEqual(result["blinded_pairs_eligible"], 4)
         self.assertEqual(result["blinded_pairs_total"], 6)
         self.assertEqual(result["semantic_quality"], "UNASSESSED")
+        self.assertEqual(result["model_identity_status"],
+                         "DIFFERENT_DECLARED_LABELS_ONLY_RUNTIME_UNVERIFIED")
+        self.assertFalse(result["independent_model_comparison_eligible"])
         if os.name == "posix":
             self.assertEqual(a.stat().st_mode & 0o777, 0o600)
 
@@ -128,10 +134,10 @@ class LiteraryGateTests(unittest.TestCase):
     def test_private_outputs_cannot_land_in_git_checkout_or_symlink_to_it(self):
         repo = Path(__file__).resolve().parents[1]
         forbidden = repo / "never-create-literary-journal-test.jsonl"
-        with self.assertRaisesRegex(ValueError, "outside the Git checkout"):
+        with self.assertRaisesRegex(ValueError, "outside Git checkouts"):
             _private_output_path(str(forbidden))
         self.assertFalse(forbidden.exists())
-        with self.assertRaisesRegex(ValueError, "outside the Git checkout"):
+        with self.assertRaisesRegex(ValueError, "outside Git checkouts"):
             run_candidate(self.plan, "candidate-A", provider=FakeProvider(),
                           model="fake", lane="production", journal_path=str(forbidden))
         self.assertFalse(forbidden.exists())
@@ -141,8 +147,63 @@ class LiteraryGateTests(unittest.TestCase):
         except (OSError, NotImplementedError):
             pass  # Windows can restrict symlink creation without developer mode.
         else:
-            with self.assertRaisesRegex(ValueError, "outside the Git checkout"):
+            with self.assertRaisesRegex(ValueError, "outside Git checkouts"):
                 _private_output_path(str(alias / "never-create.jsonl"))
+
+        unrelated_checkout = self.root / "a-different-repository"
+        (unrelated_checkout / ".git").mkdir(parents=True)
+        (unrelated_checkout / ".git" / "HEAD").write_text("ref: refs/heads/main\n")
+        with self.assertRaisesRegex(ValueError, "outside Git checkouts"):
+            _private_output_path(str(unrelated_checkout / "private-journal.jsonl"))
+        self.assertFalse((unrelated_checkout / "private-journal.jsonl").exists())
+
+    def test_identity_preflight_refuses_same_label_or_same_local_bytes(self):
+        a, _ = self.journal("candidate-A", model="same-model-label")
+        b, _ = self.journal("candidate-B", model="same-model-label")
+        with self.assertRaisesRegex(ValueError, "same declared model label"):
+            account(self.plan, str(a), str(b))
+        with self.assertRaisesRegex(ValueError, "same declared model label"):
+            make_packets(self.plan, str(a), str(b), seed="test")
+
+        a.unlink()
+        b.unlink()
+        file_one = self.root / "first-weights.gguf"
+        file_two = self.root / "different-name-same-weights.gguf"
+        file_one.write_bytes(b"synthetic identical weights")
+        file_two.write_bytes(file_one.read_bytes())
+        a, _ = self.journal("candidate-A", model="different-a", artifact_file=file_one)
+        b, _ = self.journal("candidate-B", model="different-b", artifact_file=file_two)
+        header, _ = load_journal(str(a), self.plan)
+        self.assertEqual(header["local_artifact_sha256"],
+                         hashlib.sha256(file_one.read_bytes()).hexdigest())
+        self.assertNotIn(str(file_one), a.read_text(encoding="utf-8"))
+        with self.assertRaisesRegex(ValueError, "same local model-artifact digest"):
+            account(self.plan, str(a), str(b))
+
+    def test_distinct_local_bytes_still_cannot_prove_provider_binding(self):
+        one = self.root / "base.gguf"
+        two = self.root / "adapter.gguf"
+        one.write_bytes(b"first synthetic artifact")
+        two.write_bytes(b"second synthetic artifact")
+        a, _ = self.journal("candidate-A", model="local", artifact_file=one)
+        b, _ = self.journal("candidate-B", model="local", artifact_file=two)
+        accounting, _ = account(self.plan, str(a), str(b))
+        self.assertEqual(accounting["model_identity_status"],
+                         "DISTINCT_LOCAL_FILE_HASHES_RUNTIME_UNVERIFIED")
+        self.assertFalse(accounting["independent_model_comparison_eligible"])
+        self.assertEqual(accounting["blinded_pairs_eligible"], 6)
+
+    def test_artifact_rejects_empty_and_symlink_without_creating_journal(self):
+        empty = self.root / "empty.gguf"
+        empty.touch()
+        target = self.root / "candidate-A.jsonl"
+        fake = FakeProvider()
+        with self.assertRaisesRegex(ValueError, "must not be empty"):
+            run_candidate(self.plan, "candidate-A", provider=fake, model="x",
+                          lane="production", journal_path=str(target),
+                          artifact_file=str(empty))
+        self.assertFalse(target.exists())
+        self.assertEqual(fake.calls, 0)
 
     def _replace_journal(self, candidate, old_path):
         old_path.unlink()

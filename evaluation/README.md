@@ -92,6 +92,21 @@ python -m evaluation.literary_gate blind \
   --key-out ../aeonith-private/private-assignment-keys.json
 ```
 
+Candidate identity is a separate admission gate. The `run` command can accept
+`--artifact-file /private/model.gguf` to compute and record the SHA-256 of the
+**local file bytes**; only the digest, not its private pathname, is journaled.
+The file is optional for API-only runners. During `account` and `blind`, the
+harness refuses two identical declared model labels without distinct local
+artifact digests, and refuses identical artifact digests even when their
+labels differ. Both cases could otherwise create apparently useful A/B pairs
+from the very same model. Distinct files **still do not establish which bytes
+the loopback runner actually loaded**: no authenticated process-to-artifact
+binding exists. Therefore every summary reports
+`independent_model_comparison_eligible: false`, even when structurally valid
+replies can be prepared for separate human review. A genuine independent
+model comparison must supply externally verified runtime/model provenance.
+This is not a verification claim about candidate training or quality.
+
 `--phase full` freezes 18 cases × three repeats × two candidates = 108
 scheduled attempts. Both phases include the **same two candidates**, and each
 candidate must be run in a separate private journal. A run's full 0600 JSONL
@@ -106,7 +121,8 @@ its scheduled attempt remains a non-success, and blinded packets are **blocked**
 until an operator investigates the journal's integrity. A damaged complete
 line or missing header fails closed. This recovery is conservative accounting,
 **not proof of untampered records or permission to use a damaged run for ratings**.
-The runner rejects journals, blind displays and identity keys inside Git.
+The runner rejects journals, blind displays and identity keys inside **any
+discoverable Git checkout**, not merely this Aeonith repository.
 On Windows, file permissions inherit the parent directory's ACL: POSIX `0600`
 is not a Windows security guarantee. Create a restricted owner-controlled
 directory **outside the checkout**, preferably encrypted, before running.

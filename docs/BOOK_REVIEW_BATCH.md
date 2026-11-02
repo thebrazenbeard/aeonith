@@ -11,7 +11,8 @@ segment size and lens count before using the runner on private writing.
 ## Local-only command
 
 The installed `aeonith-book` command (or `python -m aeonith.book_cli` from
-the checkout) accepts only a named local UTF-8 text/Markdown file and writes a
+the checkout) accepts a named local UTF-8 text/Markdown file or an explicitly
+selected, narrowly supported `.docx` file and writes a
 **new**, private JSON report outside any Git checkout. It never overwrites an existing output path,
 prints manuscript text, runs a paid provider, or selects an external endpoint.
 No model is contacted unless `--provider local-openai-compatible` is supplied.
@@ -24,6 +25,25 @@ python -m aeonith.book_cli --input book.md --output ../private-review.json \
   --max-output-tokens 2048 --call-timeout-seconds 45 \
   --max-total-seconds 600
 ```
+
+For a Word `.docx` manuscript, supply `--input-format docx --input book.docx`
+with the same private output and local provider settings. This is opt-in and
+uses only Python's standard library; it does not upload the original document
+to a conversion service. Input must be a local `.docx` ZIP no larger than
+16 MB, with no more than 256 parts, 64 MB aggregate expanded data, and a
+32 MB per-part ceiling. The extracted UTF-8 text must fit the existing
+2-million-character/8-MB source limits. The importer preserves text from
+ordinary paragraphs, including table-cell paragraphs, tabs and line breaks;
+it discards Word formatting and table layout. It **refuses** comments,
+footnotes/endnotes, headers/footers, tracked/hidden text, drawing and
+embedded/media parts, legacy binary `.doc`, macro documents, XML entities and
+markup-compatibility wrappers that could conceal Word-ignored text, and other
+content that cannot be represented safely as this plain-text subset.
+These refusals protect against silently skipping meaningful writing. **Exact
+source coverage in the segment plan means the extracted text, not every part
+of the original Word package or its visual layout.** Export unsupported Word
+documents locally to reviewed UTF-8 text before using this runner; inspect
+the export for missing content before sending it to a model.
 
 The local runner must already be installed and permitted to process the
 writing. The command defaults to **one symbolic lens**, 2,000 source

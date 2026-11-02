@@ -23,6 +23,7 @@ from .book_review import (
 )
 from .checkpoint import CheckpointError, plan_after_checkpoint
 from .core import CANONICAL_LENSES
+from .docx_source import read_docx_source
 from .longform import LongformPlanError, _read_utf8, plan_longform
 from .providers import LocalOpenAICompatibleProvider
 
@@ -57,9 +58,11 @@ class _DeadlineProvider:
 def _parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         prog="aeonith-book",
-        description="Run bounded, local-only excerpt critiques from a UTF-8 manuscript.",
+        description="Run bounded, local-only excerpt critiques from a manuscript.",
     )
-    parser.add_argument("--input", required=True, help="local UTF-8 text or Markdown file")
+    parser.add_argument("--input", required=True, help="local UTF-8 text, Markdown or DOCX file")
+    parser.add_argument("--input-format", choices=("utf8", "docx"), default="utf8",
+                        help="explicitly opt into bounded DOCX extraction; UTF-8 is default")
     parser.add_argument("--output", required=True, help="new private JSON report; never overwritten")
     parser.add_argument("--title", default="", help="optional single-line manuscript title")
     parser.add_argument("--after-marker", help="only review text strictly after this unique marker")
@@ -123,7 +126,8 @@ def _prepare(args: argparse.Namespace) -> tuple[str, dict[str, Any], list[str], 
     if len(set(lenses)) != len(lenses):
         raise ValueError("duplicate critical lenses")
 
-    source = _read_utf8(args.input)  # strict UTF-8, up to 8 MB
+    source = (read_docx_source(args.input) if args.input_format == "docx"
+              else _read_utf8(args.input))  # strict bounded input; no conversion service
     if args.after_marker is not None:
         plan = plan_after_checkpoint(
             source, marker=args.after_marker, title=args.title,
