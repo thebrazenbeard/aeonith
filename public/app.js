@@ -29,6 +29,35 @@ const MAX_IMPORT_BYTES = 65536;
 const MAX_DOCX_BYTES = 2 * 1024 * 1024;
 const DOCX_PARSE_TIMEOUT_MS = 8000;
 const MAX_LENSES = 14;
+let effectiveMaxLenses = MAX_LENSES;
+let lensLimitKnown = false;
+const lensInputs = Array.from(form.querySelectorAll('input[name="lenses"]'));
+const lensHint = form.querySelector(".lenses-control .field-note");
+const lensSummary = form.querySelector(".lenses-control .summary-aside");
+
+function configureLensCeiling(maxLenses) {
+  lensLimitKnown = Number.isInteger(maxLenses) && maxLenses >= 1 && maxLenses <= MAX_LENSES;
+  effectiveMaxLenses = lensLimitKnown ? maxLenses : MAX_LENSES;
+  const selected = lensInputs.filter((input) => input.checked).length;
+  lensInputs.forEach((input) => {
+    // Never clear the user's choice. Once at capacity, unchecked options are
+    // disabled until one selected lens is unchecked, so changing is possible.
+    input.disabled = lensLimitKnown && !input.checked && selected >= effectiveMaxLenses;
+  });
+  if (lensLimitKnown) {
+    const count = `${effectiveMaxLenses} lens${effectiveMaxLenses === 1 ? "" : "es"}`;
+    if (lensSummary) lensSummary.textContent = `Up to ${count} per review on this service`;
+    if (lensHint) lensHint.textContent = `This service allows up to ${count} per review. Uncheck a selected lens before choosing another when you reach the limit.`;
+  } else {
+    if (lensSummary) lensSummary.textContent = "One selected by default; fourteen available";
+    if (lensHint) lensHint.textContent = "Select one to fourteen perspectives. The operator may impose a lower limit based on the local model. More lenses take longer and may exceed that limit.";
+  }
+}
+
+lensInputs.forEach((input) => input.addEventListener("change", () => {
+  configureLensCeiling(lensLimitKnown ? effectiveMaxLenses : null);
+}));
+configureLensCeiling(null);
 
 // Display the remote-access warning for Tailscale's HTTPS machine.tailnet.ts.net
 // hostnames only. Never construct endpoints or trust a URL supplied by a user.
@@ -179,14 +208,18 @@ async function checkLocalService() {
     if (!response.ok) throw new Error("health unavailable");
     const status = await response.json();
     if (status && status.service === "aeonith" && status.review_configured === true) {
+      configureLensCeiling(status.max_lenses);
       runtimeStatusNode.textContent = "Local model configured · A successful review is not guaranteed.";
       runtimeStatusNode.classList.add("runtime-ready");
     } else if (status && status.service === "aeonith" && status.review_configured === false) {
+      configureLensCeiling(null);
       runtimeStatusNode.textContent = "Local model disabled or unconfigured · Set up a local model to enable reviews.";
     } else {
+      configureLensCeiling(null);
       runtimeStatusNode.textContent = "Local service returned an unexpected health result.";
     }
   } catch {
+    configureLensCeiling(null);
     runtimeStatusNode.textContent = "Local service readiness unavailable · Reviews may not be available.";
   }
 }
@@ -542,6 +575,7 @@ form.addEventListener("submit", async (event) => {
   if (title.length > 500) return showError("The title must contain 500 characters or fewer.");
   if (!lenses.length) return showError("Select at least one critical lens.");
   if (lenses.length > MAX_LENSES) return showError("Choose no more than fourteen lenses for a review.");
+  if (lenses.length > effectiveMaxLenses) return showError(`This service allows no more than ${effectiveMaxLenses} lens${effectiveMaxLenses === 1 ? "" : "es"} per review. Uncheck some lenses before submitting.`);
   if (!token && !browserSessionActive) return showError("Enter your service token or sign in this browser to continue.");
   if (!consentInput.checked) return showError("Confirm that you have permission to submit this writing to the local model.");
   const payload = {

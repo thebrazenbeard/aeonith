@@ -26,6 +26,13 @@ if ($ModelProfile -eq 'aeonith-critic') {
         throw 'The Aeonith critic profile only supports aeonith-critic:0.1.'
     }
     $Model = 'aeonith-critic:0.1'
+} else {
+    # Preserve the historical default, but do not imply it is the literary
+    # critic profile: its 800-token JSON-object pilot did not complete a
+    # structurally valid review. Never switch models without an explicit opt-in.
+    Write-Warning ('Legacy profile selected (800 tokens, JSON-object mode). ' +
+        'The literary-critic structural pilot used -ModelProfile aeonith-critic ' +
+        'with an already-installed aeonith-critic:0.1 model. No model is downloaded.')
 }
 # An alternate loopback port must not silently retarget an external Funnel.
 if ($FunnelOrigin -and $Port -ne 8765) {
@@ -126,7 +133,8 @@ if (Test-Path -LiteralPath $statePath) {
         if ($null -eq $currentListener) {
             throw 'Recorded Aeonith process is not serving the owned loopback port.'
         }
-        Write-Output ('Aeonith already running on 127.0.0.1:' + $Port + ' (PID ' + $previous.ProcessId + ').')
+        Write-Output ('Aeonith already running on 127.0.0.1:' + $Port + ' (PID ' + $previous.ProcessId +
+            ', profile ' + $ModelProfile + ', model ' + $Model + ').')
         if (-not $CopyTokenToClipboard) { return }
     } elseif (Get-Process -Id ([int]$previous.ProcessId) -ErrorAction SilentlyContinue) {
         throw 'Saved Aeonith PID now belongs to another process. Refusing to replace state.'
@@ -259,5 +267,6 @@ $record = @{
     Profile = $ModelProfile
 }
 $record | ConvertTo-Json | Set-Content -LiteralPath $statePath -Encoding UTF8
-Write-Output ('Aeonith ready on 127.0.0.1:' + $Port + ' (PID ' + $service.Id + ').')
+Write-Output ('Aeonith ready on 127.0.0.1:' + $Port + ' (PID ' + $service.Id +
+    ', profile ' + $ModelProfile + ', model ' + $Model + ').')
 Write-Output 'This script has NOT enabled Funnel; public HTTPS must be separately verified and configured.'

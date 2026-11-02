@@ -13,6 +13,9 @@ the service:
 # Local-only until the public origin and Funnel have been approved:
 .\scripts\start-aeonith-windows.ps1
 
+# Literary-critic pilot profile, ONLY if aeonith-critic:0.1 is already installed:
+.\scripts\start-aeonith-windows.ps1 -ModelProfile aeonith-critic
+
 # Or prepare the application to accept exactly this one HTTPS Funnel host:
 .\scripts\start-aeonith-windows.ps1 -FunnelOrigin 'https://machine.tailnet.ts.net'
 
@@ -34,7 +37,12 @@ only one Aeonith instance can be started by this launcher at a time.
 `-Profile aeonith-critic` selects installed tag `aeonith-critic:0.1`, using
 2,048 output tokens with JSON-schema structured output. One harmless
 single-lens structural pilot succeeded with these settings. The legacy
-profile remains default (800 tokens and JSON-object mode). Neither profile
+profile remains default (800 tokens and JSON-object mode) for compatibility,
+but the launcher now warns that it is **not the successful pilot profile**.
+The default model is a coder model and the documented legacy pilot did not
+finish a structurally valid literary review. The launcher reports the chosen
+model and profile; switching profiles requires an explicit command and does
+not download weights. Neither profile
 is qualified for general literary quality or reliable multi-lens review.
 `-PythonExe` can bypass WindowsApps aliases with an existing Python 3.11+
 interpreter on a local fixed drive; both explicit and PATH-discovered paths

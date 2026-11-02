@@ -72,6 +72,15 @@ class WindowsLauncherPolicyTests(unittest.TestCase):
         self.assertIn("[string]$previous.Profile", START)
         self.assertIn("$keepAlive = '5m'", START)
 
+    def test_legacy_profile_is_explicitly_warned_not_silently_upgraded(self):
+        self.assertIn("[string]$ModelProfile = 'legacy'", START)
+        self.assertIn("Write-Warning ('Legacy profile selected", START)
+        self.assertIn("The literary-critic structural pilot used -ModelProfile aeonith-critic", START)
+        self.assertIn("No model is downloaded.", START)
+        # The status must make model/profile differences visible even when
+        # an already-owned listener is reused without restarting it.
+        self.assertIn("', profile ' + $ModelProfile + ', model ' + $Model", START)
+
     def test_alternate_loopback_port_is_checked_and_owned_on_stop(self):
         self.assertIn('[ValidateRange(1024, 65535)]', START)
         self.assertIn('[int]$Port = 8765', START)

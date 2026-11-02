@@ -9,8 +9,9 @@ import subprocess
 import sys
 import tempfile
 import unittest
+from unittest.mock import patch
 
-from training.export_gguf import HandoffError, inspect_handoff, prepare_handoff
+from training.export_gguf import HandoffError, _require_private_directory_permissions, inspect_handoff, prepare_handoff
 
 
 REVISION = "b" * 40
@@ -99,6 +100,16 @@ class GGUFHandoffTests(unittest.TestCase):
             prepare_handoff(self.base, self.adapter, self.receipt, self.expected,
                             self.script, self.script_hash, self.out)
         self.assertEqual(marker.read_text(encoding="utf-8"), "don't overwrite")
+
+    def test_windows_legacy_python_refuses_private_plan_before_creation(self):
+        with patch("training.export_gguf.sys.platform", "win32"):
+            with patch("training.export_gguf.sys.version_info", (3, 12, 9)):
+                with self.assertRaisesRegex(HandoffError, "Python 3.13\\+"):
+                    prepare_handoff(self.base, self.adapter, self.receipt, self.expected,
+                                    self.script, self.script_hash, self.out)
+            with patch("training.export_gguf.sys.version_info", (3, 13, 0)):
+                _require_private_directory_permissions()
+        self.assertFalse(self.out.exists())
 
     def test_bad_converter_digest_rejected(self):
         with self.assertRaisesRegex(HandoffError, "fingerprint mismatch"):

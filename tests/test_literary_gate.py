@@ -10,10 +10,12 @@ import sys
 import tempfile
 import unittest
 
+from aeonith.core import critique
 from evaluation.literary_gate import (
-    _private_output_path, account, load_cases, load_journal, make_packets,
+    _private_output_path, _request, account, load_cases, load_journal, make_packets,
     make_plan, run_candidate,
 )
+from evaluation.quality_eval import audit_review
 
 
 class FakeProvider:
@@ -163,6 +165,25 @@ class LiteraryGateTests(unittest.TestCase):
         self.assertEqual(len(pair_ids), len(set(pair_ids)))
         self.assertEqual([row["pair"]["pair_id"] for row in displays["pairs"]],
                          [row["key"]["pair_id"] for row in keys["keys"]])
+
+    def test_source_anchor_pass_does_not_verify_quotes_in_free_form_analysis(self):
+        class InventedProseQuote(FakeProvider):
+            def review(self, payload):
+                candidate = super().review(payload)
+                candidate["lens_reviews"][0]["analysis"] = (
+                    'The passage says "The bell rang ten times" in Chapter Twelve.'
+                )
+                return candidate
+
+        request = _request(load_cases()[0])
+        self.assertNotIn("The bell rang ten times", request["work"]["text"])
+        review = critique(request, InventedProseQuote())
+        self.assertEqual(review["status"], "completed")
+        audit = audit_review(request, review)
+        # This is deliberately a structural pass, NOT a literary/quote-integrity
+        # success: only explicit support anchors are checked for source match.
+        self.assertEqual(audit["structural_status"], "pass")
+        self.assertEqual(audit["semantic_quality"], "UNASSESSED")
 
     def test_cross_candidate_and_lane_journals_refused(self):
         a, _ = self.journal("candidate-A")

@@ -3,8 +3,9 @@
 from __future__ import annotations
 
 from http.server import BaseHTTPRequestHandler
+import os
 
-from aeonith.service import encode_result, is_ready
+from aeonith.service import _review_settings, encode_result, is_ready
 
 
 class handler(BaseHTTPRequestHandler):
@@ -23,11 +24,21 @@ class handler(BaseHTTPRequestHandler):
         self.wfile.write(body)
 
     def do_GET(self) -> None:
+        ready = is_ready()
+        max_lenses = None
+        if ready:
+            try:
+                max_lenses = _review_settings(os.environ)[0]
+            except (TypeError, ValueError):
+                # Do not advertise a usable limit if configuration changed or
+                # became malformed between readiness and this request.
+                ready = False
         self._respond(200, {
             "schema_version": "aeonith.health.v1",
             "service": "aeonith",
             "status": "ok",
-            "review_configured": is_ready(),
+            "review_configured": ready,
+            "max_lenses": max_lenses,
         })
 
     def do_POST(self) -> None:

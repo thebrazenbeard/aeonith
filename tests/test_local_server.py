@@ -137,6 +137,25 @@ class LocalServerTests(unittest.TestCase):
                 payload = json.loads(body)
                 self.assertEqual(payload["service"], "aeonith")
                 self.assertFalse(payload["review_configured"])
+                self.assertIsNone(payload["max_lenses"])
+
+    def test_public_health_exposes_bounded_lens_ceiling_only_when_configured(self):
+        for limit, expected_ready, expected_ceiling in (
+            ("1", True, 1), ("14", True, 14),
+            ("0", False, None), ("15", False, None),
+            ("not-a-number", False, None),
+        ):
+            with self.subTest(limit=limit), patch.dict(
+                os.environ, {**_CONFIG, "AEONITH_MAX_LENSES": limit}, clear=True
+            ):
+                status, headers, body = self._request("/healthz")
+                self.assertEqual(status, 200)
+                self.assertEqual(headers["Cache-Control"], "no-store")
+                payload = json.loads(body)
+                self.assertEqual(payload["review_configured"], expected_ready)
+                self.assertEqual(payload["max_lenses"], expected_ceiling)
+                self.assertNotIn("AEONITH_SERVICE_TOKEN", payload)
+                self.assertNotIn(_TOKEN, body.decode("utf-8"))
 
     def test_rejects_unknown_methods_and_path_traversal(self):
         for path in ("/aeonith/service.py", "/%2e%2e/README.md", "/.env",

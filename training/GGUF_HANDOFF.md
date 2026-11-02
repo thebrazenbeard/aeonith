@@ -63,6 +63,9 @@ To produce a **private, not-yet-executed** command plan instead, supply
 `--prepare --output /private/new-handoff-dir`. The new output directory must
 not exist, and will hold only `handoff_plan.json`, with a locally scoped
 `conversion_argv_not_executed`, offline environment, and file hash references.
+On Windows, private plan creation requires **Python 3.13 or newer**, because
+earlier Python releases do not enforce the private access-control semantics of
+`mkdir(mode=0o700)`; read-only inspection still works on older versions.
 No `.gguf` is created by `--prepare`; **there is no conversion execution flag**.
 Review this plan and the exact converter revision before manually performing
 any real conversion outside this source-only tool. Do not put full model

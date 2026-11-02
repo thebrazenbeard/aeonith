@@ -29,6 +29,20 @@ HEX64 = re.compile(r"^[0-9a-f]{64}$")
 MAX_CONVERTER_BYTES = 2 * 1024 * 1024
 
 
+def _require_private_directory_permissions() -> None:
+    """Refuse private recipe creation where the requested mode lacks an ACL.
+
+    CPython 3.13 first applies Windows access controls for mkdir(mode=0o700).
+    Windows 3.11/3.12 silently ignore that protection. Do not create a plan
+    containing private absolute paths under unverified inherited ACLs.
+    """
+    if sys.platform == "win32" and sys.version_info < (3, 13):
+        raise HandoffError(
+            "private GGUF recipe creation requires Python 3.13+ on Windows "
+            "for owner-only directory access; inspection remains available"
+        )
+
+
 def _digest(path: Path) -> str:
     digest = hashlib.sha256()
     with path.open("rb") as stream:
@@ -124,6 +138,7 @@ def prepare_handoff(base: str | Path, adapter: str | Path, receipt: str | Path,
     if any(destination == item or item in destination.parents or destination in item.parents
            for item in paths.values()):
         raise HandoffError("output must not overlap a model artifact or evidence file")
+    _require_private_directory_permissions()
     # The adapter GGUF is intentionally NOT made here. The explicit --base
     # prevents llama.cpp converter's Hub fallback, but this command must still
     # be independently reviewed against the exact local converter revision.
