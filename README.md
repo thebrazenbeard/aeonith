@@ -16,7 +16,9 @@ Aeonith has two separate capabilities:
 - Typed review results with a synthesis, lens-by-lens interpretation, challenges, uncertainties, evidence pointers and candid insufficient-evidence outcomes.
 - Source-exact quoted-passage checks and caller-supplied evidence-reference checks. A quote's presence **does not establish that the interpretation is true**.
 - Optional exact-quote offset and fingerprint sidecar; deterministic planning for long manuscripts using bounded excerpts, **not** automatic whole-book comprehension.
+- Source-fingerprinted checkpoint and segmented book-review APIs, plus an opt-in local-only `aeonith-book` CLI. Numbered Canto headings are recognized; each segment is reviewed independently, with no invented whole-book synthesis.
 - Local evaluation fixtures and a blinded human-evaluation workflow. Structural acceptance tests are **not** measures of literary quality.
+- A versioned `aeonith-critic:0.1` Ollama **recipe**, a guarded local-model creator, and a sanitized real-model pilot. The recipe uses an already-installed base and does not contain newly trained weights.
 - Opt-in model adapters, including a constrained local OpenAI-style Chat Completions route. No invented critiques on missing-provider, rejected-input, failed-model, or invalid-output paths.
 - A same-origin browser interface with manuscript editor, lens selection, and a token-protected local review endpoint. The default is provider-disabled and loopback-only. Optional Funnel browser sessions let a trusted operator enter the bearer token once per browser instead of on every review; no external identity or billing service is involved. The browser can import local UTF-8 text/Markdown and Word `.docx` files without uploading the original file to a conversion endpoint. A dependency-free ZIP extractor runs inside a time-bounded Web Worker, using browser-native `DecompressionStream` and a bounded XML parser.
 - An optional, explicit `AEONITH_FUNNEL_ORIGIN` allowlist for one Tailscale `.ts.net` HTTPS hostname. The listener and GGUF model remain bound to localhost, and review authentication still applies. This code path must be separately verified on the actual host before calling it a live public service.
@@ -70,6 +72,21 @@ one lens and more demanding reviews require independent model validation.
 
 `AEONITH_PROVIDER_MODEL=local` is a model label for a simple single-model KoboldCpp instance, not a model download instruction. If your runner requires a particular model ID, use the ID it exposes. Local model interoperability and output quality must be checked with a harmless test passage; not all compatible APIs support JSON mode or structured output equally. The service deliberately does **not** fall back to a remote model if local inference fails.
 
+### Reproducible local critic model
+
+For an already-installed Ollama base, [`models/aeonith-critic/`](models/aeonith-critic/) contains a checked Modelfile recipe. Its creator issues no model-pull command and does not redistribute base weights; the independently running Ollama daemon's network behavior must still be checked:
+
+```bash
+python scripts/create-aeonith-model.py --check --base EXISTING_LOCAL_OLLAMA_TAG
+python scripts/create-aeonith-model.py --create --base EXISTING_LOCAL_OLLAMA_TAG
+python -m evaluation.model_pilot --model aeonith-critic:0.1 \
+  --url http://127.0.0.1:11434/v1/chat/completions --lens symbolic --repeats 3
+```
+
+The creator refuses to overwrite an existing model tag. The pilot runs only against a numeric loopback endpoint, reports real completion/failure and quote-structure observations without retaining manuscript or critique prose, and explicitly leaves literary quality **unassessed**. See the [model recipe](docs/LOCAL_MODEL.md) and [model pilot](docs/MODEL_PILOT.md). Neither a successful build nor valid JSON means Aeonith has learned new literary ability.
+
+An optional [offline LoRA/SFT training lane](training/README.md) validates explicitly authorized private data and locally present official Qwen3.5 Transformers weights. Training is opt-in, requires additional locally installed ML dependencies, and has **not** produced an Aeonith adapter in this repository. Base/adapter provenance, actual weight changes, a fresh-process reload, held-out comparisons and human assessment remain required before a trained-model release.
+
 If a local model is not already running, you can still run the library, tests, source planner, and offline evaluation without any network calls. To inspect the browser shell with reviews disabled, leave `AEONITH_ENABLE_LIVE_REVIEWS` unset and run `python3 -m aeonith.local_server` after configuring a strong service token.
 
 The exact HTTP routes, environment options, security limitations, and local verification steps are in the [self-hosted service runbook](docs/SERVICE_DEPLOYMENT.md). For an **optional public URL**, see the [Tailscale Funnel runbook](docs/TAILSCALE_FUNNEL.md); it explicitly requires a no-charge eligible account, hardened security checks, and a real HTTPS probe. See [release gates](docs/RELEASE_GATES.md) before describing a machine-specific model setup as qualified.
@@ -84,6 +101,16 @@ python3 -m aeonith.workflow --input draft.md --title "A draft"
 ```
 
 With no provider chosen, review status is `provider_unavailable` and the command exits `3`. This is intentional: prompt preparation and structural validation without a language model do not constitute literary criticism. Replace `draft.md` with an existing UTF-8 `.txt` or `.md` manuscript file for the workflow command.
+
+For a bounded review of a long manuscript or Canto collection, explicitly select a **local** provider and a new private output path. The command defaults to one `symbolic` lens and stops at its segment/time budget:
+
+```bash
+python -m aeonith.book_cli --input manuscript.md --output ../private-segment-reviews.json \
+  --provider local-openai-compatible --url http://127.0.0.1:11434/v1/chat/completions \
+  --model aeonith-critic:0.1 --lens symbolic --max-segments 8
+```
+
+The output contains individual excerpts' critiques and may contain private manuscript quotations; keep it outside Git repositories. `--after-marker '[ps]'` restricts model inputs to material strictly after a unique checkpoint marker. The [book-review runbook](docs/BOOK_REVIEW_BATCH.md) specifies exact boundaries and failure codes.
 
 To use an explicitly selected **local** Chat Completions endpoint from the JSON CLI:
 

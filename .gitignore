@@ -7,3 +7,22 @@ wheelhouse/
 build/
 .pytest_cache/
 .coverage
+
+# Operator secrets and encrypted local state must never be published.
+.env
+.env.*
+!.env.example
+*.dpapi
+*.pem
+*.key
+
+# Raw local weights, checkpoints and training output are not source files.
+# Publishing an approved small adapter requires a deliberate artifact review.
+*.gguf
+*.safetensors
+*.ckpt
+*.pt
+*.pth
+*.onnx
+checkpoints/
+training-output/

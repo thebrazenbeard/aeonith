@@ -423,9 +423,21 @@ class _LocalHandler(ReviewHandler):
         if route == "review":
             admission = self.server.public_limiter
             if admission is None:
-                # Provider remains strictly loopback. The private-only path
-                # retains the original auth-before-manuscript behavior.
-                ReviewHandler.do_POST(self)
+                # The local model may fit in only a few GB of memory. Even on
+                # a private loopback listener, do not queue concurrent model
+                # calls that could exhaust the host. Check authorization before
+                # reserving capacity or reading any manuscript bytes.
+                status, result = authorize(self.headers)
+                if status is not None:
+                    self._respond(status, result or _error("unauthorized", "Authorization required"))
+                    return
+                if not self.server.private_review_slot.acquire(blocking=False):
+                    self._rate_limited("review_rate_limited", 1)
+                    return
+                try:
+                    ReviewHandler.do_POST(self)
+                finally:
+                    self.server.private_review_slot.release()
                 return
             # Public mode has a global local throttle, independent of Host
             # spelling. A forged Host: localhost header cannot evade quotas.
@@ -503,6 +515,9 @@ def create_server(host: str = "127.0.0.1", port: int = 8765,
 
         def __init__(self, *args, **kwargs):
             self._connection_slots = threading.BoundedSemaphore(_MAX_CONNECTIONS)
+            # Per-process admission only; separately launched model clients
+            # are outside this server's resource boundary.
+            self.private_review_slot = threading.BoundedSemaphore(1)
             self.funnel_host = configured_funnel_host
             self.public_limiter = LocalAdmission() if configured_funnel_host else None
             super().__init__(*args, **kwargs)

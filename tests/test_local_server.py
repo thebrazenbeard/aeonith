@@ -187,6 +187,67 @@ class LocalServerTests(unittest.TestCase):
         self.assertEqual(payload["status"], "completed")
         self.assertEqual(payload["provenance"]["provider_name"], "fixture_local_model")
 
+    def test_private_model_review_has_single_inflight_slot(self):
+        """A busy local model denies excess work before parsing its body."""
+        entered = threading.Event()
+        release = threading.Event()
+
+        class BlockingModel(_FakeLocalModel):
+            def review(self, payload):
+                entered.set()
+                if not release.wait(3):
+                    raise RuntimeError("test provider was not released")
+                return super().review(payload)
+
+        headers = {
+            "Content-Type": "application/json",
+            "Authorization": "Bearer " + _TOKEN,
+        }
+        first = {}
+
+        def first_review():
+            first["response"] = self._request(
+                "/api/review", method="POST", body=json.dumps(_WORK).encode("utf-8"),
+                headers=headers,
+            )
+
+        with patch.dict(os.environ, _CONFIG, clear=True), \
+             patch("aeonith.service._construct_provider", return_value=BlockingModel()):
+            thread = threading.Thread(target=first_review)
+            thread.start()
+            try:
+                self.assertTrue(entered.wait(2), "first local review did not reach model")
+                # A second valid bearer must be rejected before model input
+                # framing/JSON is inspected, even if the body is invalid.
+                status, response_headers, data = self._request(
+                    "/api/review", method="POST", body=b"{not valid JSON",
+                    headers=headers,
+                )
+                self.assertEqual(status, 429)
+                self.assertEqual(response_headers["Retry-After"], "1")
+                self.assertEqual(json.loads(data)["error"]["code"], "review_rate_limited")
+
+                # Bad credentials still receive 401, not a clue about whether
+                # the model is currently busy.
+                status, _, _ = self._request(
+                    "/api/review", method="POST", body=b"secret body",
+                    headers={"Authorization": "Bearer invalid"},
+                )
+                self.assertEqual(status, 401)
+                # Static assets and health remain available while inference runs.
+                self.assertEqual(self._request("/healthz")[0], 200)
+            finally:
+                release.set()
+                thread.join(timeout=5)
+
+            self.assertFalse(thread.is_alive())
+            self.assertEqual(first["response"][0], 200)
+            # Successful completion frees the slot for another review.
+            self.assertEqual(self._request(
+                "/api/review", method="POST", body=json.dumps(_WORK).encode("utf-8"),
+                headers=headers,
+            )[0], 200)
+
 
 class PublicSessionTests(unittest.TestCase):
     """Real HTTP handling of a signed, host-pinned Funnel browser session."""
