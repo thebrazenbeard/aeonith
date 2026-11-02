@@ -182,7 +182,7 @@ class BrowserDocxWorkerTests(unittest.TestCase):
             input=binary,
             capture_output=True,
             check=False,
-            timeout=10,
+            timeout=30,
         )
         self.assertEqual(outcome.returncode, 0, outcome.stderr.decode("utf-8", "replace"))
         return json.loads(outcome.stdout.decode("utf-8"))

@@ -54,12 +54,29 @@ def _version_at_least(version: str, minimum: tuple[int, int]) -> bool:
     return bool(match and (int(match[1]), int(match[2])) >= minimum)
 
 
-def _train(plan_path: Path, output: Path) -> dict[str, Any]:
+def _require_cpu_training(device: str) -> None:
+    """Refuse GPU use until a real host-owned allocation gate exists.
+
+    A caller's --execute flag is consent to start this one job, not evidence
+    that a shared GPU has available capacity or an exclusive resource lease.
+    """
+    if device != "cpu":
+        raise CorpusError(
+            "CUDA training is disabled: no host-owned GPU allocation gate is "
+            "implemented; use --device cpu after checking host RAM and workload"
+        )
+
+
+def _train(plan_path: Path, output: Path, *, device: str = "cpu") -> dict[str, Any]:
+    _require_cpu_training(device)
     # None of these options may trigger a Hub download, phone home, or paid call.
     os.environ["HF_HUB_OFFLINE"] = "1"
     os.environ["TRANSFORMERS_OFFLINE"] = "1"
     os.environ["HF_DATASETS_OFFLINE"] = "1"
     os.environ["WANDB_DISABLED"] = "true"
+    # Must be set before importing torch or Accelerate. The explicit SFTConfig
+    # CPU setting below is a second guard against Trainer's auto device choice.
+    os.environ["CUDA_VISIBLE_DEVICES"] = "-1"
 
     preflight, dataset = inspect_plan(plan_path)
     if not _version_at_least(metadata.version("transformers"), (5, 2)):
@@ -83,10 +100,9 @@ def _train(plan_path: Path, output: Path) -> dict[str, Any]:
     # The TRL Qwen3.5 regression tests explicitly exercise this mapping:
     # AutoModelForCausalLM loads the *text tower* from a multimodal checkpoint.
     # It does not train the vision encoder. No trust_remote_code or network access.
-    device_is_cuda = torch.cuda.is_available()
     model = AutoModelForCausalLM.from_pretrained(
         str(base_dir), local_files_only=True, trust_remote_code=False,
-        use_safetensors=True, dtype=torch.float16 if device_is_cuda else torch.float32,
+        use_safetensors=True, dtype=torch.float32,
     )
     tokenizer = AutoTokenizer.from_pretrained(str(base_dir), local_files_only=True, trust_remote_code=False)
     if tokenizer.pad_token is None:
@@ -126,8 +142,9 @@ def _train(plan_path: Path, output: Path) -> dict[str, Any]:
         gradient_checkpointing=True,
         completion_only_loss=True,
         packing=False,
-        fp16=device_is_cuda,
+        fp16=False,
         bf16=False,
+        use_cpu=True,
         eval_strategy="no",
         save_strategy="no",
         logging_strategy="no",
@@ -202,6 +219,8 @@ def main(argv: list[str] | None = None) -> int:
     train.add_argument("--plan", type=Path, required=True)
     train.add_argument("--output", required=True)
     train.add_argument("--execute", action="store_true", help="Explicitly permit local training and output creation")
+    train.add_argument("--device", choices=("cpu", "cuda"), default="cpu",
+                       help="CPU only; CUDA is rejected until host-owned GPU allocation is implemented")
     args = parser.parse_args(argv)
     try:
         if args.command == "inspect":
@@ -209,8 +228,9 @@ def main(argv: list[str] | None = None) -> int:
         else:
             if not args.execute:
                 parser.error("train requires explicit --execute")
+            _require_cpu_training(args.device)
             destination = _output_path(args.output)
-            receipt = _train(args.plan.resolve(), destination)
+            receipt = _train(args.plan.resolve(), destination, device=args.device)
         print(json.dumps(receipt, indent=2, sort_keys=True))
         return 0
     except (CorpusError, FileNotFoundError, ImportError, OSError) as exc:

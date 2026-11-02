@@ -12,7 +12,7 @@ import tempfile
 import unittest
 
 from training.corpus import CorpusError, inspect_plan
-from training.train_lora import fingerprint_adapter
+from training.train_lora import _require_cpu_training, _train, fingerprint_adapter
 
 
 REVISION = "a" * 40
@@ -205,6 +205,26 @@ class TrainingContractTests(unittest.TestCase):
         self.assertNotEqual(result.returncode, 0)
         self.assertIn("--execute", result.stderr)
         self.assertFalse((self.root / "adapter").exists())
+
+    def test_training_cuda_is_fail_closed_before_loading_optional_dependencies(self) -> None:
+        # Even explicit --execute is not proof of an available/exclusive GPU.
+        result = subprocess.run(
+            [sys.executable, "-m", "training.train_lora", "train", "--plan", str(self.plan_path),
+             "--output", str(self.root / "adapter"), "--device", "cuda", "--execute"],
+            cwd=Path(__file__).resolve().parents[1], capture_output=True, text=True, check=False
+        )
+        self.assertEqual(result.returncode, 2, result.stderr)
+        self.assertIn("CUDA training is disabled", result.stderr)
+        self.assertFalse((self.root / "adapter").exists())
+        self.assertNotIn("The rain fell", result.stdout + result.stderr)
+
+    def test_direct_training_api_cannot_bypass_gpu_prohibition(self) -> None:
+        with self.assertRaisesRegex(CorpusError, "CUDA training is disabled"):
+            _require_cpu_training("cuda")
+        with self.assertRaisesRegex(CorpusError, "CUDA training is disabled"):
+            _train(self.plan_path, self.root / "adapter", device="cuda")
+        self.assertFalse((self.root / "adapter").exists())
+        self.assertIsNone(_require_cpu_training("cpu"))
 
     def test_fingerprint_adapter_hashes_bytes_without_claiming_quality(self) -> None:
         adapter = self.root / "adapter"

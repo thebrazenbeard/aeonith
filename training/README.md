@@ -104,7 +104,7 @@ reduces baseline memory demand but is not a resource guarantee.
 python -m training.train_lora train \
   --plan /local/private/training-plan.json \
   --output /local/private/new-aeonith-run \
-  --execute
+  --device cpu --execute
 ```
 
 `--execute` is mandatory, and the new output directory must not exist or sit
@@ -114,6 +114,16 @@ offline mode, loads only an already-present local safetensors checkpoint with
 Qwen3.5 **text-only** tower. It uses a small LoRA targeting `q_proj` and
 `v_proj`, loss on completion tokens, an explicit training-step limit, no Hub
 push, no trackers, no model downloads, and no checkpoints by default.
+
+**Resource boundary:** Training defaults to `--device cpu`; it also disables
+CUDA visibility before loading ML dependencies and sets the trainer's CPU
+policy explicitly. `--device cuda` is deliberately rejected even with
+`--execute`, because a user flag is not a host-owned GPU resource allocation.
+The current project has no verified CUDA lease/preflight gate. CPU training
+still requires the operator to check available **system RAM, disk space and
+competing workloads** before opting in; none of the three model sizes is
+qualified to fit an arbitrary machine. Future GPU support requires a real
+host-enforced allocation and measured memory limits, not another CLI checkbox.
 
 The command rejects records that exceed the configured token context rather
 than silently truncating a completion. It checks that trainable tensors really

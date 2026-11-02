@@ -13,10 +13,23 @@ import json
 import math
 import os
 import re
+import sys
 from collections import Counter
 from copy import deepcopy
 from pathlib import Path
 from typing import Any
+
+# Preserve the longstanding `python evaluation/quality_eval.py` CLI invocation:
+# its script directory, unlike `python -m evaluation.quality_eval`, is the only
+# project path Python automatically inserts. Import only from this file's own
+# checked-out repository root, never from user input or a runtime endpoint.
+if __package__ in (None, ""):
+    sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
+
+from aeonith.semantic_controls import (
+    MAX_EXCERPT_CHARACTERS as SEMANTIC_TRIAGE_EXCERPT_LIMIT,
+    audit_semantic_risks,
+)
 
 
 REVIEW_SCHEMA = "aeonith.review.v1"
@@ -235,6 +248,22 @@ def audit_review(request: dict[str, Any], review: dict[str, Any]) -> dict[str, A
             or any(not isinstance(x, str) or not x.strip() or len(x) > 1000
                    for x in uncertainties)):
         violations.append({"code": "invalid_uncertainties", "path": "uncertainties"})
+    # Supplemental lexical *warnings* only, and only after a structurally
+    # valid review. These hints never change the structural pass/fail verdict
+    # or imply that interpretation has been semantically verified.
+    if not violations and len(text) <= SEMANTIC_TRIAGE_EXCERPT_LIMIT:
+        try:
+            semantic_triage = audit_semantic_risks(request, review)
+        except (ValueError, TypeError, RecursionError):
+            # Malformed inputs and unsupported overlength fields retain their
+            # independent structural outcome; no guessed literary verdict.
+            pass
+        else:
+            for hint in semantic_triage["warnings"]:
+                warnings.append({
+                    "code": hint["code"], "path": hint["path"],
+                    "message": "Advisory lexical risk; inspect the claim against the excerpt manually.",
+                })
     return {
         "schema_version": AUDIT_SCHEMA,
         "structural_status": "fail" if violations else "pass",
