@@ -49,6 +49,62 @@ python evaluation/quality_eval.py manifest \
   --parameters decoding_parameters.json --out run_manifest.json
 ```
 
+### Precommitted literary challenge-run accounting (source-only; not yet run)
+
+`docs/LITERARY_QUALITY_GATE.md` defines 18 original tiny passages and a
+two-candidate, two-lane protocol. A small **standard-library-only** harness
+extracts those exact cases from that document. It does not use benchmark data
+to fine-tune a model or infer a literary truth score.
+
+```bash
+# Offline: creates a new source-grounded 3-case × 2-candidate × 2-repeat plan.
+python -m evaluation.literary_gate plan \
+  --candidate incumbent --candidate challenger --phase screen \
+  --out screen-plan.json
+
+# Only on an owner-qualified machine with an already-running local model:
+# Explicit --host-qualified is the operator's assertion, NOT an automated check.
+python -m evaluation.literary_gate run \
+  --plan screen-plan.json --candidate incumbent --model your-local-model-name \
+  --url http://127.0.0.1:5001/v1/chat/completions \
+  --lane production --host-qualified --out private-incumbent.jsonl
+# Repeat run with the other candidate and its own local model/runner.
+
+# Offline: every scheduled slot counts even when its attempt failed or is missing.
+python -m evaluation.literary_gate account \
+  --plan screen-plan.json --first private-incumbent.jsonl \
+  --second private-challenger.jsonl --out private-attrition.json
+
+# Offline: only structurally valid paired responses become blind displays.
+# Keep the assignment key in a different access-controlled directory.
+python -m evaluation.literary_gate blind \
+  --plan screen-plan.json --first private-incumbent.jsonl \
+  --second private-challenger.jsonl --seed study-seed-v1 \
+  --out reviewer-displays.json --key-out private/assignment-keys.json
+```
+
+`--phase full` freezes 18 cases × three repeats × two candidates = 108
+scheduled attempts. Both phases include the **same two candidates**, and each
+candidate must be run in a separate private journal. A run's full 0600 JSONL
+journal contains original synthetic passages and **raw model prose**; the
+accounting output omits both and reports `structural_pass`, `structural_fail`,
+`provider_noncompletion`, `interrupted`, and `not_attempted` against the complete denominator.
+Model failures are recorded, not hidden behind a successful A/B pair rate.
+Journal writes are flushed and synchronized after each attempt; a crash is
+distinguished from an unstarted slot when a start receipt was persisted. Run on
+owner-controlled encrypted/access-restricted storage, outside Git; `.gitignore`
+cannot prevent an operator from explicitly adding a private result file.
+
+This harness can only attest the operator **said** the host had spare
+resources, rights to the model and no contested training/service workloads. It
+does not inspect real CPU/GPU process ownership, spend, licenses or privacy
+settings, and must not be invoked before those are independently checked.
+The local provider rejects remote, credentialed, redirected, and proxy-routed
+HTTP. Real model latency, semantic insight, blinded human ratings, and host
+qualification remain unassessed. Repeated identical model outputs get unique
+attempt-instance pair IDs for downstream annotations; repetitions remain
+correlated observations, not independent literary works.
+
 `audit` exits 1 on hard failures, while warnings are nonfatal by default.
 Use `audit --fail-on-warnings` to opt into a stricter policy gate (exit 3),
 recognizing its false-positive risk. `blind`
