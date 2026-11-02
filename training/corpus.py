@@ -80,8 +80,13 @@ def _check_row(raw: Any, split: str, number: int) -> dict[str, str]:
             raise CorpusError(f"invalid {name} at {split} row {number}")
     if not isinstance(obj["rights_basis"], str) or obj["rights_basis"] not in RIGHTS_BASIS:
         raise CorpusError(f"unknown rights basis at {split} row {number}")
-    if obj["permission_to_train"] is not True or obj["permission_to_publish_adapter"] is not True:
-        raise CorpusError(f"missing permission at {split} row {number}")
+    if obj["permission_to_train"] is not True:
+        raise CorpusError(f"missing training permission at {split} row {number}")
+    # Private local experiments and subsequent adapter publication are separate
+    # authorizations. Reject malformed flags rather than treating truthy JSON
+    # numbers/strings as consent, but do not force publication consent to train.
+    if type(obj["permission_to_publish_adapter"]) is not bool:
+        raise CorpusError(f"invalid adapter publication permission at {split} row {number}")
     if obj["rights_basis"] == "licensed" and not (isinstance(obj.get("license_id"), str) and obj["license_id"].strip()):
         raise CorpusError(f"licensed data requires license_id at {split} row {number}")
     return obj
@@ -173,6 +178,10 @@ def inspect_plan(plan_path: str | Path) -> tuple[dict[str, Any], dict[str, list[
         raise CorpusError("train/validation/holdout paths overlap")
     dataset = {split: _read_split(resolved[split], split) for split in SPLITS}
     _check_isolation(dataset)
+    publication_flags_complete = all(
+        record["permission_to_publish_adapter"]
+        for split in SPLITS for record in dataset[split]
+    )
     receipt = {
         "schema_version": "aeonith.training_preflight.v1",
         "status": "validated_not_trained",
@@ -183,5 +192,10 @@ def inspect_plan(plan_path: str | Path) -> tuple[dict[str, Any], dict[str, list[
         "split_files": {split: {"bytes": resolved[split].stat().st_size, "sha256": _sha256(resolved[split])} for split in SPLITS},
         "rights_basis_counts": dict(sorted(Counter(item["rights_basis"] for split in SPLITS for item in dataset[split]).items())),
         "rights_provenance": "operator_attested_not_independently_verified",
+        "adapter_publication_record_permissions_complete": publication_flags_complete,
+        "adapter_publication_status": (
+            "record_permissions_attested_review_required"
+            if publication_flags_complete else "not_permitted_by_corpus"
+        ),
     }
     return receipt, dataset

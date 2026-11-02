@@ -119,6 +119,41 @@ class TrainingContractTests(unittest.TestCase):
         with self.assertRaisesRegex(CorpusError, "permission"):
             inspect_plan(self.plan_path)
 
+    def test_private_local_training_does_not_require_adapter_publication_permission(self) -> None:
+        # Train consent and adapter-publication consent are independent decisions.
+        # Only the latter is withheld here; the corpus remains authorized for
+        # local experimentation under the per-record training flags.
+        private = row("train", "The rain fell")
+        private["permission_to_publish_adapter"] = False
+        self.write_split("train", private)
+
+        receipt, _ = inspect_plan(self.plan_path)
+        self.assertEqual(receipt["status"], "validated_not_trained")
+        self.assertIs(receipt["adapter_publication_record_permissions_complete"], False)
+        self.assertEqual(receipt["adapter_publication_status"], "not_permitted_by_corpus")
+        self.assertNotIn("The rain fell", json.dumps(receipt))
+
+    def test_publication_policy_requires_every_record_to_opt_in(self) -> None:
+        receipt, _ = inspect_plan(self.plan_path)
+        self.assertIs(receipt["adapter_publication_record_permissions_complete"], True)
+        self.assertEqual(receipt["adapter_publication_status"], "record_permissions_attested_review_required")
+
+        validation = row("validation", "A silent street")
+        validation["permission_to_publish_adapter"] = False
+        self.write_split("validation", validation)
+        receipt, _ = inspect_plan(self.plan_path)
+        self.assertIs(receipt["adapter_publication_record_permissions_complete"], False)
+        self.assertEqual(receipt["adapter_publication_status"], "not_permitted_by_corpus")
+
+    def test_rejects_non_boolean_publication_permission(self) -> None:
+        for invalid in (None, "false", 0, 1):
+            with self.subTest(invalid=invalid):
+                item = row("train", "The rain fell")
+                item["permission_to_publish_adapter"] = invalid
+                self.write_split("train", item)
+                with self.assertRaisesRegex(CorpusError, "permission"):
+                    inspect_plan(self.plan_path)
+
     def test_rejects_reused_source_id_in_holdout(self) -> None:
         item = row("holdout", "One last letter")
         item["source_id"] = "source-train"

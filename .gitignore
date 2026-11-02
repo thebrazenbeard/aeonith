@@ -26,3 +26,6 @@ build/
 *.onnx
 checkpoints/
 training-output/
+
+# Draft critique corpora and human approval records are private until separately reviewed.
+training/candidates/

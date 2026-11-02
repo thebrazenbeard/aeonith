@@ -48,13 +48,18 @@ paths to the public Aeonith repository.
 Each JSONL line has this structure:
 
 ```json
-{"id":"unique-1","source_id":"work-1","prompt":"A source passage and critique request you have rights to use","completion":"A grounded critical response","rights_basis":"self_authored","permission_to_train":true,"permission_to_publish_adapter":true}
+{"id":"unique-1","source_id":"work-1","prompt":"A source passage and critique request you have rights to use","completion":"A grounded critical response","rights_basis":"self_authored","permission_to_train":true,"permission_to_publish_adapter":false}
 ```
 
 Supported rights bases: `self_authored`, `public_domain`, `cc0`, or `licensed`.
 `licensed` additionally requires `license_id` with the actual applicable
 license identifier. These are **operator attestations**; string validation is
-not legal verification. Keep source provenance and human-reviewed permissions
+not legal verification. `permission_to_train` must be `true` for each record;
+`permission_to_publish_adapter` must be a JSON boolean, but can be `false`
+for a private local training experiment. The preflight reports whether all
+record-level adapter-publication flags are true; **this is not permission to
+publish** without a separate rights/consent and artifact review. Keep source
+provenance and human-reviewed permissions
 outside this machine-readable format. Do not use privately attached custom-GPT
 knowledge, copyrighted literary passages, unconsented manuscript drafts, or
 restricted third-party datasets without a real applicable right. An adapter

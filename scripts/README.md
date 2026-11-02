@@ -55,7 +55,22 @@ local clipboard with:
 .\scripts\start-aeonith-windows.ps1 -FunnelOrigin 'https://machine.tailnet.ts.net' -CopyTokenToClipboard
 ```
 
-Paste it into Aeonith's browser token field. On the public HTTPS Funnel page,
+If Aeonith is already running, rerun **the same launch options** (same
+`-FunnelOrigin`, `-Port`, `-Profile` and model as the running instance) with
+`-CopyTokenToClipboard` to recopy the existing token. A matching owned
+instance is reused; the token is not printed. A mismatched configuration
+fails rather than silently changing the running service.
+
+**Clipboard location matters:** this copies to the Windows user session
+running PowerShell. If the launcher runs on one PC (for example, a remote
+server) and the Aeonith browser is on another PC or phone, that browser's
+clipboard is **not automatically populated**. Remote Desktop clipboard
+redirection can vary and must not be assumed to work. Paste from the same
+trusted Windows session, or use an operator-approved secure way to transfer
+the secret to the device you intend to authorize; never put the root token
+in a URL, chat, log, screenshot, or command argument.
+
+Paste it into Aeonith's **Service access token** field. On the public HTTPS Funnel page,
 choose **Remember this browser for 7 days** to create an `HttpOnly`,
 `Secure`, `SameSite=Strict` browser session; the site then allows subsequent
 reviews without retyping the root token until the session expires or the
@@ -66,6 +81,12 @@ temporarily exposes the token to the **local Windows clipboard**, including
 any clipboard-history or sync facilities you enabled; clear clipboard
 history after use. Do not paste the token into chats, terminals, logs,
 screenshots, or Git.
+
+The browser supports local `.txt`, Markdown and **Word `.docx`** imports;
+the original document is parsed in the browser, not uploaded to a conversion
+service. A DOCX must be no larger than 2 MiB and the extracted excerpt no
+longer than 12,000 characters. Legacy binary Word `.doc` and PDF imports
+are not supported: export those to `.docx` or UTF-8 text first.
 
 Only one symbolic-lens response from `aeonith-critic:0.1` passed the actual
 structural pilot. This is not a literary-quality result. Legacy models and
