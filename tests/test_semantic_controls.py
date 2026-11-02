@@ -115,15 +115,44 @@ class SemanticControlsTests(unittest.TestCase):
         self.assertFalse(report["counts"]["short_excerpt"])
         self.assertEqual(_codes(report), [])
 
-    def test_known_false_negative_does_not_become_a_semantic_pass(self):
-        # 'Every night' supports the bell's recurrence, but not a blue kite.
-        # This intentional fixture records a blind spot in source-wide cues.
+    def test_named_once_only_image_is_not_excused_by_unrelated_recurrence(self):
+        # 'Every night' supports the bell's recurrence, but not the kite's.
         request = _request("Every night the bell rang. A blue kite appeared once.")
         review = _review("The recurring motif of the blue kite dominates the work.")
         report = subject.audit_semantic_risks(request, review)
-        self.assertEqual(_codes(report), [])  # A missed warning, not a pass.
+        self.assertIn("possible_unfounded_recurrence", _codes(report))
         self.assertEqual(report["semantic_quality"], "UNASSESSED")
         self.assertEqual(report["classification"], "HEURISTIC_HUMAN_REVIEW_ONLY")
+
+    def test_named_image_appearing_once_then_again_is_not_overflagged(self):
+        request = _request("A blue kite appeared once, then again every morning.")
+        review = _review("The recurring motif of the blue kite joins these moments.")
+        self.assertEqual(_codes(subject.audit_semantic_risks(request, review)), [])
+
+    def test_named_image_appearing_in_two_sentences_is_not_overflagged(self):
+        request = _request("A blue kite appeared once. A blue kite returned every morning.")
+        review = _review("The recurring motif of the blue kite joins these moments.")
+        self.assertEqual(_codes(subject.audit_semantic_risks(request, review)), [])
+
+    def test_source_words_are_not_a_blanket_license_for_an_unquoted_claim(self):
+        request = _request("She wrote 'recurring motif' on the board and left.")
+        review = _review("The recurring motif governs this entire unseen novel.")
+        self.assertIn("possible_unfounded_recurrence",
+                      _codes(subject.audit_semantic_risks(request, review)))
+
+    def test_later_hedge_does_not_erase_earlier_strong_claim(self):
+        request = _request("One bell rang.")
+        review = _review("The recurring motif dominates the work, though we cannot be certain.")
+        self.assertIn("possible_unfounded_recurrence",
+                      _codes(subject.audit_semantic_risks(request, review)))
+
+    def test_240_character_excerpt_still_receives_advisory_check(self):
+        request = _request("One red kite fell. " + "The empty street was silent. " * 8)
+        self.assertGreater(len(request["work"]["text"]), 200)
+        self.assertLess(len(request["work"]["text"]), subject.SHORT_EXCERPT_CHARACTERS)
+        review = _review("The recurring motif of the kite shapes the whole work.")
+        self.assertIn("possible_unfounded_recurrence",
+                      _codes(subject.audit_semantic_risks(request, review)))
 
     def test_non_completed_output_has_no_semantic_assessment(self):
         review = {"status": "invalid_provider_output", "synthesis": "A recurring motif."}

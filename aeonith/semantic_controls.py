@@ -25,7 +25,8 @@ INPUT_SCHEMA = "aeonith.semantic_triage_input.v1"
 REPORT_SCHEMA = "aeonith.semantic_triage.v1"
 MAX_INPUT_BYTES = 64 * 1024
 MAX_EXCERPT_CHARACTERS = 12_000
-SHORT_EXCERPT_CHARACTERS = 200
+# Still an intentionally tiny excerpt window, not a whole-work verifier.
+SHORT_EXCERPT_CHARACTERS = 400
 MAX_REVIEW_TEXT = 12_000
 MAX_LENSES = 14
 MAX_CHALLENGES = 30
@@ -52,6 +53,10 @@ _SOURCE_RECURRENCE = re.compile(
     r"morning\s+after\s+morning|day\s+after\s+day|once\s+more|many\s+times)\b",
     re.IGNORECASE,
 )
+_QUOTED_METALINGUISTIC_LABEL = re.compile(
+    r"['\"“‘](?:recurring|recurrent|repeated)\s+(?:motif|theme|symbol|image|pattern)['\"”’]",
+    re.IGNORECASE,
+)
 _SOURCE_EXTERNAL_CONTEXT = re.compile(
     r"\b(?:earlier|previous|later|subsequent)\s+(?:chapter|scene|section|act)s?\b|"
     r"\bchapter\s+\d+\b", re.IGNORECASE,
@@ -62,6 +67,10 @@ _NON_ASSERTION = re.compile(
     r"hypothetical|hypothesis|may|might|could|possibly|possible|"
     r"would\s+need|fails?\s+to\s+show|not\s+enough|rather\s+than)\b",
     re.IGNORECASE,
+)
+_CONTRAST_AFTER_CLAIM = re.compile(r"\b(?:though|although|however|nevertheless|but)\b", re.IGNORECASE)
+_EXPLICIT_SINGLE_INSTANCE = re.compile(
+    r"\b(?:once|one\s+time|a\s+single\s+(?:time|instance|occasion))\b", re.IGNORECASE,
 )
 
 
@@ -110,7 +119,13 @@ def _candidate_prose(review: dict[str, Any]) -> list[tuple[str, str]]:
 
 def _cautious_or_quoted(prose: str, match: re.Match[str], excerpt: str) -> bool:
     """Favor precision over recall: never flag a non-assertion or source quote."""
-    if match.group().casefold() in excerpt.casefold():
+    # Mere occurrence of the phrase in the source does not license an
+    # *assertion* about recurrence. Only a quoted reference to that wording
+    # earns the source-quotation exemption.
+    quoted = (match.start() > 0 and match.end() < len(prose)
+              and prose[match.start() - 1] in "\"'“‘"
+              and prose[match.end()] in "\"'”’")
+    if quoted and match.group().casefold() in excerpt.casefold():
         return True
     # Evaluate the same local clause, not a negation in another paragraph.
     left = max(prose.rfind(".", 0, match.start()),
@@ -120,27 +135,63 @@ def _cautious_or_quoted(prose: str, match: re.Match[str], excerpt: str) -> bool:
     right_candidates = [prose.find(mark, match.end()) for mark in ".?!\n"]
     right = min((place for place in right_candidates if place >= 0), default=len(prose))
     clause = prose[max(left, match.start() - 90):min(right, match.end() + 90)]
+    # A later hedge cannot retroactively make an earlier confident assertion
+    # a non-assertion ("dominates the novel, though we cannot be certain").
+    contrast = _CONTRAST_AFTER_CLAIM.search(clause)
+    if contrast and contrast.start() >= match.end() - max(left, match.start() - 90):
+        clause = clause[:contrast.start()]
     return bool(_NON_ASSERTION.search(clause))
+
+
+def _claim_explicitly_once(excerpt: str, prose: str, match: re.Match[str]) -> bool:
+    """Spot one narrow mismatch: a named image appears *once*, another repeats.
+
+    This is deliberately not entity resolution. A warning requires a concrete
+    two-word subject after "motif of" and an explicit single-instance marker
+    in the same source sentence. In ambiguous cases we decline to flag.
+    """
+    subject = re.match(
+        r"\s+of\s+(?:an?\s+|the\s+)?([A-Za-z]+)\s+([A-Za-z]+)\b",
+        prose[match.end():], re.IGNORECASE,
+    )
+    if subject is None:
+        return False
+    phrase = f"{subject[1]} {subject[2]}".casefold()
+    if excerpt.casefold().count(phrase) != 1:
+        return False
+    for sentence in re.split(r"[.!?\n]+", excerpt):
+        if phrase not in sentence.casefold() or not _EXPLICIT_SINGLE_INSTANCE.search(sentence):
+            continue
+        # An explicit repeat in that very sentence invalidates the shortcut.
+        # 'Once ..., then again' is not evidence of only one appearance.
+        without_once = _EXPLICIT_SINGLE_INSTANCE.sub("", sentence)
+        if not _SOURCE_RECURRENCE.search(without_once):
+            return True
+    return False
 
 
 def audit_semantic_risks(request: dict[str, Any], review: dict[str, Any]) -> dict[str, Any]:
     """Return hints for manual review, without pretending to establish truth.
 
-    Source repetition cues suppress the recurrence warning, even in short
-    passages; lack of cues alone cannot establish that recurrence is false.
-    Both cues and lexical claims are heuristic and can miss genuine cases.
+    A source recurrence cue normally suppresses warnings. The limited exception
+    is an explicit once-only image named by the critique while something else
+    repeats. Neither branch establishes a semantic verdict.
     """
     if not isinstance(request, dict) or not isinstance(review, dict):
         raise ValueError("invalid_input")
     excerpt = _text_of_work(request)
     short = len(excerpt) <= SHORT_EXCERPT_CHARACTERS
-    source_recurrence = bool(_SOURCE_RECURRENCE.search(excerpt))
+    # A character merely writing the literal words 'recurring motif' is not
+    # evidence that a literary image recurs in the excerpt.
+    source_recurrence = bool(_SOURCE_RECURRENCE.search(
+        _QUOTED_METALINGUISTIC_LABEL.sub("", excerpt)))
     source_context = bool(_SOURCE_EXTERNAL_CONTEXT.search(excerpt))
     prose_items = _candidate_prose(review)
     warnings: list[dict[str, str]] = []
     for path, prose in prose_items:
-        if short and not source_recurrence:
+        if short:
             if any(not _cautious_or_quoted(prose, match, excerpt)
+                   and (not source_recurrence or _claim_explicitly_once(excerpt, prose, match))
                    for match in _RECURRENCE_CLAIM.finditer(prose)):
                 warnings.append({"code": "possible_unfounded_recurrence", "path": path})
         if short and not source_context:
@@ -162,7 +213,7 @@ def audit_semantic_risks(request: dict[str, Any], review: dict[str, Any]) -> dic
         "warnings": warnings,
         "limitations": [
             "Lexical cues cannot prove or refute literary interpretation.",
-            "A repetition cue elsewhere in the excerpt can hide an unrelated overclaim.",
+            "Repetition cues and limited image matching can miss unrelated overclaims.",
             "Warnings are advisory; no production review is blocked or scored.",
         ],
     }
