@@ -9,6 +9,11 @@ Related optional, independently gated source tools:
 
 - [ADMISSION.md](ADMISSION.md): review-pending critique proposals → private
   JSONL only after recorded rights, stewardship and editorial decisions.
+- [CORPUS_ADMISSION.md](CORPUS_ADMISSION.md): supplementary private corpus
+  fingerprints, source-passage overlap checks and operator-attested decisions;
+  this is not independent rights authentication.
+- [SOURCE_CORPUS_CANDIDATES.md](SOURCE_CORPUS_CANDIDATES.md): edition-specific,
+  public-domain literary source research; nothing listed is admitted training data.
 - [BASE_PROVENANCE.md](BASE_PROVENANCE.md): compare local official Qwen3.5
   checkpoint bytes against a separately obtained expected-file manifest;
   this does not authenticate the manifest's publisher.
