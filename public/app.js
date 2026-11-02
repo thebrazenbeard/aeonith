@@ -393,6 +393,18 @@ function extractDocxText(xml) {
   // paragraph/text node can otherwise turn attacker-controlled XML into
   // quadratic work or duplicate arbitrarily large descendant text.
   const walker = documentXml.createTreeWalker(body, NodeFilter.SHOW_ELEMENT);
+  // A DOCX is not necessarily a flat representation of the text displayed in
+  // Word. Tracked edits, moved passages, and hidden runs can contain w:t nodes
+  // which are not part of the author's intended visible final reading. We do
+  // not have Word's revision/view/style resolver in this dependency-free
+  // importer, so reject these documents before copying any text to the editor.
+  // A user can first accept/reject changes and export the visible text as TXT.
+  const ambiguousWordMarkup = new Set([
+    "del", "delText", "ins", "moveFrom", "moveTo", "moveFromRangeStart",
+    "moveFromRangeEnd", "moveToRangeStart", "moveToRangeEnd",
+    "customXmlDelRangeStart", "customXmlInsRangeStart", "customXmlMoveFromRangeStart",
+    "customXmlMoveToRangeStart", "vanish", "webHidden"
+  ]);
   const lines = [];
   let pieces = [];
   let characters = 0;
@@ -414,6 +426,9 @@ function extractDocxText(xml) {
       throw new Error("This Word document contains too many XML elements to import safely.");
     }
     if (element.namespaceURI !== wordNamespace) continue;
+    if (ambiguousWordMarkup.has(element.localName)) {
+      throw new Error("This Word document contains tracked changes or hidden text that cannot be imported faithfully. Finalize changes in Word and export the visible excerpt as plain text first.");
+    }
     if (element.localName === "altChunk") {
       throw new Error("This Word document uses unsupported embedded body content. Export it as plain text first.");
     }
