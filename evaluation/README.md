@@ -62,25 +62,28 @@ python -m evaluation.literary_gate plan \
   --candidate incumbent --candidate challenger --phase screen \
   --out screen-plan.json
 
+# First create ../aeonith-private OUTSIDE the checkout with access restricted
+# to your account (on Windows, restrict the directory ACL explicitly).
 # Only on an owner-qualified machine with an already-running local model:
 # Explicit --host-qualified is the operator's assertion, NOT an automated check.
 python -m evaluation.literary_gate run \
   --plan screen-plan.json --candidate incumbent --model your-local-model-name \
   --url http://127.0.0.1:5001/v1/chat/completions \
-  --lane production --host-qualified --out private-incumbent.jsonl
+  --lane production --host-qualified --out ../aeonith-private/incumbent.jsonl
 # Repeat run with the other candidate and its own local model/runner.
 
 # Offline: every scheduled slot counts even when its attempt failed or is missing.
 python -m evaluation.literary_gate account \
-  --plan screen-plan.json --first private-incumbent.jsonl \
-  --second private-challenger.jsonl --out private-attrition.json
+  --plan screen-plan.json --first ../aeonith-private/incumbent.jsonl \
+  --second ../aeonith-private/challenger.jsonl --out ../aeonith-private/attrition.json
 
 # Offline: only structurally valid paired responses become blind displays.
 # Keep the assignment key in a different access-controlled directory.
 python -m evaluation.literary_gate blind \
-  --plan screen-plan.json --first private-incumbent.jsonl \
-  --second private-challenger.jsonl --seed study-seed-v1 \
-  --out reviewer-displays.json --key-out private/assignment-keys.json
+  --plan screen-plan.json --first ../aeonith-private/incumbent.jsonl \
+  --second ../aeonith-private/challenger.jsonl --seed study-seed-v1 \
+  --out ../aeonith-private/reviewer-displays.json \
+  --key-out ../aeonith-private/private-assignment-keys.json
 ```
 
 `--phase full` freezes 18 cases × three repeats × two candidates = 108
@@ -90,10 +93,18 @@ journal contains original synthetic passages and **raw model prose**; the
 accounting output omits both and reports `structural_pass`, `structural_fail`,
 `provider_noncompletion`, `interrupted`, and `not_attempted` against the complete denominator.
 Model failures are recorded, not hidden behind a successful A/B pair rate.
-Journal writes are flushed and synchronized after each attempt; a crash is
-distinguished from an unstarted slot when a start receipt was persisted. Run on
-owner-controlled encrypted/access-restricted storage, outside Git; `.gitignore`
-cannot prevent an operator from explicitly adding a private result file.
+Journal writes are flushed and synchronized after each event; a crash is
+distinguished from an unstarted slot when a start receipt was persisted.
+A partially written last line is **discarded and reported** in accounting;
+its scheduled attempt remains a non-success, and blinded packets are **blocked**
+until an operator investigates the journal's integrity. A damaged complete
+line or missing header fails closed. This recovery is conservative accounting,
+**not proof of untampered records or permission to use a damaged run for ratings**.
+The runner rejects journals, blind displays and identity keys inside Git.
+On Windows, file permissions inherit the parent directory's ACL: POSIX `0600`
+is not a Windows security guarantee. Create a restricted owner-controlled
+directory **outside the checkout**, preferably encrypted, before running.
+`.gitignore` cannot prevent deliberate copying of private results into Git.
 
 This harness can only attest the operator **said** the host had spare
 resources, rights to the model and no contested training/service workloads. It

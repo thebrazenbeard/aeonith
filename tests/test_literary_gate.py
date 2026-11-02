@@ -11,7 +11,8 @@ import tempfile
 import unittest
 
 from evaluation.literary_gate import (
-    account, load_cases, load_journal, make_packets, make_plan, run_candidate,
+    _private_output_path, account, load_cases, load_journal, make_packets,
+    make_plan, run_candidate,
 )
 
 
@@ -99,17 +100,47 @@ class LiteraryGateTests(unittest.TestCase):
         self.assertEqual(result["candidates"]["candidate-B"]["not_attempted"], 1)
         self.assertEqual(result["candidates"]["candidate-B"]["interrupted"], 0)
 
-    def test_truncated_or_duplicate_jsonl_rejected(self):
+    def test_truncated_tail_is_conservatively_counted_and_duplicate_jsonl_rejected(self):
         a, _ = self.journal("candidate-A")
         b, _ = self.journal("candidate-B")
         a.write_bytes(a.read_bytes()[:-1])
-        with self.assertRaisesRegex(ValueError, "truncated"):
-            account(self.plan, str(a), str(b))
+        result, _ = account(self.plan, str(a), str(b))
+        self.assertEqual(result["journals_with_discarded_incomplete_tails"], 1)
+        self.assertEqual(result["candidates"]["candidate-A"]["interrupted"], 1)
+        self.assertEqual(result["candidates"]["candidate-A"]["denominator"], 6)
+        self.assertEqual(result["blinded_pairs_eligible"], 5)
+        with self.assertRaisesRegex(ValueError, "blind review is blocked"):
+            make_packets(self.plan, str(a), str(b), seed="not-for-annotation")
+        # Force the Windows CRLF failure mode on every platform: text-mode
+        # newline normalization must not turn a terminal CR into an LF.
+        a.write_bytes(a.read_bytes().replace(b"\n", b"\r\n"))
+        result, _ = account(self.plan, str(a), str(b))
+        self.assertEqual(result["journals_with_discarded_incomplete_tails"], 1)
+        self.assertEqual(result["candidates"]["candidate-A"]["interrupted"], 1)
         a, _ = self._replace_journal("candidate-A", a)
         rows = a.read_text(encoding="utf-8").splitlines(keepends=True)
         a.write_text("".join(rows + [rows[1]]), encoding="utf-8")
         with self.assertRaisesRegex(ValueError, "duplicate attempt"):
             account(self.plan, str(a), str(b))
+
+    def test_private_outputs_cannot_land_in_git_checkout_or_symlink_to_it(self):
+        repo = Path(__file__).resolve().parents[1]
+        forbidden = repo / "never-create-literary-journal-test.jsonl"
+        with self.assertRaisesRegex(ValueError, "outside the Git checkout"):
+            _private_output_path(str(forbidden))
+        self.assertFalse(forbidden.exists())
+        with self.assertRaisesRegex(ValueError, "outside the Git checkout"):
+            run_candidate(self.plan, "candidate-A", provider=FakeProvider(),
+                          model="fake", lane="production", journal_path=str(forbidden))
+        self.assertFalse(forbidden.exists())
+        alias = self.root / "repo-alias"
+        try:
+            alias.symlink_to(repo, target_is_directory=True)
+        except (OSError, NotImplementedError):
+            pass  # Windows can restrict symlink creation without developer mode.
+        else:
+            with self.assertRaisesRegex(ValueError, "outside the Git checkout"):
+                _private_output_path(str(alias / "never-create.jsonl"))
 
     def _replace_journal(self, candidate, old_path):
         old_path.unlink()

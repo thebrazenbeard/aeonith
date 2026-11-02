@@ -46,6 +46,21 @@ LANES = {
 MAX_JOURNAL_BYTES = 64_000_000
 
 
+def _private_output_path(path: str) -> str:
+    """Keep raw criticism and blind assignments outside the public checkout.
+
+    ``resolve`` also follows an existing symlinked parent directory. The
+    output file itself must be new; the exclusive file writer enforces that.
+    """
+    destination = Path(path).expanduser().resolve()
+    checkout = Path(__file__).resolve().parent.parent
+    if destination == checkout or checkout in destination.parents:
+        raise ValueError("private literary study outputs must be outside the Git checkout")
+    if not destination.parent.is_dir():
+        raise ValueError("private output parent directory must already exist")
+    return str(destination)
+
+
 def load_cases(path: Path = GATE_DOCUMENT) -> list[dict[str, str]]:
     """Extract *only* the frozen 18 original fixture lines; refuse drift."""
     lines = path.read_text(encoding="utf-8").splitlines()
@@ -126,7 +141,7 @@ def run_candidate(plan: dict[str, Any], candidate: str, *, provider: Any, model:
         raise ValueError("unknown candidate or lane")
     if not isinstance(model, str) or not model.strip() or len(model) > 300:
         raise ValueError("model identity is required")
-    fd = os.open(journal_path, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
+    fd = os.open(_private_output_path(journal_path), os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
     with os.fdopen(fd, "w", encoding="utf-8") as journal:
         _append_line(journal, {
             "schema_version": JOURNAL_SCHEMA, "plan_sha256": digest(plan),
@@ -162,9 +177,20 @@ def load_journal(path: str, plan: dict[str, Any]) -> tuple[dict[str, Any], dict[
     target = Path(path)
     if target.stat().st_size > MAX_JOURNAL_BYTES:
         raise ValueError("attempt journal exceeds maximum size")
-    rows = target.read_text(encoding="utf-8").splitlines(keepends=True)
-    if not rows or any(not row.endswith("\n") for row in rows):
+    raw = target.read_bytes()
+    if len(raw) > MAX_JOURNAL_BYTES:
+        raise ValueError("attempt journal exceeds maximum size")
+    if not raw:
         raise ValueError("attempt journal is empty/truncated")
+    # Read bytes before decoding: Windows text mode normalizes a crash-left
+    # terminal CR into LF, incorrectly making a truncated CRLF record look
+    # complete. Only newline-terminated records were fully journaled. Discard
+    # a partial final record conservatively, preserving prior fsynced rows.
+    tail_truncated = not raw.endswith(b"\n")
+    complete = raw if not tail_truncated else raw[:raw.rfind(b"\n") + 1]
+    rows = complete.decode("utf-8").splitlines(keepends=True)
+    if not rows or any(not row.endswith("\n") for row in rows):
+        raise ValueError("attempt journal has no complete header or malformed line ending")
     # Strictly reject duplicate keys and non-finite numbers, as quality_eval does.
     def unique_pairs(items: list[tuple[str, Any]]) -> dict[str, Any]:
         obj: dict[str, Any] = {}
@@ -215,6 +241,7 @@ def load_journal(path: str, plan: dict[str, Any]) -> tuple[dict[str, Any], dict[
         if row.get("audit") != expected_audit:
             raise ValueError("attempt structural audit differs from source")
         records[slot] = row
+    header["_discarded_incomplete_tail"] = tail_truncated
     return header, records
 
 
@@ -261,6 +288,9 @@ def account(plan: dict[str, Any], first_path: str, second_path: str) -> tuple[di
         "case_units": len(plan["cases"]), "attempts_expected": len(plan["attempts"]),
         "candidates": statuses, "blinded_pairs_eligible": eligible,
         "blinded_pairs_total": total_pairs, "semantic_quality": "UNASSESSED",
+        "journals_with_discarded_incomplete_tails": sum(
+            bool(header.get("_discarded_incomplete_tail")) for header in (first, second)
+        ),
         "note": "Failures and missing attempts remain in the denominator; no human preference has been measured.",
     }, records
 
@@ -268,6 +298,8 @@ def account(plan: dict[str, Any], first_path: str, second_path: str) -> tuple[di
 def make_packets(plan: dict[str, Any], first_path: str, second_path: str,
                  *, seed: str) -> tuple[dict[str, Any], dict[str, Any], dict[str, Any]]:
     accounting, records = account(plan, first_path, second_path)
+    if accounting["journals_with_discarded_incomplete_tails"]:
+        raise ValueError("incomplete journal tail: conservative accounting is available, but blind review is blocked pending human integrity review")
     if not isinstance(seed, str) or not seed:
         raise ValueError("blinding seed is required")
     by_id = {case["id"]: case for case in plan["cases"]}
@@ -358,18 +390,20 @@ def main(argv: list[str] | None = None) -> int:
             print(json.dumps({"accounting_written": args.out,
                               "attempts_expected": accounting["attempts_expected"]}))
         elif args.command == "blind":
-            if Path(args.out).resolve() == Path(args.key_out).resolve():
+            display_path = _private_output_path(args.out)
+            key_path = _private_output_path(args.key_out)
+            if display_path == key_path:
                 raise ValueError("display and private keys cannot share a file")
-            if Path(args.out).exists() or Path(args.key_out).exists():
+            if Path(display_path).exists() or Path(key_path).exists():
                 raise FileExistsError("blind output already exists")
             displays, keys, accounting = make_packets(
                 _read_json(args.plan), args.first, args.second, seed=args.seed)
             # Never make a display available without also delivering its key.
-            _write_json_exclusive(args.key_out, keys)
+            _write_json_exclusive(key_path, keys)
             try:
-                _write_json_exclusive(args.out, displays)
+                _write_json_exclusive(display_path, displays)
             except Exception:
-                Path(args.key_out).unlink(missing_ok=True)
+                Path(key_path).unlink(missing_ok=True)
                 raise
             print(json.dumps({"display_written": args.out, "key_written": args.key_out,
                               "pairs_eligible": accounting["blinded_pairs_eligible"],
