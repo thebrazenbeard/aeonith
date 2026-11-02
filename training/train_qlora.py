@@ -1,4 +1,4 @@
-"""Opt-in, offline Qwen3.5-0.8B CUDA NF4 adapter-training experiment.
+"""Source-only, offline Qwen3.5-0.8B CUDA NF4 adapter-training experiment.
 
 The base checkpoint must already exist locally. This source is unqualified on
 the target 4 GiB host, performs no implicit download, and never publishes data,
@@ -29,6 +29,20 @@ MAX_EXPERIMENT_LENGTH = 512
 MIN_FREE_CUDA_MIB = 3072
 MIN_AFTER_LOAD_MIB = 1536
 MIN_AFTER_PREP_MIB = 1024
+
+
+def _require_host_owned_gpu_allocation() -> None:
+    """Fail closed until an enforceable, host-owned GPU lease exists.
+
+    A CLI --execute flag, a free-memory snapshot, or a caller-provided text
+    assertion cannot reserve a shared GPU or prevent competing processes.
+    Keep the low-memory implementation available for future qualification,
+    but do not allow it to allocate CUDA resources in this source-only state.
+    """
+    raise CorpusError(
+        "CUDA QLoRA training is disabled: no host-owned GPU allocation gate "
+        "is implemented; inspection remains available without training"
+    )
 
 
 def _private(path: Path, label: str) -> Path:
@@ -102,6 +116,9 @@ def _verify_local_base(plan: Path, expected_manifest: Path) -> dict[str, Any]:
 
 
 def _train(plan: Path, destination: Path, expected_base_manifest: Path) -> dict[str, Any]:
+    # Direct Python API callers must meet the same security boundary as CLI.
+    # This check precedes all optional ML imports and CUDA/output side effects.
+    _require_host_owned_gpu_allocation()
     _offline()
     receipt, records = _preflight(plan)
     base_verification = _verify_local_base(plan, expected_base_manifest)
@@ -254,7 +271,7 @@ def main(argv: list[str] | None = None) -> int:
     commands = parser.add_subparsers(dest="command", required=True)
     inspect = commands.add_parser("inspect", help="Validate plan and corpus; never load ML packages")
     inspect.add_argument("--plan", type=Path, required=True)
-    train = commands.add_parser("train", help="Explicit local 4-bit CUDA experiment")
+    train = commands.add_parser("train", help="Reserved 4-bit CUDA experiment (currently disabled)")
     train.add_argument("--plan", type=Path, required=True)
     train.add_argument("--expected-base-manifest", type=Path, required=True,
                        help="independently obtained expected hashes; NOT publisher authentication")
@@ -267,6 +284,7 @@ def main(argv: list[str] | None = None) -> int:
         else:
             if not parsed.execute:
                 parser.error("train requires explicit --execute")
+            _require_host_owned_gpu_allocation()
             destination = _output_path(parsed.output)
             output = _train(parsed.plan.resolve(), destination, parsed.expected_base_manifest)
         print(json.dumps(output, indent=2, sort_keys=True))

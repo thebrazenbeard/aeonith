@@ -13,7 +13,8 @@ Related optional, independently gated source tools:
   checkpoint bytes against a separately obtained expected-file manifest;
   this does not authenticate the manifest's publisher.
 - [LOW_MEMORY.md](LOW_MEMORY.md): experimental CUDA NF4/QLoRA option for
-  Qwen3.5-0.8B. **4 GiB compatibility has not been demonstrated.**
+  Qwen3.5-0.8B. **CUDA execution is disabled until a host-owned GPU allocation
+  gate exists; 4 GiB compatibility has not been demonstrated.**
 - [GGUF_HANDOFF.md](GGUF_HANDOFF.md): inspect a saved PEFT adapter and prepare
   a private, unexecuted llama.cpp conversion recipe. No GGUF output is built
   by this source tool.

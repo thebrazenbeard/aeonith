@@ -7,6 +7,14 @@ No 4-bit gradient-update, persistent adapter, reload, or held-out comparison has
 been demonstrated on Lappy. Ordinary Aeonith installs do not require these ML
 packages.
 
+**Current execution gate:** The CUDA `train --execute` path intentionally
+returns an error **before importing Torch, allocating GPU memory or creating
+training output**. Although the NF4 training implementation and memory checks
+are retained as source for future experiments, no host-owned atomic GPU lease
+broker is integrated. A free-VRAM snapshot or operator flag is not an
+enforceable allocation. `inspect` remains available offline. Do not treat a
+passing contract test as an authorized or demonstrated optimizer run.
+
 ## Local prerequisites
 
 - Windows with a compatible CUDA device and locally qualified Python GPU
@@ -46,10 +54,11 @@ The plan/weights/tokenizer and corpus must reside outside the Git checkout.
 isolation, pinned revision *syntax*, and the lower-memory limits below. It
 returns `validated_not_trained`. It does **not** import Torch or access CUDA.
 
-## Explicit experiment (not yet host-qualified)
+## Future explicit experiment (currently disabled)
 
-Only after a real resource lease, rights review, compatible full checkpoint,
-and GPU/WSL qualification:
+The following interface is reserved for **after** an actual host-enforced
+allocation service, rights review, compatible full checkpoint, and GPU/WSL
+qualification. **It is rejected now even with `--execute`.**
 
 ```bash
 python -m training.train_qlora train \

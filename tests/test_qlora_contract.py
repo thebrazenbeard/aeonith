@@ -11,7 +11,10 @@ import tempfile
 import unittest
 
 from training.corpus import CorpusError
-from training.train_qlora import _headroom, _preflight, _verify_local_base
+from training.train_qlora import (
+    _headroom, _preflight, _require_host_owned_gpu_allocation, _train,
+    _verify_local_base,
+)
 
 
 REPO = Path(__file__).resolve().parents[1]
@@ -158,6 +161,27 @@ class LowMemoryContractTests(unittest.TestCase):
         self.assertNotEqual(output.returncode, 0)
         self.assertIn("--execute", output.stderr)
         self.assertFalse(dest.exists())
+
+    def test_execute_fails_closed_before_cuda_imports_or_output_creation(self) -> None:
+        destination = self.root / "never-allocate-cuda"
+        output = subprocess.run(
+            [sys.executable, "-m", "training.train_qlora", "train", "--plan", str(self.plan_path),
+             "--expected-base-manifest", str(self.expected_base_manifest),
+             "--output", str(destination), "--execute"],
+            cwd=REPO, capture_output=True, text=True, check=False,
+        )
+        self.assertEqual(output.returncode, 2, output.stderr)
+        self.assertIn("no host-owned GPU allocation gate", output.stderr)
+        self.assertFalse(destination.exists())
+        self.assertNotIn("A private and authorized", output.stdout + output.stderr)
+
+    def test_direct_python_api_cannot_bypass_host_allocation_boundary(self) -> None:
+        destination = self.root / "never-allocate-cuda-api"
+        with self.assertRaisesRegex(CorpusError, "host-owned GPU allocation gate"):
+            _require_host_owned_gpu_allocation()
+        with self.assertRaisesRegex(CorpusError, "host-owned GPU allocation gate"):
+            _train(self.plan_path, destination, self.expected_base_manifest)
+        self.assertFalse(destination.exists())
 
     def test_train_destination_rejects_repo_root(self) -> None:
         from training.train_lora import _output_path
