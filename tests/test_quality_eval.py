@@ -181,6 +181,54 @@ class AuditTests(unittest.TestCase):
         row["limitations"] = []
         self.assertEqual(audit_review(request(), result)["structural_status"], "fail")
 
+    def test_semantic_triage_flags_invented_motif_without_claiming_verification(self):
+        req = request(["symbolic"])
+        req["work"]["text"] = "A red kite fell into the pond."
+        review = completed(["symbolic"])
+        review["lens_reviews"][0]["analysis"] = (
+            "The recurring motif of the red kite symbolizes repeated grief."
+        )
+        review["lens_reviews"][0]["support"] = [{"source": "work", "quote": "red kite"}]
+        result = audit_review(req, review)
+        self.assertEqual(result["structural_status"], "pass")
+        self.assertEqual(result["semantic_quality"], "UNASSESSED")
+        self.assertIn("possible_unfounded_recurrence",
+                      {warning["code"] for warning in result["warnings"]})
+        serialized = json.dumps(result)
+        self.assertNotIn("red kite", serialized)
+        self.assertNotIn("repeated grief", serialized)
+
+    def test_semantic_triage_respects_uncertainty_and_explicit_repetition(self):
+        for work, analysis in (
+            ("A red kite fell into the pond.",
+             "The image might become a recurring motif if it returns later."),
+            ("Every evening a red kite returned to the pond.",
+             "The recurring motif of the kite marks the repeated evenings."),
+        ):
+            with self.subTest(work=work):
+                req = request(["symbolic"])
+                req["work"]["text"] = work
+                review = completed(["symbolic"])
+                review["lens_reviews"][0]["support"] = [{"source": "work", "quote": "red kite"}]
+                review["lens_reviews"][0]["analysis"] = analysis
+                result = audit_review(req, review)
+                self.assertEqual(result["structural_status"], "pass")
+                self.assertNotIn("possible_unfounded_recurrence",
+                                 {warning["code"] for warning in result["warnings"]})
+
+    def test_semantic_triage_flags_invented_previous_chapter(self):
+        req = request(["symbolic"])
+        req["work"]["text"] = "The book fell shut."
+        review = completed(["symbolic"])
+        review["lens_reviews"][0]["support"] = [{"source": "work", "quote": "book"}]
+        review["lens_reviews"][0]["analysis"] = (
+            "In an earlier chapter the siblings agreed to hide the letter."
+        )
+        result = audit_review(req, review)
+        self.assertEqual(result["structural_status"], "pass")
+        self.assertIn("possible_unseen_story_context",
+                      {warning["code"] for warning in result["warnings"]})
+
     def test_provider_failure_is_not_semantic_failure(self):
         audit = audit_review(request(), {"status": "provider_unavailable"})
         self.assertEqual(audit["structural_status"], "not_evaluable")
