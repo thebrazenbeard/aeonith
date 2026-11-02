@@ -58,16 +58,46 @@ download occurred.
 If the tag already exists, the command stops without modifying it. Do not
 delete or replace an existing model merely to get a successful installer exit.
 
-To use the newly created model with the existing Windows launcher, pass its
-name explicitly and first **qualify a synthetic single-lens review**:
+The Windows launcher offers an **opt-in Aeonith critic profile**, matching the
+one locally observed successful structural pilot (schema-constrained JSON,
+2,048 output tokens, one lens). It does not silently alter legacy defaults,
+fine-tune weights, or guarantee critique quality or a 50-second response.
+The named model must already exist in local Ollama inventory. Test only with
+original, non-sensitive text:
 
 ```powershell
-.\scripts\start-aeonith-windows.ps1 -Model 'aeonith-critic:0.1'
+.\scripts\start-aeonith-windows.ps1 -Profile aeonith-critic
 ```
 
-An existing Aeonith listener cannot change models in place. Follow the
-separate owned-process stop procedure before any intended model change. Never
-expose Ollama's port or publish manuscript content for this test.
+The critic profile requests only five minutes of Ollama model residency;
+legacy profiles retain 24 hours. Even five minutes can consume several GiB
+of host RAM/VRAM. Inspect shared workloads before starting a model. During
+the 2026-11-02 pilot, WorkBridge owned the default Aeonith port 8765 on
+Lappy. Choose a *verified free* higher port rather than stopping that service,
+for example:
+
+```powershell
+.\scripts\start-aeonith-windows.ps1 -Profile aeonith-critic -Port 8766 `
+  -PythonExe 'C:\path\to\installed\python.exe'
+# Open http://127.0.0.1:8766/ locally only after the startup readiness message.
+.\scripts\stop-aeonith-windows.ps1
+```
+
+`-PythonExe` accepts an existing absolute interpreter path on a local fixed
+drive, rejecting UNC, device and mapped-network paths. The default PATH-based
+Python discovery is subject to the same checks and a real Python 3.11+
+preflight. This avoids relying on a broken WindowsApps alias without changing
+host PATH or installed interpreters. The stop script reads the recorded port
+and verifies PID, start time, executable and Aeonith command line before
+terminating the owned process. An older deployment record without an explicit
+profile is not adopted into the new profile; stop the old process explicitly.
+The single deployment record intentionally prevents multiple concurrent
+Aeonith launchers. A nondefault port is **local-only**: combining `-Port` other
+than 8765 with `-FunnelOrigin` is rejected.
+
+An existing Aeonith listener cannot change models, profiles or ports in
+place. Never expose Ollama's port, retarget Funnel implicitly or publish
+manuscript content for this test.
 
 ## What the receipt proves, and what it does not
 

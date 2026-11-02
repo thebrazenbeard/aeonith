@@ -10,8 +10,13 @@ if (-not (Test-Path -LiteralPath $statePath)) {
     return
 }
 $saved = Get-Content -LiteralPath $statePath -Raw -Encoding UTF8 | ConvertFrom-Json
-if ($saved.Port -ne 8765 -or -not $saved.ProcessId -or -not $saved.StartedUtc -or -not $saved.PythonPath) {
+if (-not $saved.ProcessId -or -not $saved.StartedUtc -or -not $saved.PythonPath) {
     throw 'Deployment state is incomplete. Refusing process termination.'
+}
+$port = 0
+if (-not [int]::TryParse(([string]$saved.Port), [ref]$port) -or
+    $port -lt 1024 -or $port -gt 65535) {
+    throw 'Deployment port is invalid. Refusing process termination.'
 }
 $target = Get-Process -Id ([int]$saved.ProcessId) -ErrorAction SilentlyContinue
 if ($null -eq $target) {
@@ -27,8 +32,8 @@ if (-not $sameProcess) {
 }
 $actual = Get-CimInstance Win32_Process -Filter ('ProcessId=' + $target.Id) -ErrorAction Stop
 if ($actual.CommandLine -notmatch '(?i)(?:^|\s)-m\s+aeonith\.local_server(?:\s|$)' -or
-        $actual.CommandLine -notmatch '(?i)--port\s+8765(?:\s|$)') {
-    throw 'Command-line identity is not Aeonith port 8765. Nothing was terminated.'
+        $actual.CommandLine -notmatch ('(?i)(?:^|\s)--port\s+' + $port + '(?:\s|$)')) {
+    throw ('Command-line identity is not Aeonith port ' + $port + '. Nothing was terminated.')
 }
 Stop-Process -Id $target.Id -ErrorAction Stop
 try { Wait-Process -Id $target.Id -Timeout 10 -ErrorAction SilentlyContinue } catch { }

@@ -6,6 +6,7 @@ real accelerator or any official full-size checkpoint. It is **not** installed
 as a mandatory dependency of Aeonith's standard-library application.
 
 The current route targets the **text tower** of the official
+[`Qwen/Qwen3.5-0.8B`](https://huggingface.co/Qwen/Qwen3.5-0.8B),
 [`Qwen/Qwen3.5-2B`](https://huggingface.co/Qwen/Qwen3.5-2B) or
 [`Qwen/Qwen3.5-4B`](https://huggingface.co/Qwen/Qwen3.5-4B) Transformers
 checkpoints. These published checkpoints are Apache-2.0 licensed. The runner
@@ -13,6 +14,11 @@ does not train from a `.gguf` inference quantization, download a model, use
 cloud inference, contact Supabase, or set up any service. An adapter remains
 dependent on the exact base model and tokenizer; the project cannot claim it
 contains a self-contained trained model simply by committing a manifest.
+
+The 0.8B checkpoint is a **lower-memory training candidate**, not a proven fit
+on Lappy or any other host. Its text-tower compatibility, actual memory use
+and gradient updates remain unverified until tested with the exact local
+checkpoint and runtime.
 
 ## Prepare private training inputs
 
@@ -26,7 +32,7 @@ paths to the public Aeonith repository.
 {
   "schema_version": "aeonith.training_plan.v1",
   "base_model": {
-    "id": "Qwen/Qwen3.5-2B",
+    "id": "Qwen/Qwen3.5-0.8B",
     "revision": "<40-character upstream commit sha>",
     "local_dir": "<existing local Transformers safetensors model directory>"
   },
@@ -73,16 +79,21 @@ This does not start inference or training. It validates all three splits and
 produces `validated_not_trained` metadata: split counts, SHA-256 fingerprints,
 rights-basis counts, the declared upstream revision, and local base-file hashes.
 No prompt, completion, source identifier, or private manuscript content is
-printed. The model files are streamed for hashes, so a large local checkpoint
-will make even inspection take some time.
+printed. The model, tokenizer, and optional external `chat_template.jinja`
+files are fingerprinted because changes to chat formatting affect the actual
+training and evaluation prompts. The model files are streamed for hashes, so
+a large local checkpoint will make even inspection take some time. The receipt
+still cannot authenticate the claimed upstream revision against Hugging Face.
 
 ## Attempt actual local adapter training
 
 In an isolated environment on the authorized host, provide locally installed
 compatible `torch`, `transformers >= 5.2`, `datasets`, `peft`, `trl`, and their
 dependencies. The standard Aeonith install does **not** require these. Their
-versions and compatibility must be qualified on the actual machine; in
-particular 4 GB of VRAM does not establish that Qwen3.5-4B fine-tuning fits.
+versions and compatibility must be qualified on the actual machine; 4 GB of
+VRAM does not establish that **any** of these checkpoints can be fine-tuned
+under this full-weight-loading, non-QLoRA implementation. The 0.8B option
+reduces baseline memory demand but is not a resource guarantee.
 
 ```bash
 python -m training.train_lora train \

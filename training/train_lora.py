@@ -1,4 +1,4 @@
-"""Explicit, offline Qwen3.5 text-only LoRA training and receipt CLI.
+"""Explicit, offline Qwen3.5 (0.8B/2B/4B) text-only LoRA training and receipt CLI.
 
 Optional third-party dependencies are loaded ONLY for ``train --execute``.
 This is a reproducible path, not a claim that any adapter has been trained.
@@ -194,7 +194,7 @@ def _train(plan_path: Path, output: Path) -> dict[str, Any]:
 
 
 def main(argv: list[str] | None = None) -> int:
-    parser = argparse.ArgumentParser(description="Optional offline Qwen3.5 LoRA/SFT pipeline")
+    parser = argparse.ArgumentParser(description="Optional offline Qwen3.5 0.8B/2B/4B LoRA/SFT pipeline")
     command = parser.add_subparsers(dest="command", required=True)
     inspect = command.add_parser("inspect", help="Validate local corpus and fingerprints, with no ML dependencies")
     inspect.add_argument("--plan", type=Path, required=True)

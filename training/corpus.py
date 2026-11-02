@@ -19,7 +19,7 @@ class CorpusError(ValueError):
     """Invalid or insufficiently authorized local training material."""
 
 
-ALLOWED_MODELS = frozenset({"Qwen/Qwen3.5-2B", "Qwen/Qwen3.5-4B"})
+ALLOWED_MODELS = frozenset({"Qwen/Qwen3.5-0.8B", "Qwen/Qwen3.5-2B", "Qwen/Qwen3.5-4B"})
 RIGHTS_BASIS = frozenset({"self_authored", "public_domain", "cc0", "licensed"})
 SPLITS = ("train", "validation", "holdout")
 HEX40 = re.compile(r"^[0-9a-f]{40}$")
@@ -141,7 +141,7 @@ def inspect_plan(plan_path: str | Path) -> tuple[dict[str, Any], dict[str, list[
         raise CorpusError("unsupported training plan schema")
     model = _exact_keys(plan["base_model"], {"id", "revision", "local_dir"}, set(), "base_model")
     if model["id"] not in ALLOWED_MODELS:
-        raise CorpusError("unsupported base model (official Qwen3.5 2B/4B only)")
+        raise CorpusError("unsupported base model (official Qwen3.5 0.8B/2B/4B only)")
     if not isinstance(model["revision"], str) or not HEX40.fullmatch(model["revision"]):
         raise CorpusError("base revision must be an immutable 40-character SHA")
     base_dir = _local_path(model["local_dir"], path.parent)
@@ -158,7 +158,7 @@ def inspect_plan(plan_path: str | Path) -> tuple[dict[str, Any], dict[str, list[
         raise CorpusError("local base must contain local tokenizer assets")
     related = [base_dir / name for name in (
         "model.safetensors.index.json", "tokenizer_config.json", "special_tokens_map.json",
-        "generation_config.json", "merges.txt",
+        "generation_config.json", "merges.txt", "chat_template.jinja",
     ) if (base_dir / name).is_file()]
     base_files = [base_dir / "config.json", *weights, *tokenizer_files, *related]
     base_fingerprints = [{"name": item.name, "bytes": item.stat().st_size, "sha256": _sha256(item)} for item in base_files]

@@ -76,6 +76,34 @@ class TrainingContractTests(unittest.TestCase):
         self.assertNotIn("The rain fell", json.dumps(receipt))
         self.assertNotIn("A grounded reading", json.dumps(receipt))
 
+    def test_official_qwen35_checkpoint_sizes_are_supported(self) -> None:
+        # Acceptance of a smaller checkpoint does not prove host training.
+        for model_id in ("Qwen/Qwen3.5-0.8B", "Qwen/Qwen3.5-2B", "Qwen/Qwen3.5-4B"):
+            with self.subTest(model_id=model_id):
+                self.plan["base_model"]["id"] = model_id
+                self.write_plan()
+                receipt, _ = inspect_plan(self.plan_path)
+                self.assertEqual(receipt["base_model"]["id"], model_id)
+                self.assertEqual(receipt["status"], "validated_not_trained")
+
+    def test_rejects_unapproved_qwen35_variant(self) -> None:
+        self.plan["base_model"]["id"] = "Qwen/Qwen3.5-0.8B-Base"
+        self.write_plan()
+        with self.assertRaisesRegex(CorpusError, "unsupported base model"):
+            inspect_plan(self.plan_path)
+
+    def test_chat_template_framing_is_fingerprinted(self) -> None:
+        template = self.base / "chat_template.jinja"
+        template.write_text("{{ messages }}", encoding="utf-8")
+        first, _ = inspect_plan(self.plan_path)
+        first_files = {item["name"]: item["sha256"] for item in first["base_model"]["files"]}
+        self.assertIn("chat_template.jinja", first_files)
+        self.assertNotIn("{{ messages }}", json.dumps(first))
+        template.write_text("{{ messages | tojson }}", encoding="utf-8")
+        second, _ = inspect_plan(self.plan_path)
+        second_files = {item["name"]: item["sha256"] for item in second["base_model"]["files"]}
+        self.assertNotEqual(first_files["chat_template.jinja"], second_files["chat_template.jinja"])
+
     def test_rejects_duplicate_prompt_across_splits(self) -> None:
         self.write_split("holdout", row("different-id", "The rain fell"))
         with self.assertRaisesRegex(CorpusError, "overlap"):

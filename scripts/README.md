@@ -15,21 +15,39 @@ the service:
 
 # Or prepare the application to accept exactly this one HTTPS Funnel host:
 .\scripts\start-aeonith-windows.ps1 -FunnelOrigin 'https://machine.tailnet.ts.net'
+
+# Opt-in Aeonith critic on an explicitly verified unoccupied local port:
+.\scripts\start-aeonith-windows.ps1 -Profile aeonith-critic -Port 8766 `
+  -PythonExe 'C:\path\to\installed\python.exe'
 ```
 
 Replace the example with the **actual** Tailscale device DNS name. The script
 verifies the selected Ollama model already exists locally, connects to its
 **loopback-only** 11434 API, limits reviews to one lens, and runs the Aeonith
-HTTP listener only on `127.0.0.1:8765`. If you already have a service on
-8765, it stops without touching it.
+HTTP listener only on `127.0.0.1` (default port 8765). `-Port` allows an
+explicit local high port (1024–65535) when 8765 belongs to another service.
+Occupied ports fail without disturbing their owners. A nondefault port cannot
+be used with `-FunnelOrigin` because a separately configured Funnel mapping
+must never be silently retargeted. One owned `deployment.json` record means
+only one Aeonith instance can be started by this launcher at a time.
+
+`-Profile aeonith-critic` selects installed tag `aeonith-critic:0.1`, using
+2,048 output tokens with JSON-schema structured output. One harmless
+single-lens structural pilot succeeded with these settings. The legacy
+profile remains default (800 tokens and JSON-object mode). Neither profile
+is qualified for general literary quality or reliable multi-lens review.
+`-PythonExe` can bypass WindowsApps aliases with an existing Python 3.11+
+interpreter on a local fixed drive; both explicit and PATH-discovered paths
+reject UNC/device and mapped network locations.
 
 On first start, a fresh cryptographically random bearer token is encrypted
 with Windows **per-user DPAPI** to
 `%LOCALAPPDATA%\Aeonith\token.dpapi`. The launcher never prints it.
-It also preloads the existing Ollama model and keeps roughly 1 GiB of
-model RAM reserved for 24 hours, preventing the usual five-minute idle
-unload from causing a cold-inference timeout. This makes no paid calls or
-downloads. After 24 idle hours, reviews may again be slower.
+It also preloads the installed Ollama model. The legacy profile requests
+24-hour residency; the critic profile requests five minutes to reduce
+prolonged contention. Preloading can consume multiple GiB and cold requests
+may exceed the application's 50-second provider timeout. Check shared
+workloads before starting it. This performs no explicit download or paid call.
 From the **same Windows user account**, intentionally copy the token to the
 local clipboard with:
 
@@ -49,10 +67,9 @@ any clipboard-history or sync facilities you enabled; clear clipboard
 history after use. Do not paste the token into chats, terminals, logs,
 screenshots, or Git.
 
-The current tiny Ollama model was **qualified only for one symbolic lens**
-with a harmless sample. The browser selects that one lens by default.
-Other lens combinations are not yet
-qualified to produce complete valid reviews within 50 seconds.
+Only one symbolic-lens response from `aeonith-critic:0.1` passed the actual
+structural pilot. This is not a literary-quality result. Legacy models and
+other lens combinations remain unqualified; the browser defaults to one lens.
 
 To stop only the recorded Aeonith process:
 
@@ -60,8 +77,8 @@ To stop only the recorded Aeonith process:
 .\scripts\stop-aeonith-windows.ps1
 ```
 
-The stop script verifies the stored PID, start time, executable path, and
-command-line identity before terminating anything. It does **not** stop
+The stop script verifies the stored PID, start time, executable path, recorded
+port, and command-line identity before terminating anything. It does **not** stop
 Ollama, unload the resident model, modify Tailscale, or remove the DPAPI token. If public Funnel was
 enabled, disable its exact Aeonith listener separately **before** stopping
 the local server; do not use a broad `tailscale funnel reset`.
