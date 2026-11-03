@@ -10,7 +10,7 @@ from __future__ import annotations
 import argparse
 import json
 import os
-from pathlib import Path
+from pathlib import Path, PurePosixPath
 import secrets
 import subprocess
 import sys
@@ -51,7 +51,9 @@ def _read_child_cgroup(unit: str, *, root: Path = _CGROUP_ROOT,
         entries = [line.split(":", 2) for line in membership.read_text(encoding="ascii").splitlines()]
         if len(entries) != 1 or len(entries[0]) != 3 or entries[0][:2] != ["0", ""]:
             raise ScopeQualificationError("not a unified cgroup v2 process")
-        relative = Path(entries[0][2])
+        # /proc/self/cgroup always uses Linux/POSIX paths; using the host's
+        # Path flavor makes the same parser fail in Windows contract tests.
+        relative = PurePosixPath(entries[0][2])
         if not relative.is_absolute() or unit not in relative.parts or ".." in relative.parts:
             raise ScopeQualificationError("process is not in its requested unit")
         cgroup = root.joinpath(*relative.parts[1:])

@@ -45,7 +45,10 @@ class ScopeReadbackTests(unittest.TestCase):
         self.assertEqual(report["optimizer_steps"], 0)
 
     def test_rejects_missing_membership_or_alias(self):
-        for path in ("0::/other.scope\n", "0::/app.slice/..\n", "1:cpu:/unit.scope\n"):
+        for path in (
+            "0::/other.scope\n", "0::/app.slice/..\n", "1:cpu:/unit.scope\n",
+            f"0::C:\\user.slice\\app.slice\\{self.unit}\n",
+        ):
             with self.subTest(path=path):
                 self.membership.write_text(path, encoding="ascii")
                 with self.assertRaises(ScopeQualificationError):
