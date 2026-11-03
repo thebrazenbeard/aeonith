@@ -2,6 +2,19 @@
 
 Status: **NOT_QUALIFIED**. No production Windows private writes are enabled.
 
+One authorized Windows-host run of the opt-in, synthetic-only harness was
+recorded in
+[`receipts/2026-11-02-windows-disposable-private-output-probe.json`](receipts/2026-11-02-windows-disposable-private-output-probe.json),
+bound to exact Git source `ef4c1c6`. Both an ancestor junction and an ancestor
+directory symlink redirected the marker open after a parent rename. The harness
+also observed an inherited DACL and owner/token mismatch, which is *not* a
+qualified effective-access assessment. The temporary probe directories were
+absent in readback. This is a negative **RUNTIME_PROBE**, not a proof that any
+alternative Windows private writer is safe; production remains fail-closed.
+Follow-up host Git readback verified the checkout head, clean worktree, and
+probe-script Git blob `898727eb09721e4cf6b84f5c8f3efa2f7e66a618`; these
+source observations are not cryptographic attestation of a host process.
+
 The existing `aeonith/private_output.py` refuses Windows. That is currently
 correct. This experiment cannot be imported or called by the runtime, and the
 CLI is no-op by default. It uses no network, no models, and no user material.

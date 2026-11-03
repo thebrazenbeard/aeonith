@@ -1,0 +1,74 @@
+{
+  "schema_version": "aeonith.windows_disposable_private_output_probe_receipt.v1",
+  "evidence_class": "RUNTIME_PROBE",
+  "provenance": "authorized Windows host, sanitized operator readback",
+  "date_indiana": "2026-11-02",
+  "exact_source_head": "ef4c1c635d6a1ff91710d38e32dd04c633f78f79",
+  "host_checkout_head_readback": "ef4c1c635d6a1ff91710d38e32dd04c633f78f79",
+  "probe_script_git_blob": "898727eb09721e4cf6b84f5c8f3efa2f7e66a618",
+  "host_checkout_clean_at_followup": true,
+  "python_version": "3.13.15",
+  "invocation": "python -E -B -S -m experimental.windows_private_output_probe --run-disposable-temp-probes",
+  "scope": "synthetic-disposable-temp-only",
+  "qualification_status": "NOT_QUALIFIED",
+  "real_private_output_qualified": false,
+  "cases": [
+    {
+      "test": "junction",
+      "execution": "EXECUTED",
+      "parent_renamed_before_open": true,
+      "opened_target_identity_after_swap": true,
+      "opened_target_normalized_path_after_swap": true,
+      "observations": {
+        "ace_rights_qualified": false,
+        "ancestor_redirect_observed": true,
+        "dacl_is_null": false,
+        "dacl_present": true,
+        "dacl_protected": false,
+        "owner_matches_token_user": false,
+        "owner_present": true,
+        "reparse_point_present": true
+      },
+      "falsifiers": [
+        "noncaller_owner",
+        "inherited_dacl",
+        "ancestor_reparse_traversed",
+        "reparse_point_present"
+      ]
+    },
+    {
+      "test": "symlink",
+      "execution": "EXECUTED",
+      "parent_renamed_before_open": true,
+      "opened_target_identity_after_swap": true,
+      "opened_target_normalized_path_after_swap": true,
+      "observations": {
+        "ace_rights_qualified": false,
+        "ancestor_redirect_observed": true,
+        "dacl_is_null": false,
+        "dacl_present": true,
+        "dacl_protected": false,
+        "owner_matches_token_user": false,
+        "owner_present": true,
+        "reparse_point_present": true
+      },
+      "falsifiers": [
+        "noncaller_owner",
+        "inherited_dacl",
+        "ancestor_reparse_traversed",
+        "reparse_point_present"
+      ]
+    }
+  ],
+  "post_probe_readback": {
+    "unremoved_probe_directories": 0,
+    "isolated_source_checkout_preserved": true
+  },
+  "caveats": [
+    "The probes intentionally create a redirected ancestor; they falsify a naive path-based security assumption, not every possible Windows file writer.",
+    "Owner/token and DACL fields are observations from the experimental harness, not independent effective-access validation.",
+    "No private manuscript or actual production private file was tested; no output permission gate was lifted.",
+    "The final checkout is an isolated disposable source copy, not an installed or promoted service.",
+    "Source head and probe script blob were independently read back from the host checkout after the run; this is not a signed host attestation."
+  ]
+}
