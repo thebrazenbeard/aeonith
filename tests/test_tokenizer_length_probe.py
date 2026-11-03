@@ -24,19 +24,31 @@ class FakeTokenizer:
     def __len__(self):
         return 256
 
-    def apply_chat_template(self, messages, *, tokenize, add_generation_prompt):
-        self.calls.append((messages, tokenize, add_generation_prompt))
+    def apply_chat_template(self, messages, *, tokenize, add_generation_prompt,
+                            return_dict=True):
+        # Real Transformers 5.20 Qwen tokenizer's default return_dict=True
+        # returns a BatchEncoding mapping, even with tokenize=True. Requiring
+        # explicit False avoids mistakenly treating dict length as token count.
+        self.calls.append((messages, tokenize, add_generation_prompt, return_dict))
         if self.invalid == "exception":
             raise ValueError("private passage in an injected error")
         if len(messages) == 1:
-            return list(self.prefix)
-        if self.invalid == "prefix":
-            return [99, *self.added]
-        if self.invalid == "bool":
-            return [*self.prefix, True]
-        if self.invalid == "negative":
-            return [*self.prefix, -1]
-        return [*self.prefix, *self.added]
+            tokens = list(self.prefix)
+        elif self.invalid == "prefix":
+            tokens = [99, *self.added]
+        elif self.invalid == "bool":
+            tokens = [*self.prefix, True]
+        elif self.invalid == "negative":
+            tokens = [*self.prefix, -1]
+        else:
+            tokens = [*self.prefix, *self.added]
+        if return_dict or self.invalid == "dict_even_when_false":
+            return {"input_ids": tokens, "attention_mask": [1] * len(tokens)}
+        if self.invalid == "nested_even_when_false":
+            return [tokens]
+        if self.invalid == "batched_even_when_false":
+            return [tokens, tokens]
+        return tokens
 
 
 class CandidateTokenizerTests(unittest.TestCase):
@@ -59,6 +71,7 @@ class CandidateTokenizerTests(unittest.TestCase):
         self.assertFalse(result["corpus_admitted"])
         self.assertFalse(result["model_loaded"])
         self.assertEqual(len(tokenizer.calls), 84)
+        self.assertTrue(all(call[3] is False for call in tokenizer.calls))
         self.assertNotIn("The pier keeper", json.dumps(result))
         self.assertNotIn("At supper", json.dumps(result))
         self.assertRegex(result["candidate_sha256"], "^[a-f0-9]{64}$")
@@ -72,7 +85,9 @@ class CandidateTokenizerTests(unittest.TestCase):
         self.assertIn("return ONLY a JSON object", prompt)
 
     def test_prefix_or_token_errors_refused_without_echoing_text(self):
-        for kind in ("prefix", "exception", "bool", "negative"):
+        for kind in ("prefix", "exception", "bool", "negative",
+                     "dict_even_when_false", "nested_even_when_false",
+                     "batched_even_when_false"):
             with self.subTest(kind=kind), self.assertRaises(TokenizerProbeError) as context:
                 measure_synthetic_candidate(FakeTokenizer(invalid=kind), max_length=128)
             self.assertNotIn("private passage", str(context.exception))
@@ -82,6 +97,14 @@ class CandidateTokenizerTests(unittest.TestCase):
             with self.subTest(added_count=len(added)):
                 with self.assertRaises(TokenizerProbeError):
                     measure_synthetic_candidate(FakeTokenizer(added=added), max_length=128)
+
+    def test_exact_4096_boundary_passes_and_4097_overflow_fails(self):
+        # Three masked prefix tokens + 4093 supervised completion tokens.
+        result = measure_synthetic_candidate(FakeTokenizer(added=(4,) * 4093), max_length=4096)
+        self.assertEqual(result["max_total_tokens"], 4096)
+        self.assertEqual(result["min_completion_tokens"], 4093)
+        with self.assertRaises(TokenizerProbeError):
+            measure_synthetic_candidate(FakeTokenizer(added=(4,) * 4094), max_length=4096)
 
     def test_max_length_requires_strict_contract_bound(self):
         for value in (True, 0, 1, 127, 4097, "512"):

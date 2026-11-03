@@ -24,6 +24,12 @@ Without `--execute`, it refuses and does **not import Transformers**. With
 required tokenizer/config files against the repository manifest, loads only
 the local fast tokenizer with `trust_remote_code=False`, measures all 42
 synthetic in-memory rows, and rehashes the tokenizer assets afterward.
+Both `apply_chat_template` calls request `return_dict=False` explicitly.
+Some official tokenizer versions return a `BatchEncoding` dictionary by
+default even when `tokenize=True`; the explicit option requests the
+single-example `list[int]` required by the loss-mask prefix check. A tokenizer
+that still returns a dictionary, nested/batched token IDs, or a tensor fails
+closed; such representations are **not** silently coerced to a token sequence.
 `--max-length` must be an integer from 128 through 4096; a single overflow,
 invalid token ID, missing completion, or non-prefix-stable chat template
 refuses the **whole** receipt. No truncation or partial pass is permitted.

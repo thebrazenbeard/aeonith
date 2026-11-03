@@ -129,10 +129,11 @@ def _length_pair(tokenizer: Any, prompt: str, completion: str, *, max_length: in
     try:
         vocabulary_size = len(tokenizer)
         prefix = tokenizer.apply_chat_template(
-            [{"role": "user", "content": prompt}], tokenize=True, add_generation_prompt=True)
+            [{"role": "user", "content": prompt}], tokenize=True,
+            add_generation_prompt=True, return_dict=False)
         full = tokenizer.apply_chat_template(
             [{"role": "user", "content": prompt}, {"role": "assistant", "content": completion}],
-            tokenize=True, add_generation_prompt=False,
+            tokenize=True, add_generation_prompt=False, return_dict=False,
         )
     except Exception:
         raise TokenizerProbeError("local chat tokenizer could not encode candidate") from None
