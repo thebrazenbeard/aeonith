@@ -262,7 +262,12 @@ for ($attempt = 0; $attempt -lt 16; $attempt++) {
     } catch { }
 }
 if (-not $ready) {
-    if (-not $service.HasExited) { Stop-Process -Id $service.Id -ErrorAction SilentlyContinue }
+    # $service is the native Process object returned by Start-Process.
+    # Terminate via that object, never by its reusable numeric PID.
+    try {
+        if (-not $service.HasExited) { $service.Kill() }
+        [void]$service.WaitForExit(8000)
+    } catch { }
     throw 'Aeonith failed the owned-loopback health and PID check. No public listener was changed.'
 }
 $record = @{

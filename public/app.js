@@ -458,8 +458,9 @@ function extractDocxText(xml, stylesXml = null) {
   if (!root || root.namespaceURI !== wordNamespace || root.localName !== "document") {
     throw new Error("The Word document XML has an unexpected root element.");
   }
-  const body = root.getElementsByTagNameNS(wordNamespace, "body")[0];
-  if (!body) throw new Error("The Word document has no readable body.");
+  const bodies = root.getElementsByTagNameNS(wordNamespace, "body");
+  if (bodies.length !== 1) throw new Error("The Word document has no unambiguous readable body.");
+  const body = bodies[0];
   // Walk each element exactly once. Descendant searches inside every nested
   // paragraph/text node can otherwise turn attacker-controlled XML into
   // quadratic work or duplicate arbitrarily large descendant text.
@@ -478,6 +479,18 @@ function extractDocxText(xml, stylesXml = null) {
     // No named-style visibility resolver is available in this browser path.
     "rStyle", "pStyle"
   ]);
+  // Word can display or suppress text through these main-body constructs,
+  // independently of separate media/notes ZIP parts. The excerpt reader has
+  // no field evaluator, textbox renderer, numbering resolver, or object layer.
+  // Refuse them rather than silently treating their w:t descendants as
+  // ordinary, author-visible prose.
+  const unsupportedWordBodyMarkup = new Set([
+    "instrText", "fldChar", "fldSimple", "footnoteReference",
+    "endnoteReference", "commentReference", "commentRangeStart",
+    "commentRangeEnd", "annotationRef", "headerReference",
+    "footerReference", "drawing", "pict", "object", "subDoc",
+    "txbxContent", "sym", "numPr"
+  ]);
   const lines = [];
   let pieces = [];
   let characters = 0;
@@ -487,7 +500,10 @@ function extractDocxText(xml, stylesXml = null) {
   // fallbacks or ignored foreign wrappers can contain w:t that Word would
   // never render, so copying those strings would disclose unintended prose.
   const ancestry = [{ node: body, foreign: false }];
-  const semanticTextElements = new Set(["p", "t", "tab", "br", "cr"]);
+  const semanticTextElements = new Set([
+    "p", "t", "tab", "br", "cr", "noBreakHyphen", "softHyphen",
+    "lastRenderedPageBreak"
+  ]);
   const add = (value) => {
     characters += value.length;
     if (characters > MAX_MANUSCRIPT_CHARS) {
@@ -528,6 +544,9 @@ function extractDocxText(xml, stylesXml = null) {
     if (ambiguousWordMarkup.has(element.localName)) {
       throw new Error("This Word document contains tracked changes or hidden text that cannot be imported faithfully. Finalize changes in Word and export the visible excerpt as plain text first.");
     }
+    if (unsupportedWordBodyMarkup.has(element.localName)) {
+      throw new Error("This Word document has display-dependent body content that cannot be imported faithfully. Export reviewed visible text first.");
+    }
     if (element.localName === "altChunk") {
       throw new Error("This Word document uses unsupported embedded body content. Export it as plain text first.");
     }
@@ -547,7 +566,12 @@ function extractDocxText(xml, stylesXml = null) {
       add(value);
     } else if (element.localName === "tab") {
       add("\t");
-    } else if (element.localName === "br" || element.localName === "cr") {
+    } else if (element.localName === "noBreakHyphen") {
+      add("\u2011");
+    } else if (element.localName === "softHyphen") {
+      add("\u00ad");
+    } else if (element.localName === "br" || element.localName === "cr" ||
+               element.localName === "lastRenderedPageBreak") {
       add("\n");
     }
   }

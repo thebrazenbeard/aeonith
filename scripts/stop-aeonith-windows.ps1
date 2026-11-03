@@ -23,6 +23,14 @@ if ($null -eq $target) {
     Write-Output 'Recorded Aeonith process is already stopped. Preserving state for inspection.'
     return
 }
+# Pin the process object to its OS handle before comparing identity. A later
+# stop-by-PID would race with termination and PID reuse, potentially stopping
+# an unrelated process that inherited the numeric identifier.
+try { $ownedHandle = $target.Handle }
+catch { throw 'Cannot pin the recorded process handle. Nothing was terminated.' }
+if ($ownedHandle -eq [IntPtr]::Zero) {
+    throw 'Recorded process has no usable handle. Nothing was terminated.'
+}
 try {
     $sameProcess = ($target.StartTime.ToUniversalTime().ToString('o') -eq $saved.StartedUtc -and
         $target.Path -ieq $saved.PythonPath)
@@ -35,9 +43,17 @@ if ($actual.CommandLine -notmatch '(?i)(?:^|\s)-m\s+aeonith\.local_server(?:\s|$
         $actual.CommandLine -notmatch ('(?i)(?:^|\s)--port\s+' + $port + '(?:\s|$)')) {
     throw ('Command-line identity is not Aeonith port ' + $port + '. Nothing was terminated.')
 }
-Stop-Process -Id $target.Id -ErrorAction Stop
-try { Wait-Process -Id $target.Id -Timeout 10 -ErrorAction SilentlyContinue } catch { }
-if (Get-Process -Id $target.Id -ErrorAction SilentlyContinue) {
+try {
+    if (-not $target.HasExited) { $target.Kill() }
+    [void]$target.WaitForExit(10000)
+} catch {
+    # Exit can race the final Kill call. Only a still-running, pinned process
+    # makes the failure meaningful; never retry using the numeric PID.
+    if (-not $target.HasExited) {
+        throw 'Failed to stop the pinned Aeonith process. Preserving deployment record.'
+    }
+}
+if (-not $target.HasExited) {
     throw 'Process still running. Preserving deployment record.'
 }
 Remove-Item -LiteralPath $statePath -ErrorAction Stop

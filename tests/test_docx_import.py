@@ -112,6 +112,35 @@ if (scenario === 'normal') {
   rawXml = '<!DOCTYPE w:document [<!ENTITY e "payload">]><w:document/>';
 } else if (scenario === 'embedded_body') {
   elements.push(node('altChunk'));
+} else if (scenario === 'text_box') {
+  elements.push(node('p'));
+  elements.push(node('txbxContent'));
+  elements.push(node('p'));
+  pushText('Word text box, not a reliable paragraph stream');
+} else if (scenario === 'drawing_without_media') {
+  elements.push(node('p'));
+  elements.push(node('drawing'));
+  pushText('Text shape around drawing metadata');
+} else if (scenario === 'field_instruction') {
+  elements.push(node('p'));
+  elements.push(node('fldSimple'));
+  pushText('Word-generated field result, not literal prose');
+} else if (scenario === 'numbering') {
+  elements.push(node('p'));
+  elements.push(node('numPr'));
+  pushText('Numbering context omitted by browser');
+} else if (scenario === 'visible_word_glyphs') {
+  elements.push(node('p'));
+  pushText('well');
+  elements.push(node('noBreakHyphen'));
+  pushText('being');
+  elements.push(node('softHyphen'));
+  pushText('today');
+  elements.push(node('lastRenderedPageBreak'));
+  pushText('tomorrow');
+} else if (scenario === 'duplicate_body') {
+  elements.push(node('p'));
+  pushText('Only the first of two Word bodies is visible to this parser');
 } else if (scenario === 'tracked_deletion') {
   elements.push(node('p'));
   pushText('retained text');
@@ -194,7 +223,7 @@ if (scenario === 'normal') {
 }
 const body = node('body');
 const root = node('document');
-root.getElementsByTagNameNS = () => [body];
+root.getElementsByTagNameNS = () => scenario === 'duplicate_body' ? [body, node('body')] : [body];
 const parsed = {
   documentElement: root,
   getElementsByTagName: () => [],
@@ -434,6 +463,26 @@ class BrowserDocxWorkerTests(unittest.TestCase):
                 result = self._run_browser_xml(scenario)
                 self.assertFalse(result['ok'], result)
                 self.assertIn('tracked changes or hidden text', result['error'])
+
+    def test_window_extractor_rejects_unrepresentable_word_body_semantics(self):
+        # These main-body elements are unsafe without Word's display resolver
+        # even if the ZIP contains no word/media/ or auxiliary rich part.
+        for scenario in ('text_box', 'drawing_without_media',
+                         'field_instruction', 'numbering'):
+            with self.subTest(scenario=scenario):
+                result = self._run_browser_xml(scenario)
+                self.assertFalse(result['ok'], result)
+                self.assertIn('cannot be imported faithfully', result['error'])
+
+    def test_window_extractor_preserves_visible_word_glyphs_and_page_breaks(self):
+        result = self._run_browser_xml('visible_word_glyphs')
+        self.assertTrue(result['ok'], result)
+        self.assertEqual(result['text'], 'well\u2011being\u00adtoday\ntomorrow')
+
+    def test_window_extractor_rejects_multiple_document_bodies(self):
+        result = self._run_browser_xml('duplicate_body')
+        self.assertFalse(result['ok'], result)
+        self.assertIn('readable body', result['error'])
 
     def test_window_extractor_rejects_word_ignored_alternates_and_wrappers(self):
         # Word's markup compatibility namespace can include multiple candidate

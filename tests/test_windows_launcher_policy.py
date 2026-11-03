@@ -56,10 +56,19 @@ class WindowsLauncherPolicyTests(unittest.TestCase):
     def test_stop_checks_pid_start_time_path_and_command_before_kill(self):
         for marker in ("StartedUtc", "PythonPath", "ProcessId",
                        "Get-CimInstance Win32_Process", "CommandLine",
-                       "Stop-Process -Id $target.Id"):
+                       "$target.Handle", "$target.Kill()",
+                       "$target.WaitForExit(10000)"):
             with self.subTest(marker=marker):
                 self.assertIn(marker, STOP)
         self.assertNotIn("Stop-Process -Name", STOP)
+        self.assertNotIn("Stop-Process -Id", STOP)
+        self.assertNotIn("Wait-Process -Id", STOP)
+
+    def test_failed_launch_terminates_only_its_pinned_process(self):
+        self.assertIn("$service = Start-Process", START)
+        self.assertIn("$service.Kill()", START)
+        self.assertIn("$service.WaitForExit(8000)", START)
+        self.assertNotIn("Stop-Process -Id", START)
 
     def test_scripts_do_not_change_tailscale_or_billing(self):
         for source in (START, STOP, COPY):
