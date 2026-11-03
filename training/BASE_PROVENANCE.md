@@ -86,8 +86,17 @@ check if the directory changes.
   the verifier hashes them. Use a stable, trusted host-owned store when that
   race matters.
 - Keep the training plan's declared model/revision aligned with this verified
-  source. The existing `training.train_lora inspect` does not automatically
-  consume this extra receipt; an independent operator must retain and compare
-  both before authorizing training.
+  source. `training.train_lora inspect` does not consume this extra receipt.
+  Actual CPU training execution now requires `--expected-base-manifest` and
+  rechecks the exact local model/tokenizer bytes after the private-output
+  broker and corpus-admission gates but before optional ML imports or an
+  optimizer step. It also checks the plan's SHA-256 against the previously
+  admitted preflight and uses that same parsed plan/model path for loading,
+  preventing a later plan re-read from silently changing the selected base.
+  Missing/mismatched files fail closed. This proves **local
+  equality only**: a manifest created from the same untrusted local files
+  is not independent evidence of official Qwen publisher provenance, and a
+  shared-directory adversary can still swap model files after hashing but
+  before loading. Host-owned immutable source custody remains unqualified.
 - This source-only tool does **not** make the unavailable official model
   weights appear on Lappy; no model was downloaded or trained by its tests.

@@ -9,6 +9,7 @@ import subprocess
 import sys
 import tempfile
 import unittest
+from unittest.mock import patch
 
 from training.corpus import CorpusError
 from training.train_qlora import (
@@ -181,6 +182,43 @@ class LowMemoryContractTests(unittest.TestCase):
             _require_host_owned_gpu_allocation()
         with self.assertRaisesRegex(CorpusError, "host-owned GPU allocation gate"):
             _train(self.plan_path, destination, self.expected_base_manifest)
+        self.assertFalse(destination.exists())
+
+    def test_future_gpu_lease_alone_cannot_bypass_private_output_gate(self) -> None:
+        destination = self.root / "still-not-qualified"
+        with patch("training.train_qlora._require_host_owned_gpu_allocation"):
+            with self.assertRaisesRegex(CorpusError, "private training output custody broker"):
+                _train(self.plan_path, destination, self.expected_base_manifest)
+        self.assertFalse(destination.exists())
+
+    def test_future_output_qualification_alone_cannot_bypass_admission(self) -> None:
+        destination = self.root / "still-no-admission"
+        with (patch("training.train_qlora._require_host_owned_gpu_allocation"),
+              patch("training.train_qlora._require_private_output_broker"),
+              patch("training.train_qlora._offline") as offline,
+              patch("training.train_qlora._verify_local_base") as verify_base):
+            with self.assertRaisesRegex(CorpusError, "exact corpus audit manifest"):
+                _train(self.plan_path, destination, self.expected_base_manifest)
+            offline.assert_not_called()
+            verify_base.assert_not_called()
+        self.assertFalse(destination.exists())
+
+    def test_partial_admission_is_never_accepted_as_verified(self) -> None:
+        with self.assertRaisesRegex(CorpusError, "all exact corpus audit"):
+            _preflight(self.plan_path, audit_manifest=self.root / "manifest.json")
+
+    def test_future_both_gates_still_require_real_receipt_validation(self) -> None:
+        destination = self.root / "no-false-verified-bundle"
+        with (patch("training.train_qlora._require_host_owned_gpu_allocation"),
+              patch("training.train_qlora._require_private_output_broker"),
+              patch("training.train_qlora._offline"),
+              patch("training.train_qlora._verify_local_base") as verify_base):
+            with self.assertRaisesRegex(CorpusError, "corpus admission verification refused"):
+                _train(self.plan_path, destination, self.expected_base_manifest,
+                       audit_manifest=self.root / "nonexistent-audit.json",
+                       approval=self.root / "nonexistent-approval.json",
+                       admission_receipt=self.root / "nonexistent-receipt.json")
+            verify_base.assert_not_called()
         self.assertFalse(destination.exists())
 
     def test_train_destination_rejects_repo_root(self) -> None:

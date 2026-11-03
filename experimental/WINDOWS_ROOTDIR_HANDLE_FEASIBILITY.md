@@ -27,6 +27,16 @@ directory (not the decoy). Both the directory handle's identity and the
 cleanup readback agreed. This is a narrow host behavior observation,
 **not** evidence of a private DACL or a production-ready Windows writer.
 
+An [independent repeat receipt](receipts/2026-11-03-windows-rootdir-independent-rerun.json)
+records a second, separate execution on the same authorized Windows host,
+from exact PR source head `437e5c2` and its source hashes. The two compressed
+source modules were verified and loaded directly into an ephemeral Python
+process; no script was installed. Both cases again retained the pinned
+directory identity, created in the pinned directory and not the decoy.
+Follow-up host readback found no remaining probe temporary directories and
+the preexisting loopback Aeonith listener unchanged. The repeat improves
+reproducibility, **not** the unqualified NTFS access-control boundary.
+
 To execute with the operator's current permission on a Windows host that has
 no conflicting workload, from an exact pinned source checkout:
 

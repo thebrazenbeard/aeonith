@@ -112,17 +112,17 @@ authorization, trainer source audit or hardware lease.
 fail-closed. This artifact is a tested piece of *research*, not an approved
 training destination or evidence that any neural weights changed.
 
-### Possible path-free PEFT adapter save, not yet implemented
+### Path-free PEFT adapter export — synthetic implementation, not runtime qualification
 
-Official PEFT exposes `get_peft_model_state_dict(model)` for adapter-only
-parameters, and Safetensors exposes `safetensors.torch.save(tensors) -> bytes`.
-That combination could avoid calling PEFT's pathname-oriented
-`save_pretrained()` for *the two final adapter files*: serialize the verified
-adapter state in memory, then supply its bounded bytes to
-`write_adapter_bytes()` through the pinned descriptor. The adapter config
-would require exact PEFT-compatible serialization, and a **fresh-process
-reload and inference comparison** before qualification. This does not solve
-the training runtime's other path writes or resource authorization.
+The opt-in `training.peft_memory_export` now uses the official
+`get_peft_model_state_dict(model)` plus `safetensors.torch.save(tensors)`
+in-memory APIs and a JSON conversion for the default LoRA adapter, then
+writes the final two bounded byte payloads with `write_adapter_bytes()`.
+Six synthetic tests pass without the optional ML stack; see
+[`PEFT_IN_MEMORY_EXPORT.md`](PEFT_IN_MEMORY_EXPORT.md). The actual PEFT
+libraries, compatible reloading and **fresh-process inference comparison**
+remain unqualified. This does not solve the training runtime's other
+pathname writes, input custody or resource authorization.
 
 - [Official PEFT state-dict API](https://huggingface.co/docs/peft/package_reference/peft_model)
 - [Official Safetensors in-memory Torch save](https://huggingface.co/docs/safetensors/api/torch)

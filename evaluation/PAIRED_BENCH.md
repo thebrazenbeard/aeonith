@@ -7,6 +7,12 @@ KoboldCpp, Ollama, remote API, credentials, or Supabase are contacted. A passing
 receipt is **not** evidence that the declared models executed or that any LoRA
 improved literary reasoning.
 
+For experiments requiring frozen, trained, and shuffled-feedback controls,
+the separate pure-memory `evaluation.causal_control_matrix` validator checks
+complete work × seed × arm accounting. See `CAUSAL_CONTROL_MATRIX.md`.
+It reports caller-declared numerical differences only; it cannot substitute
+for this bench's blinded human literary assessment or genuine training proof.
+
 ## Prepare a comparison
 
 An authorized operator first obtains at least two genuinely distinct,

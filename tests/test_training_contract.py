@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import contextlib
+import hashlib
 import io
 import json
 from pathlib import Path
@@ -13,7 +14,8 @@ import unittest
 from unittest.mock import patch
 
 from training.corpus import CorpusError, inspect_plan
-from training.train_lora import _require_cpu_training, _train, fingerprint_adapter
+from training.train_lora import (_require_cpu_training, _train, fingerprint_adapter,
+                                 verify_declared_base_checkpoint)
 
 
 REVISION = "a" * 40
@@ -238,6 +240,68 @@ class TrainingContractTests(unittest.TestCase):
                        approval=self.root / "missing-approval.json",
                        admission_receipt=self.root / "missing-receipt.json")
         self.assertFalse((self.root / "new-adapter").exists())
+
+    def test_cpu_training_base_identity_binds_exact_model_revision_and_weights(self) -> None:
+        # A small synthetic fixture proves local equality, never publisher origin.
+        (self.base / "weights.safetensors").rename(self.base / "model.safetensors")
+        expected = self.root / "expected-base.json"
+        manifest = {
+            "schema_version": "aeonith.expected_base_files.v1",
+            "upstream_model_id": self.plan["base_model"]["id"],
+            "upstream_revision": REVISION,
+            "files": [{"name": path.name, "bytes": path.stat().st_size,
+                       "sha256": hashlib.sha256(path.read_bytes()).hexdigest()}
+                      for path in sorted(self.base.iterdir())],
+        }
+        expected.write_text(json.dumps(manifest), encoding="utf-8")
+        binding, _ = inspect_plan(self.plan_path)
+        receipt = verify_declared_base_checkpoint(self.plan_path, binding, expected)
+        self.assertEqual(receipt["status"], "local_bytes_match_supplied_manifest_not_origin_authenticated")
+        self.assertIs(receipt["upstream_origin_authenticated"], False)
+        (self.base / "model.safetensors").write_bytes(b"substituted")
+        with self.assertRaisesRegex(CorpusError, "separately supplied"):
+            verify_declared_base_checkpoint(self.plan_path, binding, expected)
+        (self.base / "model.safetensors").write_bytes(b"fixture-weights")
+        binding["base_model"]["id"] = "Qwen/Qwen3.5-4B"
+        with self.assertRaisesRegex(CorpusError, "base identity changed"):
+            verify_declared_base_checkpoint(self.plan_path, binding, expected)
+
+    def test_changed_plan_after_preflight_is_rejected_before_base_verifier(self) -> None:
+        binding, _ = inspect_plan(self.plan_path)
+        # Even a valid-looking plan with a different training seed is a
+        # different authorized execution; do not verify/load using its path.
+        self.plan["training"]["seed"] += 1
+        self.write_plan()
+        with patch("training.train_lora.verify_checkpoint",
+                   side_effect=AssertionError("base verifier must not run against changed plan")):
+            with self.assertRaisesRegex(CorpusError, "plan changed since admitted preflight"):
+                verify_declared_base_checkpoint(self.plan_path, binding,
+                                                self.root / "expected-base.json")
+
+    def test_train_direct_api_requires_base_manifest_when_other_gates_are_stubbed(self) -> None:
+        admitted = {"operator_attested": True}
+        preflight = {"base_model": {"id": self.plan["base_model"]["id"], "revision": REVISION}}
+        with patch("training.train_lora._require_private_output_broker", return_value=None), \
+             patch("training.train_lora.inspect_admitted_plan", return_value=(preflight, {}, admitted)):
+            with self.assertRaisesRegex(CorpusError, "expected-base-manifest"):
+                _train(self.plan_path, self.root / "adapter", device="cpu",
+                       audit_manifest=self.root / "not-present-audit.json",
+                       approval=self.root / "not-present-approval.json",
+                       admission_receipt=self.root / "not-present-receipt.json")
+        self.assertFalse((self.root / "adapter").exists())
+
+    def test_train_cli_keeps_output_custody_gate_first_even_without_base_manifest(self) -> None:
+        result = subprocess.run(
+            [sys.executable, "-m", "training.train_lora", "train", "--plan", str(self.plan_path),
+             "--output", str(self.root / "adapter"), "--execute",
+             "--audit-manifest", str(self.root / "not-present-audit.json"),
+             "--approval", str(self.root / "not-present-approval.json"),
+             "--admission-receipt", str(self.root / "not-present-receipt.json")],
+            cwd=Path(__file__).resolve().parents[1], capture_output=True, text=True, check=False,
+        )
+        self.assertEqual(result.returncode, 2)
+        self.assertIn("output custody broker", result.stderr)
+        self.assertFalse((self.root / "adapter").exists())
 
     def test_fingerprint_adapter_hashes_bytes_without_claiming_quality(self) -> None:
         adapter = self.root / "adapter"

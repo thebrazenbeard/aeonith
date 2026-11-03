@@ -18,8 +18,9 @@ import stat
 import sys
 from typing import Any
 
-from .corpus import CorpusError, inspect_plan
+from .corpus import CorpusError, MAX_PLAN_BYTES, inspect_plan
 from .corpus_admission import AdmissionError, verify_admission
+from .verify_base import BaseVerificationError, verify_checkpoint
 
 
 def _digest(path: Path) -> str:
@@ -128,6 +129,44 @@ def inspect_admitted_plan(plan_path: str | Path, audit_manifest: str | Path,
     return preflight, dataset, admitted
 
 
+def _verified_base_context(plan_path: str | Path, preflight: dict[str, Any],
+                           expected_manifest: str | Path) -> tuple[dict[str, Any], dict[str, Any], Path]:
+    """Bind the checked preflight plan to one model-loading path and snapshot.
+
+    This eliminates a needless second mutable plan read before model loading;
+    it does *not* protect a model directory against concurrent hostile writes.
+    """
+    try:
+        plan_bytes = Path(plan_path).read_bytes()
+        if (len(plan_bytes) > MAX_PLAN_BYTES or not isinstance(preflight.get("plan_sha256"), str)
+                or hashlib.sha256(plan_bytes).hexdigest() != preflight["plan_sha256"]):
+            raise CorpusError("training plan changed since admitted preflight; optimizer refused")
+        raw = json.loads(plan_bytes.decode("utf-8"))
+        expected_id = preflight["base_model"]["id"]
+        expected_revision = preflight["base_model"]["revision_declared_not_remote_verified"]
+        if (raw["base_model"]["id"] != expected_id
+                or raw["base_model"]["revision"] != expected_revision):
+            raise CorpusError("training base identity changed since admitted preflight")
+        local_dir = Path(raw["base_model"]["local_dir"]).expanduser()
+        if not local_dir.is_absolute():
+            local_dir = Path(plan_path).parent / local_dir
+        verified = verify_checkpoint(
+            local_dir, expected_manifest, expected_model=expected_id,
+            expected_revision=expected_revision,
+        )
+        return verified, raw, local_dir.resolve()
+    except CorpusError:
+        raise
+    except (BaseVerificationError, OSError, ValueError, KeyError, TypeError) as exc:
+        raise CorpusError("local base weights/tokenizer did not match the separately supplied expected-file manifest") from exc
+
+
+def verify_declared_base_checkpoint(plan_path: str | Path, preflight: dict[str, Any],
+                                    expected_manifest: str | Path) -> dict[str, Any]:
+    """Return local byte-equality receipt, never authenticated publisher origin."""
+    return _verified_base_context(plan_path, preflight, expected_manifest)[0]
+
+
 def _require_private_output_broker() -> None:
     """Fail closed until a host-owned private output creation boundary exists.
 
@@ -142,7 +181,8 @@ def _require_private_output_broker() -> None:
 def _train(plan_path: Path, output: Path, *, device: str = "cpu",
            audit_manifest: Path | None = None,
            approval: Path | None = None,
-           admission_receipt: Path | None = None) -> dict[str, Any]:
+           admission_receipt: Path | None = None,
+           expected_base_manifest: Path | None = None) -> dict[str, Any]:
     _require_cpu_training(device)
     if audit_manifest is None or approval is None or admission_receipt is None:
         raise CorpusError("exact corpus audit manifest, approval and admission receipt are required")
@@ -151,6 +191,10 @@ def _train(plan_path: Path, output: Path, *, device: str = "cpu",
     _require_private_output_broker()
     preflight, dataset, admitted = inspect_admitted_plan(
         plan_path, audit_manifest, approval, admission_receipt)
+    if expected_base_manifest is None:
+        raise CorpusError("separately supplied expected-base-manifest is required before training")
+    base_verification, raw_plan, base_dir = _verified_base_context(
+        plan_path, preflight, expected_base_manifest)
     # None of these options may trigger a Hub download, phone home, or paid call.
     os.environ["HF_HUB_OFFLINE"] = "1"
     os.environ["TRANSFORMERS_OFFLINE"] = "1"
@@ -171,11 +215,6 @@ def _train(plan_path: Path, output: Path, *, device: str = "cpu",
     except ImportError as exc:
         raise CorpusError("optional local torch, datasets, peft, transformers, trl packages required") from exc
 
-    raw_plan = json.loads(plan_path.read_text(encoding="utf-8"))
-    base_dir = Path(raw_plan["base_model"]["local_dir"]).expanduser()
-    if not base_dir.is_absolute():
-        base_dir = plan_path.parent / base_dir
-    base_dir = base_dir.resolve()
     config = raw_plan["training"]
 
     # The TRL Qwen3.5 regression tests explicitly exercise this mapping:
@@ -272,6 +311,7 @@ def _train(plan_path: Path, output: Path, *, device: str = "cpu",
         "status": "trained_not_literary_quality_qualified",
         "preflight": preflight,
         "operator_attested_admission": admitted,
+        "local_base_file_verification": base_verification,
         "adapter_files": files,
         "gradient_update_observed": True,
         "changed_trainable_tensor_count": len(changed),
@@ -282,7 +322,7 @@ def _train(plan_path: Path, output: Path, *, device: str = "cpu",
         "training_runtime": {name: metadata.version(name) for name in ("torch", "transformers", "peft", "trl", "datasets")},
         "model_loading": "local_only_text_tower_no_remote_code",
         "limitations": [
-            "base revision is operator-declared and not independently matched to the remote publisher",
+            "local base bytes matched a supplied manifest; its issuer and revision are not authenticated",
             "copyright and consent attestations require human verification",
             "adapter needs a separate fresh-process reload and blind literary evaluation",
         ],
@@ -305,6 +345,8 @@ def main(argv: list[str] | None = None) -> int:
     train.add_argument("--execute", action="store_true", help="Explicitly permit local training and output creation")
     train.add_argument("--device", choices=("cpu", "cuda"), default="cpu",
                        help="CPU only; CUDA is rejected until host-owned GPU allocation is implemented")
+    train.add_argument("--expected-base-manifest", type=Path,
+                       help="separately obtained model/tokenizer SHA-256 manifest; does not authenticate its issuer")
     for target in (inspect_admission, train):
         target.add_argument("--audit-manifest", type=Path)
         target.add_argument("--approval", type=Path)
@@ -328,7 +370,8 @@ def main(argv: list[str] | None = None) -> int:
             destination = _output_path(args.output)
             receipt = _train(args.plan.resolve(), destination, device=args.device,
                              audit_manifest=args.audit_manifest, approval=args.approval,
-                             admission_receipt=args.admission_receipt)
+                             admission_receipt=args.admission_receipt,
+                             expected_base_manifest=args.expected_base_manifest)
         print(json.dumps(receipt, indent=2, sort_keys=True))
         return 0
     except (CorpusError, FileNotFoundError, ImportError, OSError) as exc:

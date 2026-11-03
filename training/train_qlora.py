@@ -18,7 +18,10 @@ import sys
 from typing import Any
 
 from .corpus import CorpusError, inspect_plan
-from .train_lora import _output_path, _version_at_least, fingerprint_adapter
+from .train_lora import (
+    _output_path, _require_private_output_broker, _version_at_least,
+    fingerprint_adapter, inspect_admitted_plan,
+)
 from .verify_base import BaseVerificationError, verify_checkpoint
 
 
@@ -52,9 +55,22 @@ def _private(path: Path, label: str) -> Path:
     return resolved
 
 
-def _preflight(plan: Path) -> tuple[dict[str, Any], dict[str, list[dict[str, Any]]]]:
+def _preflight(plan: Path, *, audit_manifest: Path | None = None,
+               approval: Path | None = None,
+               admission_receipt: Path | None = None) -> tuple[dict[str, Any], dict[str, list[dict[str, Any]]]]:
     plan = _private(plan, "training plan")
-    receipt, records = inspect_plan(plan)
+    admission_paths = (audit_manifest, approval, admission_receipt)
+    if any(path is not None for path in admission_paths):
+        if not all(path is not None for path in admission_paths):
+            raise CorpusError("all exact corpus audit, approval and admission receipt paths are required")
+        receipt, records, admitted = inspect_admitted_plan(
+            plan, audit_manifest, approval, admission_receipt,
+        )
+        receipt = {**receipt, "operator_attested_admission": admitted}
+    else:
+        # Inspection is not a training admission. The actual training path
+        # requires the three exact-hash binding inputs above.
+        receipt, records = inspect_plan(plan)
     if receipt["base_model"]["id"] != SUPPORTED_BASE:
         raise CorpusError("the experimental 4-bit lane permits only official Qwen3.5-0.8B")
     settings = receipt["training"]
@@ -115,12 +131,22 @@ def _verify_local_base(plan: Path, expected_manifest: Path) -> dict[str, Any]:
         raise CorpusError("local base bytes do not match an independently supplied expected-file manifest") from exc
 
 
-def _train(plan: Path, destination: Path, expected_base_manifest: Path) -> dict[str, Any]:
+def _train(plan: Path, destination: Path, expected_base_manifest: Path, *,
+           audit_manifest: Path | None = None, approval: Path | None = None,
+           admission_receipt: Path | None = None) -> dict[str, Any]:
     # Direct Python API callers must meet the same security boundary as CLI.
     # This check precedes all optional ML imports and CUDA/output side effects.
     _require_host_owned_gpu_allocation()
+    # A GPU lease would not protect Trainer/PEFT path-based artifact writes.
+    # Keep this second, independent gate closed until output custody is proven.
+    _require_private_output_broker()
+    if audit_manifest is None or approval is None or admission_receipt is None:
+        raise CorpusError("exact corpus audit manifest, approval and admission receipt are required")
     _offline()
-    receipt, records = _preflight(plan)
+    receipt, records = _preflight(
+        plan, audit_manifest=audit_manifest, approval=approval,
+        admission_receipt=admission_receipt,
+    )
     base_verification = _verify_local_base(plan, expected_base_manifest)
     if not _version_at_least(metadata.version("transformers"), (5, 2)):
         raise CorpusError("Transformers >=5.2 is required for Qwen3.5")
@@ -277,6 +303,12 @@ def main(argv: list[str] | None = None) -> int:
                        help="independently obtained expected hashes; NOT publisher authentication")
     train.add_argument("--output", type=str, required=True)
     train.add_argument("--execute", action="store_true")
+    train.add_argument("--audit-manifest", type=Path,
+                       help="exact corpus audit manifest outside checkout")
+    train.add_argument("--approval", type=Path,
+                       help="record-level approved training permissions outside checkout")
+    train.add_argument("--admission-receipt", type=Path,
+                       help="exact-hash private admission receipt outside checkout")
     parsed = parser.parse_args(argv)
     try:
         if parsed.command == "inspect":
@@ -286,7 +318,11 @@ def main(argv: list[str] | None = None) -> int:
                 parser.error("train requires explicit --execute")
             _require_host_owned_gpu_allocation()
             destination = _output_path(parsed.output)
-            output = _train(parsed.plan.resolve(), destination, parsed.expected_base_manifest)
+            output = _train(
+                parsed.plan.resolve(), destination, parsed.expected_base_manifest,
+                audit_manifest=parsed.audit_manifest, approval=parsed.approval,
+                admission_receipt=parsed.admission_receipt,
+            )
         print(json.dumps(output, indent=2, sort_keys=True))
         return 0
     except (CorpusError, OSError, ImportError, metadata.PackageNotFoundError) as exc:

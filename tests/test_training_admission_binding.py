@@ -14,6 +14,7 @@ from training.corpus import CorpusError
 from training.corpus import MAX_LINE_BYTES, _read_split_bound
 from training.corpus_admission import inspect, verify_admission
 from training.train_lora import inspect_admitted_plan
+from training.train_qlora import _preflight as inspect_qlora_preflight
 
 
 PASSAGES = (
@@ -150,6 +151,23 @@ class AdmissionBindingTests(unittest.TestCase):
         self.plan.write_text(json.dumps(plan))
         with self.assertRaisesRegex(CorpusError, "admitted corpus"):
             inspect_admitted_plan(self.plan, self.manifest, self.approval, self.receipt)
+
+    def test_qlora_admitted_preflight_binds_exact_splits_and_rejects_changed_bytes(self):
+        self.write_valid_receipt()
+        summary, dataset = inspect_qlora_preflight(
+            self.plan, audit_manifest=self.manifest, approval=self.approval,
+            admission_receipt=self.receipt,
+        )
+        self.assertEqual(summary["operator_attested_admission"]["split_counts"],
+                         summary["split_counts"])
+        self.assertEqual(len(dataset["train"]), 1)
+        self.assertNotIn("windmill", json.dumps(summary))
+        self.splits["train"].write_text(self.splits["train"].read_text().replace("windmill", "watermill"))
+        with self.assertRaises(CorpusError):
+            inspect_qlora_preflight(
+                self.plan, audit_manifest=self.manifest, approval=self.approval,
+                admission_receipt=self.receipt,
+            )
 
     def test_execute_refuses_unqualified_training_output_before_optimizer(self):
         self.write_valid_receipt()

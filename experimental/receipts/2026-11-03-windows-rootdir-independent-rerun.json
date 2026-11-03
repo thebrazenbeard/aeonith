@@ -1,0 +1,52 @@
+{
+  "schema_version": "aeonith.windows_rootdir_probe_receipt.v1",
+  "date_indiana": "2026-11-03",
+  "evidence_class": "INDEPENDENT_RUNTIME_PROBE",
+  "source": {
+    "published_pr_head": "437e5c2977f25c1abd4857ac40717d028bc49738",
+    "exact_source_tree": "51603081f5a9c0dea1d5354962fc09ac928fc858",
+    "prior_module_sha256": "5712d6b5a2ea5e7b7980f9ae3c2da32bd2ec648ebe9c7913d0e841af2d5c5b89",
+    "rootdir_module_sha256": "709dfbaf5248c7193a2d000917044a9191bc6375d8348e73a5671bdadddb0e60",
+    "source_loaded_in_memory": true,
+    "python_version": "3.13.15"
+  },
+  "scope": "synthetic-disposable-temp-only",
+  "invocation": "verified compressed source bytes executed in ephemeral Python process",
+  "cases": [
+    {
+      "test": "junction",
+      "execution": "EXECUTED",
+      "same_sid_ancestor_swap": true,
+      "original_directory_handle_identity_preserved": true,
+      "rooted_create_landed_in_pinned_directory": true,
+      "decoy_marker_created": false,
+      "qualification_status": "NOT_QUALIFIED",
+      "private_acl_qualified": false
+    },
+    {
+      "test": "symlink",
+      "execution": "EXECUTED",
+      "same_sid_ancestor_swap": true,
+      "original_directory_handle_identity_preserved": true,
+      "rooted_create_landed_in_pinned_directory": true,
+      "decoy_marker_created": false,
+      "qualification_status": "NOT_QUALIFIED",
+      "private_acl_qualified": false
+    }
+  ],
+  "post_probe_readback": {
+    "unremoved_temporary_probe_directories": 0,
+    "preexisting_loopback_port_8765_owner_pid": 2224,
+    "preexisting_listener_still_present": true
+  },
+  "qualification_status": "NOT_QUALIFIED",
+  "real_private_output_qualified": false,
+  "same_sid_acl_isolation_qualified": false,
+  "limitations": [
+    "The initial directory handle ancestry and effective ACL are not authenticated.",
+    "A same-SID process can ordinarily access the same user-owned files.",
+    "This probes only one rooted empty-file creation under deterministic ancestor replacement; it does not establish concurrent race, writer durability, or recovery safety.",
+    "The host result is an independent operator-tool runtime readback, not a signed process attestation.",
+    "No real manuscript, private report, model artifact, installed service, or production Windows writer was changed."
+  ]
+}

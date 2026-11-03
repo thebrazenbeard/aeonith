@@ -7,9 +7,11 @@ No 4-bit gradient-update, persistent adapter, reload, or held-out comparison has
 been demonstrated on Lappy. Ordinary Aeonith installs do not require these ML
 packages.
 
-**Current execution gate:** The CUDA `train --execute` path intentionally
+**Current execution gates:** The CUDA `train --execute` path intentionally
 returns an error **before importing Torch, allocating GPU memory or creating
-training output**. Although the NF4 training implementation and memory checks
+training output**. Both an enforceable host-owned GPU lease and a qualified,
+handle-pinned private Trainer/PEFT output broker are missing. Granting just
+one cannot enable training. Although the NF4 training implementation and memory checks
 are retained as source for future experiments, no host-owned atomic GPU lease
 broker is integrated. A free-VRAM snapshot or operator flag is not an
 enforceable allocation. `inspect` remains available offline. Do not treat a
@@ -37,6 +39,11 @@ passing contract test as an authorized or demonstrated optimizer run.
   different decision. The candidate-proposal tool can create these only after
   recorded rights-holder, steward, and editorial approvals; it cannot
   authenticate those people or independently verify their claims.
+- An **exact-hash corpus admission bundle**, consisting of the audit manifest,
+  approval and admission receipt. The training API and reserved CLI bind all
+  three to the plan's actual train/validation/holdout split bytes; simply
+  declaring per-row permission in a plan is insufficient. The operator's
+  attestations remain unverified as human identity or copyright evidence.
 - An explicit, exclusive training-resource grant from the machine's operator.
   The script's GPU memory floor is a **safety refusal threshold**, not a
   resource lease or proof that the model will fit.
@@ -63,12 +70,17 @@ qualification. **It is rejected now even with `--execute`.**
 ```bash
 python -m training.train_qlora train \
   --plan /private/aeonith/training-plan.json \
+  --audit-manifest /private/aeonith/corpus-audit.json \
+  --approval /private/aeonith/corpus-approval.json \
+  --admission-receipt /private/aeonith/corpus-admission-receipt.json \
   --expected-base-manifest /private/aeonith/expected-files.json \
   --output /private/aeonith/new-qlora-run \
   --execute
 ```
 
-The new output path must not exist. The runner first checks all locally
+The new output path must not exist. Once both execution gates are separately
+qualified, the runner must recheck approval and the exact split hashes before
+loading the model. The runner also checks all locally
 materialized model/tokenizer/configuration bytes against the separately
 supplied manifest; neither its presence nor a successful comparison proves
 the manifest came from the official model publisher. The runner never pushes to Hugging Face,
