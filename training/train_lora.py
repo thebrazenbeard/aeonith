@@ -19,6 +19,7 @@ import sys
 from typing import Any
 
 from .corpus import CorpusError, inspect_plan
+from .corpus_admission import AdmissionError, verify_admission
 
 
 def _digest(path: Path) -> str:
@@ -107,8 +108,47 @@ def _require_cpu_training(device: str) -> None:
         )
 
 
-def _train(plan_path: Path, output: Path, *, device: str = "cpu") -> dict[str, Any]:
+def inspect_admitted_plan(plan_path: str | Path, audit_manifest: str | Path,
+                          approval: str | Path,
+                          admission_receipt: str | Path) -> tuple[dict[str, Any], dict[str, list[dict]], dict[str, Any]]:
+    """Bind exact training split bytes to an independently rechecked audit receipt.
+
+    This rechecks operator-attested approval claims. It cannot authenticate
+    human identities, permission provenance or the remote Qwen revision.
+    """
+    preflight, dataset = inspect_plan(plan_path)
+    try:
+        admitted = verify_admission(audit_manifest, approval, admission_receipt)
+    except AdmissionError as exc:
+        raise CorpusError(f"corpus admission verification refused: {exc}") from exc
+    if (admitted["split_sha256"] != {
+            split: preflight["split_files"][split]["sha256"] for split in ("train", "validation", "holdout")
+        } or admitted["split_counts"] != preflight["split_counts"]):
+        raise CorpusError("training plan does not match exact admitted corpus split bytes")
+    return preflight, dataset, admitted
+
+
+def _require_private_output_broker() -> None:
+    """Fail closed until a host-owned private output creation boundary exists.
+
+    The existing Trainer/runtime/adapter writes follow an output *path* after
+    a lexical check. An adversary controlling an ancestor could replace it
+    between checks and writes. Neither POSIX nor Windows path checks establish
+    the requisite handle-pinned, owner-qualified custody here.
+    """
+    raise CorpusError("private training output custody broker is unqualified; optimizer start refused")
+
+
+def _train(plan_path: Path, output: Path, *, device: str = "cpu",
+           audit_manifest: Path | None = None,
+           approval: Path | None = None,
+           admission_receipt: Path | None = None) -> dict[str, Any]:
     _require_cpu_training(device)
+    if audit_manifest is None or approval is None or admission_receipt is None:
+        raise CorpusError("exact corpus audit manifest, approval and admission receipt are required")
+    preflight, dataset, admitted = inspect_admitted_plan(
+        plan_path, audit_manifest, approval, admission_receipt)
+    _require_private_output_broker()
     # None of these options may trigger a Hub download, phone home, or paid call.
     os.environ["HF_HUB_OFFLINE"] = "1"
     os.environ["TRANSFORMERS_OFFLINE"] = "1"
@@ -118,7 +158,6 @@ def _train(plan_path: Path, output: Path, *, device: str = "cpu") -> dict[str, A
     # CPU setting below is a second guard against Trainer's auto device choice.
     os.environ["CUDA_VISIBLE_DEVICES"] = "-1"
 
-    preflight, dataset = inspect_plan(plan_path)
     if not _version_at_least(metadata.version("transformers"), (5, 2)):
         raise CorpusError("Transformers >=5.2 is required for Qwen3.5 text-only loading")
     try:
@@ -230,6 +269,7 @@ def _train(plan_path: Path, output: Path, *, device: str = "cpu") -> dict[str, A
         "schema_version": "aeonith.adapter_receipt.v1",
         "status": "trained_not_literary_quality_qualified",
         "preflight": preflight,
+        "operator_attested_admission": admitted,
         "adapter_files": files,
         "gradient_update_observed": True,
         "changed_trainable_tensor_count": len(changed),
@@ -255,22 +295,38 @@ def main(argv: list[str] | None = None) -> int:
     command = parser.add_subparsers(dest="command", required=True)
     inspect = command.add_parser("inspect", help="Validate local corpus and fingerprints, with no ML dependencies")
     inspect.add_argument("--plan", type=Path, required=True)
+    inspect_admission = command.add_parser("inspect-admission", help="Read-only binding of plan, approval and saved admission receipt")
+    inspect_admission.add_argument("--plan", type=Path, required=True)
     train = command.add_parser("train", help="Actually train from already-present local weights")
     train.add_argument("--plan", type=Path, required=True)
     train.add_argument("--output", required=True)
     train.add_argument("--execute", action="store_true", help="Explicitly permit local training and output creation")
     train.add_argument("--device", choices=("cpu", "cuda"), default="cpu",
                        help="CPU only; CUDA is rejected until host-owned GPU allocation is implemented")
+    for target in (inspect_admission, train):
+        target.add_argument("--audit-manifest", type=Path)
+        target.add_argument("--approval", type=Path)
+        target.add_argument("--admission-receipt", type=Path)
     args = parser.parse_args(argv)
     try:
         if args.command == "inspect":
             receipt, _ = inspect_plan(args.plan)
+        elif args.command == "inspect-admission":
+            if not (args.audit_manifest and args.approval and args.admission_receipt):
+                parser.error("inspect-admission requires --audit-manifest, --approval and --admission-receipt")
+            receipt, _, admitted = inspect_admitted_plan(
+                args.plan, args.audit_manifest, args.approval, args.admission_receipt)
+            receipt = {**receipt, "admission": admitted}
         else:
             if not args.execute:
                 parser.error("train requires explicit --execute")
             _require_cpu_training(args.device)
+            if not (args.audit_manifest and args.approval and args.admission_receipt):
+                parser.error("train requires --audit-manifest, --approval and --admission-receipt")
             destination = _output_path(args.output)
-            receipt = _train(args.plan.resolve(), destination, device=args.device)
+            receipt = _train(args.plan.resolve(), destination, device=args.device,
+                             audit_manifest=args.audit_manifest, approval=args.approval,
+                             admission_receipt=args.admission_receipt)
         print(json.dumps(receipt, indent=2, sort_keys=True))
         return 0
     except (CorpusError, FileNotFoundError, ImportError, OSError) as exc:

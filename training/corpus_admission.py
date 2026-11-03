@@ -21,7 +21,7 @@ import sys
 import unicodedata
 from typing import Any
 
-from .corpus import CorpusError, RIGHTS_BASIS, SPLITS, _check_isolation, _read_split
+from .corpus import CorpusError, RIGHTS_BASIS, SPLITS, _check_isolation, _read_split_bound
 
 
 class AdmissionError(ValueError):
@@ -74,14 +74,6 @@ def _exact(obj: Any, required: set[str], optional: set[str] = frozenset()) -> di
     if not isinstance(obj, dict) or set(obj) - required - optional or required - set(obj):
         raise AdmissionError("invalid metadata fields")
     return obj
-
-
-def _sha(path: Path) -> str:
-    digest = hashlib.sha256()
-    with path.open("rb") as stream:
-        for chunk in iter(lambda: stream.read(1024 * 1024), b""):
-            digest.update(chunk)
-    return digest.hexdigest()
 
 
 def _indirect_path(path: Path) -> bool:
@@ -241,15 +233,13 @@ def inspect(manifest_path: str | Path) -> dict[str, Any]:
         path = _private_file(info["path"], manifest_file.parent)
         if path in paths or not isinstance(info["sha256"], str) or not HEX64.fullmatch(info["sha256"]):
             raise AdmissionError("invalid or overlapping split")
-        if path.stat().st_size > MAX_TOTAL_TEXT_BYTES:
-            raise AdmissionError("corpus exceeds bounded offline audit capacity")
         paths.add(path)
-        actual = _sha(path)
+        rows, actual, byte_count = _read_split_bound(path, split)
         if actual != info["sha256"]:
             raise AdmissionError("split file fingerprint mismatch")
         digests[split] = actual
-        dataset[split] = _read_split(path, split)
-        total_bytes += path.stat().st_size
+        dataset[split] = rows
+        total_bytes += byte_count
     if sum(map(len, dataset.values())) > MAX_TOTAL_ROWS or total_bytes > MAX_TOTAL_TEXT_BYTES:
         raise AdmissionError("corpus exceeds bounded offline audit capacity")
     _check_isolation(dataset)
@@ -364,9 +354,12 @@ def _attestation(obj: Any, role: str, fingerprint: str) -> str:
     return identity.strip().casefold()
 
 
-def admit(manifest_path: str | Path, approval_path: str | Path,
-          output_path: str | Path) -> dict[str, Any]:
-    """Record caller-attested decisions in a NEW private receipt directory."""
+def check_approvals(manifest_path: str | Path, approval_path: str | Path) -> dict[str, Any]:
+    """Read-only verification of exact corpus hashes and operator attestations.
+
+    Identity strings are not cryptographic signatures; this never proves that
+    the named people made the statements or that copyright is resolved.
+    """
     receipt = inspect(manifest_path)
     approvals, approval_sha = _read_metadata(_private_file(str(approval_path), Path.cwd()))
     _exact(approvals, {"schema_version", "corpus_fingerprint_sha256", "status",
@@ -391,6 +384,28 @@ def admit(manifest_path: str | Path, approval_path: str | Path,
         "rights_and_editorial_claims_operator_attested_only": True,
         "adapter_publication_authorized": False,
     }
+    return result
+
+
+def verify_admission(manifest_path: str | Path, approval_path: str | Path,
+                     receipt_path: str | Path) -> dict[str, Any]:
+    """Recheck a saved receipt against *current* private source/approval bytes.
+
+    The receipt is an operator statement, not a trusted rights signature. This
+    prevents accidental corpus substitution and stale/fabricated standalone
+    receipt contents from silently authorizing an optimizer run.
+    """
+    expected = check_approvals(manifest_path, approval_path)
+    saved, _ = _read_metadata(_private_file(str(receipt_path), Path.cwd()))
+    if saved != expected:
+        raise AdmissionError("admission receipt mismatches current corpus or approvals")
+    return expected
+
+
+def admit(manifest_path: str | Path, approval_path: str | Path,
+          output_path: str | Path) -> dict[str, Any]:
+    """Record caller-attested decisions in a NEW private receipt directory."""
+    result = check_approvals(manifest_path, approval_path)
     raw = Path(output_path).expanduser()
     candidate = raw if raw.is_absolute() else Path.cwd() / raw
     if _indirect_path(candidate):
@@ -424,20 +439,25 @@ def admit(manifest_path: str | Path, approval_path: str | Path,
 
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description="Offline supplemental Aeonith corpus audit; no training or publication")
-    parser.add_argument("action", choices=("inspect", "admit"))
+    parser.add_argument("action", choices=("inspect", "admit", "verify"))
     parser.add_argument("--manifest", type=Path, required=True)
     parser.add_argument("--approval", type=Path)
     parser.add_argument("--output", type=Path)
+    parser.add_argument("--receipt", type=Path)
     args = parser.parse_args(argv)
     try:
         if args.action == "inspect":
-            if args.approval or args.output:
-                raise AdmissionError("inspect does not accept approval or output")
+            if args.approval or args.output or args.receipt:
+                raise AdmissionError("inspect does not accept approval, output or receipt")
             result = inspect(args.manifest)
-        else:
-            if not args.approval or not args.output:
+        elif args.action == "admit":
+            if not args.approval or not args.output or args.receipt:
                 raise AdmissionError("admit requires approval and output")
             result = admit(args.manifest, args.approval, args.output)
+        else:
+            if not args.approval or not args.receipt or args.output:
+                raise AdmissionError("verify requires approval and receipt, without output")
+            result = verify_admission(args.manifest, args.approval, args.receipt)
         print(json.dumps(result, sort_keys=True))
         return 0
     except (AdmissionError, CorpusError, OSError, ValueError) as exc:

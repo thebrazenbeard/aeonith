@@ -17,6 +17,7 @@ from typing import Any, Iterable
 
 from aeonith import critique
 from aeonith.core import CANONICAL_LENSES
+from aeonith.private_output import PrivateOutputError, reserve_private_file
 from aeonith.providers import LocalOpenAICompatibleProvider
 from evaluation.quality_eval import audit_review
 
@@ -164,16 +165,26 @@ def run_pilot(provider: Any, *, model: str, repeats: int = 1,
     }
 
 
-def write_report_exclusive(path: Path, report: dict[str, Any]) -> None:
-    """Write sanitized JSON once with owner-only POSIX permissions; no overwrite."""
+def _write_report_fd(fd: int, report: dict[str, Any]) -> None:
+    """Write sanitized JSON through an already reserved, privately pinned fd."""
     encoded = (json.dumps(report, indent=2, ensure_ascii=False, allow_nan=False)
                + "\n").encode("utf-8")
-    flags = os.O_WRONLY | os.O_CREAT | os.O_EXCL
-    if hasattr(os, "O_NOFOLLOW"):
-        flags |= os.O_NOFOLLOW
-    fd = os.open(path, flags, 0o600)
-    with os.fdopen(fd, "wb") as stream:
-        stream.write(encoded)
+    view = memoryview(encoded)
+    while view:
+        written = os.write(fd, view)
+        if written <= 0:
+            raise OSError("private report write did not progress")
+        view = view[written:]
+    os.fsync(fd)
+
+
+def write_report_exclusive(path: Path, report: dict[str, Any]) -> None:
+    """Write only through the qualified private output boundary, never in Git."""
+    fd = reserve_private_file(path)
+    try:
+        _write_report_fd(fd, report)
+    finally:
+        os.close(fd)
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -212,17 +223,29 @@ def main(argv: list[str] | None = None) -> int:
         cases = CASES if args.all_cases else tuple(
             case for case in CASES if case["id"] == args.case
         )
-        report = run_pilot(provider, model=args.model, repeats=args.repeats,
-                           lenses=tuple(args.lens or ["symbolic"]), cases=cases)
+        lenses = tuple(args.lens or ["symbolic"])
+        _check_inputs(args.model, args.repeats, lenses, tuple(cases))
     except ValueError:
         parser.error("invalid local-only model pilot configuration")
-    if args.output:
+
+    # A rejected path must fail *before* incurring inference, and a real report
+    # must be written through the same reserved descriptor (no path re-open).
+    report_fd = None
+    if args.output is not None:
         try:
-            write_report_exclusive(args.output, report)
-        except OSError:
-            parser.error("cannot create exclusive report file; existing files are preserved")
-    else:
-        print(json.dumps(report, indent=2, ensure_ascii=False, allow_nan=False))
+            report_fd = reserve_private_file(args.output)
+        except (OSError, PrivateOutputError):
+            parser.error("cannot create qualified private report file; existing files are preserved")
+    try:
+        report = run_pilot(provider, model=args.model, repeats=args.repeats,
+                           lenses=lenses, cases=cases)
+        if report_fd is not None:
+            _write_report_fd(report_fd, report)
+        else:
+            print(json.dumps(report, indent=2, ensure_ascii=False, allow_nan=False))
+    finally:
+        if report_fd is not None:
+            os.close(report_fd)
     return 0 if report["summary"]["structural_pass"] == report["summary"]["attempts"] else 1
 
 

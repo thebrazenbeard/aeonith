@@ -173,6 +173,30 @@ schema-compliant critiques do not constitute a human result.
      --study /private/study-bundle.json --out /private/blind-summary.json
    ```
 
+   Before unblinding, compare the human study's exact oriented A/B pair IDs
+   against **all** eligible run slots in the private model-bench receipt:
+
+   ```bash
+   python -m evaluation.paired_model_bench study-coverage \
+     --receipt /private/study/bench_receipt.json \
+     --study /private/study-bundle.json
+   ```
+
+   This read-only command reports the denominator including failed model runs,
+   eligible pairs missing from the human packet, pairs with fewer than **two
+   comparable, distinct-pseudonym rubrics**, and observed rater disagreement.
+   It rejects additional unadmitted pair IDs, duplicate pair or run identities,
+   inconsistent receipt run/seed grids, and annotations bound to a different
+   A/B display orientation. Neither private manuscript text nor ratings,
+   reviewer pseudonyms or rationales are printed.
+
+   A result of `TWO_RATER_COVERAGE_OPERATOR_DECLARED` says only that the
+   **submitted records** have complete coverage. Pseudonyms can be forged,
+   receipt/model identity is caller-declared, and the command does not prove
+   actual consent, reviewer independence, unseen-work novelty or stronger
+   literary insight. `semantic_quality` remains `UNASSESSED` and it never
+   computes a model ranking.
+
 6. **Lock and review before unblinding.** Store original outputs, signed or
    otherwise verifiable human custody/consent records, and annotations in
    restricted storage, not Git. Use a human reviewer who did not select the

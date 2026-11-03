@@ -92,15 +92,26 @@ def _check_row(raw: Any, split: str, number: int) -> dict[str, str]:
     return obj
 
 
-def _read_split(path: Path, split: str) -> list[dict[str, str]]:
+def _read_split_bound(path: Path, split: str) -> tuple[list[dict[str, str]], str, int]:
+    """Parse and hash *the same bytes* from one open corpus-file handle.
+
+    A separate hash pass after parsing could observe a different file if an
+    ancestor or its contents changed between operations. This is not a host
+    filesystem lease, but it binds the reported hash to the parsed records.
+    """
     if not path.is_file() or not (0 < path.stat().st_size <= MAX_SPLIT_BYTES):
         raise CorpusError(f"missing, empty, or oversized {split} corpus")
     records = []
+    digest = hashlib.sha256()
+    total_bytes = 0
     try:
         with path.open("rb") as source:
             for number, line in enumerate(source, 1):
-                if number > MAX_ROWS_PER_SPLIT or len(line) > MAX_LINE_BYTES:
+                total_bytes += len(line)
+                if (number > MAX_ROWS_PER_SPLIT or len(line) > MAX_LINE_BYTES
+                        or total_bytes > MAX_SPLIT_BYTES):
                     raise CorpusError(f"oversized {split} corpus")
+                digest.update(line)
                 try:
                     raw = json.loads(line.decode("utf-8"), object_pairs_hook=_unique_object)
                 except (UnicodeError, ValueError) as exc:
@@ -110,7 +121,11 @@ def _read_split(path: Path, split: str) -> list[dict[str, str]]:
         raise CorpusError(f"unable to read {split} corpus") from exc
     if not records:
         raise CorpusError(f"empty {split} corpus")
-    return records
+    return records, digest.hexdigest(), total_bytes
+
+
+def _read_split(path: Path, split: str) -> list[dict[str, str]]:
+    return _read_split_bound(path, split)[0]
 
 
 def _check_isolation(dataset: dict[str, list[dict[str, str]]]) -> None:
@@ -176,7 +191,8 @@ def inspect_plan(plan_path: str | Path) -> tuple[dict[str, Any], dict[str, list[
     resolved = {split: _local_path(paths[split], path.parent) for split in SPLITS}
     if len(set(resolved.values())) != len(SPLITS):
         raise CorpusError("train/validation/holdout paths overlap")
-    dataset = {split: _read_split(resolved[split], split) for split in SPLITS}
+    bound = {split: _read_split_bound(resolved[split], split) for split in SPLITS}
+    dataset = {split: bound[split][0] for split in SPLITS}
     _check_isolation(dataset)
     publication_flags_complete = all(
         record["permission_to_publish_adapter"]
@@ -189,7 +205,7 @@ def inspect_plan(plan_path: str | Path) -> tuple[dict[str, Any], dict[str, list[
         "base_model": {"id": model["id"], "revision_declared_not_remote_verified": model["revision"], "files": base_fingerprints},
         "training": settings,
         "split_counts": {split: len(dataset[split]) for split in SPLITS},
-        "split_files": {split: {"bytes": resolved[split].stat().st_size, "sha256": _sha256(resolved[split])} for split in SPLITS},
+        "split_files": {split: {"bytes": bound[split][2], "sha256": bound[split][1]} for split in SPLITS},
         "rights_basis_counts": dict(sorted(Counter(item["rights_basis"] for split in SPLITS for item in dataset[split]).items())),
         "rights_provenance": "operator_attested_not_independently_verified",
         "adapter_publication_record_permissions_complete": publication_flags_complete,

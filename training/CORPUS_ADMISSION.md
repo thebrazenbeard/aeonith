@@ -7,14 +7,16 @@ training/corpus.py preflight or training/admit_candidates.py, does not
 authenticate a rights holder, and does not grant GPU access or train a model.
 Existing candidate drafts remain REVIEW PENDING until legitimately reviewed.
 
-The tool provides two commands:
+The tool provides three commands:
 
     python -m training.corpus_admission inspect --manifest /private/audit-manifest.json
     python -m training.corpus_admission admit --manifest /private/audit-manifest.json \
         --approval /private/approval.json --output /private/new-receipt-directory
+    python -m training.corpus_admission verify --manifest /private/audit-manifest.json \
+        --approval /private/approval.json --receipt /private/new-receipt-directory/admission_receipt.json
 
-Both commands read strictly local private files. The first writes nothing;
-the second exclusively creates a new private directory containing one text-free
+All three commands read strictly local private files. The first and third write
+nothing; the second exclusively creates a new private directory containing one text-free
 admission_receipt.json and refuses overwrite.
 Do not place the manifest, private JSONL, approval, exclusion list, receipt or
 manuscript excerpts in the Git checkout, an issue, a PR or a chat. On Windows,
@@ -156,7 +158,17 @@ reviewed and never counted as successful admission. No overwrite is attempted.
 
 The admit command does not change or copy the input datasets, install weights,
 create a training plan, run an optimizer or grant a host resource. After it
-passes, the operator must still run the existing full checkpoint- and
-corpus-aware training preflight, then obtain a real host-owned resource grant.
+passes, `verify` rechecks the saved receipt against the current corpus and
+approval bytes. `training.train_lora inspect-admission` additionally requires
+the train/validation/holdout bytes in a separate Qwen3.5 training plan to
+match this admitted corpus exactly. Both are read-only and return text-free
+operator-attested receipts; neither authenticates human identities.
+
+The operator must still establish the official checkpoint provenance and a
+real host-owned resource grant. The CPU LoRA executor currently **refuses
+optimizer launch** because its output directory and runtime/adapter writers
+lack a qualified host-owned private-output custody broker. This guard remains
+in place even with explicit `--execute` and a matching admission receipt;
+the receipt does not authorize bypassing storage or host-resource safety.
 The current QLoRA executor deliberately refuses CUDA until such a grant
 mechanism exists and is qualified.

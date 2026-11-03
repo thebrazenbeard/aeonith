@@ -66,6 +66,21 @@ class LocalModelPackageTests(unittest.TestCase):
                         inventory.assert_not_called()
                         run.assert_not_called()
 
+    def test_creator_never_unlinks_a_replaced_lock(self):
+        with tempfile.TemporaryDirectory() as temp:
+            with patch.object(installer.tempfile, "gettempdir", return_value=temp):
+                lock = Path(temp) / (
+                    "aeonith-model-create-"
+                    + installer.hashlib.sha256(TARGET.encode("utf-8")).hexdigest()[:24]
+                    + ".lock"
+                )
+                with self.assertRaisesRegex(installer.ModelPackageError, "lock identity changed"):
+                    with installer._creation_lock(TARGET):
+                        lock.unlink()
+                        lock.write_text("foreign replacement; preserve", encoding="utf-8")
+                self.assertEqual(lock.read_text(encoding="utf-8"),
+                                 "foreign replacement; preserve")
+
     def test_check_only_reports_base_fingerprint_without_mutation(self):
         with patch.object(installer, "_installed_models", return_value={BASE: {"digest": BASE_DIGEST}}):
             with patch.object(installer, "_run_ollama") as run:
@@ -154,6 +169,46 @@ class LocalModelPackageTests(unittest.TestCase):
             ]):
                 with self.assertRaisesRegex(installer.ModelPackageError, "readback lacks num_ctx"):
                     installer.build(create=True)
+
+    def test_inspect_existing_local_tag_is_read_only_and_explicitly_unbound(self):
+        replacement = "qwen3:1.7b"
+        local = {replacement: {"digest": BASE_DIGEST}, TARGET: {"digest": MODEL_DIGEST}}
+        readback = subprocess.CompletedProcess([], 0,
+            "FROM /blobs/sha256-opaque\nPARAMETER num_ctx 4096\n"
+            "PARAMETER temperature 0.2\nPARAMETER num_predict 800\n", "")
+        with patch.object(installer, "_installed_models", side_effect=[local, local]) as tags, \
+             patch.object(installer, "_run_ollama", return_value=readback) as cmd:
+            receipt = installer.inspect_installed(base_override=replacement)
+        self.assertEqual(tags.call_count, 2)
+        cmd.assert_called_once_with("show", "--modelfile", TARGET)
+        self.assertEqual(receipt["status"], "local_tag_observed_not_provenance_authenticated")
+        self.assertEqual(receipt["model_digest"], MODEL_DIGEST)
+        self.assertEqual(receipt["base_digest"], BASE_DIGEST)
+        self.assertEqual(receipt["source_binding"], "UNVERIFIED")
+        self.assertEqual(receipt["installed_fine_tuned"], "UNKNOWN")
+        self.assertEqual(receipt["semantic_quality"], "UNASSESSED")
+        self.assertNotIn("/blobs/", json.dumps(receipt))
+
+    def test_inspect_rejects_changed_or_missing_target_digest(self):
+        before = {BASE: {"digest": BASE_DIGEST}, TARGET: {"digest": MODEL_DIGEST}}
+        changed = {BASE: {"digest": BASE_DIGEST}, TARGET: {"digest": "c" * 64}}
+        readback = subprocess.CompletedProcess([], 0,
+            "PARAMETER num_ctx 4096\nPARAMETER temperature 0.2\nPARAMETER num_predict 800\n", "")
+        with patch.object(installer, "_installed_models", side_effect=[before, changed]), \
+             patch.object(installer, "_run_ollama", return_value=readback):
+            with self.assertRaisesRegex(installer.ModelPackageError, "changed during inspection"):
+                installer.inspect_installed()
+        with patch.object(installer, "_installed_models", return_value={BASE: {"digest": BASE_DIGEST}}), \
+             patch.object(installer, "_run_ollama") as cmd:
+            with self.assertRaisesRegex(installer.ModelPackageError, "target model is absent"):
+                installer.inspect_installed()
+            cmd.assert_not_called()
+
+    def test_duplicate_conflicting_parameter_readback_is_not_proof(self):
+        ambiguous = ("PARAMETER num_ctx 4096\nPARAMETER num_ctx 8192\n"
+                     "PARAMETER temperature 0.2\nPARAMETER num_predict 800\n")
+        with self.assertRaisesRegex(installer.ModelPackageError, "ambiguous num_ctx"):
+            installer._check_parameters(ambiguous, installer._load_recipe()[0]["limits"])
 
     def test_malformed_inventory_and_proxied_environment_never_get_remote_targets(self):
         class FakeResponse:

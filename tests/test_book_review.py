@@ -1,4 +1,5 @@
 import copy
+import hashlib
 import unittest
 
 from aeonith.book_review import (
@@ -66,6 +67,12 @@ class BookReviewTests(unittest.TestCase):
         self.assertEqual(result["completed_chars"], 0)
         self.assertEqual(result["reviews"], [])
         self.assertIsNone(result["whole_book_synthesis"])
+        index = result["cross_segment_evidence_index"]
+        self.assertEqual(index["status"], "not_attempted")
+        self.assertEqual(index["semantic_relationships"], "UNASSESSED")
+        self.assertEqual(len(index["sections"]), len(self.plan["sections"]))
+        self.assertTrue(all(row["status"] == "not_attempted" for row in index["sections"]))
+        self.assertEqual(index["lens_coverage"], [])
 
     def test_all_segments_reviewed_no_whole_book_claim(self):
         provider = ValidProvider()
@@ -76,6 +83,20 @@ class BookReviewTests(unittest.TestCase):
         self.assertEqual("".join(provider.calls), self.source)
         self.assertIsNone(result["whole_book_synthesis"])
         self.assertTrue(all(x["status"] == "completed" for x in result["reviews"]))
+        index = result["cross_segment_evidence_index"]
+        self.assertEqual(index["status"], "fully_indexed_excerpts")
+        self.assertEqual(index["semantic_relationships"], "UNASSESSED")
+        self.assertEqual([item["section_index"] for item in index["sections"]],
+                         list(range(len(self.plan["sections"]))))
+        self.assertEqual(sum(item["completed_segments"] for item in index["sections"]),
+                         len(self.plan["segments"]))
+        self.assertIn("symbolic", [item["lens"] for item in index["lens_coverage"]])
+        self.assertEqual(len(index["lens_coverage"]),
+                         len(result["reviews"][0]["review"]["lens_reviews"]))
+        quote_hashes = [anchor["quote_sha256"] for section in index["sections"]
+                        for row in section["evidence_rows"] for anchor in row["work_quotes"]]
+        self.assertIn(hashlib.sha256(provider.calls[0][:12].encode("utf-8")).hexdigest(), quote_hashes)
+        self.assertNotIn("Mara returned", str(index))
 
     def test_invalid_plan_fails_before_provider_calls(self):
         provider = ValidProvider()
@@ -121,6 +142,32 @@ class BookReviewTests(unittest.TestCase):
         self.assertLess(result["completed_chars"], len(self.source))
         self.assertEqual(result["reviews"][1]["status"], "invalid_provider_output")
         self.assertEqual(len(provider.calls), 2)
+        index = result["cross_segment_evidence_index"]
+        self.assertEqual(index["status"], "partially_indexed_excerpts")
+        self.assertEqual(sum(section["completed_segments"] for section in index["sections"]), 1)
+        self.assertEqual(sum(len(section["evidence_rows"]) for section in index["sections"]),
+                         len(result["reviews"][0]["review"]["lens_reviews"]))
+
+    def test_first_failed_excerpt_does_not_invent_grounded_cross_section_evidence(self):
+        provider = ValidProvider(bad_at=1)
+        result = review_longform_plan(self.source, self.plan, provider=provider,
+                                      lenses=["symbolic"])
+        index = result["cross_segment_evidence_index"]
+        self.assertEqual(len(provider.calls), 1)
+        self.assertEqual(result["status"], "incomplete")
+        self.assertEqual(index["status"], "failed_without_completed_excerpt")
+        self.assertEqual(index["lens_coverage"], [])
+        self.assertEqual(sum(len(row["evidence_rows"]) for row in index["sections"]), 0)
+        self.assertIsNone(index["whole_book_interpretation"])
+
+    def test_evidence_index_is_deterministic_and_never_repeats_model_prose(self):
+        a = review_longform_plan(self.source, self.plan, provider=ValidProvider(),
+                                 lenses=["symbolic"])
+        b = review_longform_plan(self.source, self.plan, provider=ValidProvider(),
+                                 lenses=["symbolic"])
+        self.assertEqual(a["cross_segment_evidence_index"], b["cross_segment_evidence_index"])
+        self.assertNotIn("The scene remains unresolved", str(a["cross_segment_evidence_index"]))
+        self.assertNotIn("Nobody remembered her", str(a["cross_segment_evidence_index"]))
 
     def test_checkpoint_runner_never_sends_prefix_or_marker(self):
         source = "SECRET_NAME and old scenes.\\n[ps]" + self.source
@@ -133,6 +180,9 @@ class BookReviewTests(unittest.TestCase):
         self.assertEqual("".join(provider.calls), self.source)
         self.assertNotIn("SECRET_NAME", str(result))
         self.assertNotIn("[ps]", "".join(provider.calls))
+        self.assertNotIn("SECRET_NAME", str(result["cross_segment_evidence_index"]))
+        self.assertEqual(result["cross_segment_evidence_index"]["offset_scope"],
+                         "eligible_post_checkpoint_source")
 
     def test_tampered_checkpoint_fails_before_call(self):
         source = "SECRET[ps]" + self.source

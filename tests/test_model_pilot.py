@@ -1,13 +1,16 @@
 """A model pilot must never mistake structural success for literary quality."""
 
 import json
+import os
 import subprocess
 import sys
 import tempfile
 import unittest
 from pathlib import Path
+from unittest.mock import patch
 
 from evaluation.model_pilot import CASES, run_pilot
+from aeonith.private_output import PrivateOutputError
 
 
 class GroundedFake:
@@ -150,11 +153,50 @@ class PilotTests(unittest.TestCase):
             from evaluation.model_pilot import write_report_exclusive
 
             path = Path(tmp) / "sanitized.json"
+            if os.name == "nt":
+                with self.assertRaisesRegex(PrivateOutputError, "Windows private output"):
+                    write_report_exclusive(path, {"semantic_quality": "UNASSESSED"})
+                self.assertFalse(path.exists())
+                return
             write_report_exclusive(path, {"semantic_quality": "UNASSESSED"})
             self.assertEqual(json.loads(path.read_text(encoding="utf-8")),
                              {"semantic_quality": "UNASSESSED"})
             with self.assertRaises(FileExistsError):
                 write_report_exclusive(path, {"attempts": []})
+
+    @unittest.skipUnless(os.name == "posix", "POSIX private reporter boundary")
+    def test_report_rejects_git_checkout_and_symlink_parent_before_write(self):
+        from evaluation.model_pilot import write_report_exclusive
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            checkout = root / "checkout"
+            checkout.mkdir()
+            (checkout / ".git").mkdir()
+            (checkout / ".git" / "HEAD").write_text("ref: refs/heads/main\n")
+            target = checkout / "private-report.json"
+            with self.assertRaisesRegex(PrivateOutputError, "Git checkout"):
+                write_report_exclusive(target, {"secret": "do-not-persist"})
+            self.assertFalse(target.exists())
+            linked = root / "linked"
+            linked.symlink_to(root, target_is_directory=True)
+            with self.assertRaises(OSError):
+                write_report_exclusive(linked / "private-report.json", {"attempts": []})
+            self.assertFalse((root / "private-report.json").exists())
+
+    def test_cli_denies_unqualified_windows_output_before_model_call(self):
+        from evaluation import model_pilot
+        with tempfile.TemporaryDirectory() as temp:
+            path = Path(temp) / "pilot.json"
+            with patch("aeonith.private_output._is_windows", return_value=True), \
+                 patch.object(model_pilot, "run_pilot", return_value={
+                     "summary": {"attempts": 1, "structural_pass": 1},
+                     "semantic_quality": "UNASSESSED",
+                 }) as run, \
+                 self.assertRaises(SystemExit) as raised:
+                model_pilot.main(["--model", "local-tag", "--output", str(path)])
+            self.assertEqual(raised.exception.code, 2)
+            run.assert_not_called()
+            self.assertFalse(path.exists())
 
 
 if __name__ == "__main__":

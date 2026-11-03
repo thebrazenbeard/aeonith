@@ -11,7 +11,8 @@ proprietary model-weight recovery, or literary-quality qualification.
 The base is selectable **without changing the checked-in recipe**. Use
 `--base EXISTING_LOCAL_OLLAMA_TAG` to point at another model already in the
 local Ollama inventory. A temporary Modelfile replaces only the `FROM` line
-and is removed after creation. Do not use a URL or GGUF path as the override.
+and is created exclusively in a fresh temporary directory, then removed
+after creation. Do not use a URL or GGUF path as the override.
 The receipt records the selected base name and its actual local digest.
 
 The package deliberately includes **no `SYSTEM` instruction**. Aeonith already
@@ -28,9 +29,11 @@ repository using Python 3.11+:
 ```bash
 python scripts/create-aeonith-model.py --check
 python scripts/create-aeonith-model.py --create
+python scripts/create-aeonith-model.py --inspect
 # Or, when a different compatible base is already installed:
 python scripts/create-aeonith-model.py --check --base granite-literary:local
 python scripts/create-aeonith-model.py --create --base granite-literary:local
+python scripts/create-aeonith-model.py --inspect --base granite-literary:local
 ollama show --modelfile aeonith-critic:0.1
 ```
 
@@ -43,9 +46,25 @@ base and derived digests, recipe-manifest fingerprint, and effective Modelfile
 fingerprint, but no manuscript or
 credential. Save a receipt in a private, owner-controlled location if needed.
 Cooperating Aeonith creators use an exclusive per-model temporary lock; a
-stale lock after a crash requires operator inspection. External Ollama clients
+stale lock after a crash requires operator inspection. The creator refuses to
+delete the lock if its observed file identity was replaced, preserving a
+foreign or ambiguous file; this cannot defeat an attacker who already has
+full control over the same operating-system account or temporary directory.
+External Ollama clients
 do not honor this lock, so a simultaneous manual `ollama create` can still
 race or replace the target. Keep model creation serialized on the host.
+
+`--inspect` is the **read-only existing-tag** counterpart: it refuses a
+missing tag, checks locally observed target/base digests before and after
+`ollama show --modelfile`, and requires a unique match for each configured
+parameter. It reports hashes, not the local Modelfile contents or path. It
+explicitly records `source_binding: UNVERIFIED` and
+`installed_fine_tuned: UNKNOWN`: matching a tag, digest snapshot and decoding
+parameters cannot prove the actual upstream base, source code, license,
+training history, or that the same bytes served a later inference. It never
+invokes `ollama create`, `pull` or model inference; it uses the local daemon's
+inventory and `show` interfaces. This is useful for
+diagnosing an already-installed VN1 model without overwriting it.
 
 The installer forces its CLI subprocess to the numeric loopback endpoint,
 clears inherited proxy and cloud-key variables, and sets Ollama's no-cloud

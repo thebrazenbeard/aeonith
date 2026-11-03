@@ -23,7 +23,9 @@ from typing import Any
 from aeonith.private_output import (
     PrivateOutputDirectory, PrivateOutputError, create_private_directory,
 )
-from .quality_eval import audit_review, build_blind_pair, digest, make_manifest
+from .quality_eval import (
+    audit_review, build_blind_pair, digest, make_manifest, summarize_study,
+)
 
 
 class BenchError(ValueError):
@@ -366,15 +368,125 @@ def prepare(input_path: str | Path, output_dir: str | Path) -> dict[str, Any]:
     return receipt
 
 
+def assess_human_study_coverage(bench_receipt: dict[str, Any],
+                                human_study: dict[str, Any]) -> dict[str, Any]:
+    """Compare an already-bound private human study with all eligible run slots.
+
+    This does not contact a model, expose A/B assignments, independently
+    authenticate human identities or grant any literary-quality result. Both
+    caller-owned inputs can be forged; coverage means internal consistency of
+    the declared receipt and the strictly validated, oriented rubrics only.
+    """
+    if not isinstance(bench_receipt, dict):
+        raise BenchError("paired run receipt must be an object")
+    required = {"schema_version", "status", "experiment_id", "run_count",
+                "seed_count", "distinct_holdout_work_count", "blinded_pair_count", "runs"}
+    if (not required.issubset(bench_receipt)
+            or bench_receipt["schema_version"] != "aeonith.paired_model_bench_receipt.v1"
+            or bench_receipt["status"] != "paired_run_validated_not_quality_qualified"
+            or not isinstance(bench_receipt["experiment_id"], str)
+            or not NAME.fullmatch(bench_receipt["experiment_id"])):
+        raise BenchError("invalid paired bench receipt")
+    runs = bench_receipt["runs"]
+    if not isinstance(runs, list) or not 2 <= len(runs) <= MAX_RUNS:
+        raise BenchError("invalid paired run receipt rows")
+    counts = {name: bench_receipt[name] for name in (
+        "run_count", "seed_count", "distinct_holdout_work_count", "blinded_pair_count")}
+    if (any(type(value) is not int for value in counts.values())
+            or not 2 <= counts["seed_count"] <= MAX_SEEDS
+            or not 2 <= counts["distinct_holdout_work_count"] <= MAX_WORKS
+            or counts["run_count"] != len(runs)
+            or counts["run_count"] != counts["seed_count"] * counts["distinct_holdout_work_count"]
+            or not 0 <= counts["blinded_pair_count"] <= counts["run_count"]):
+        raise BenchError("paired receipt has an inconsistent run denominator")
+
+    expected: set[str] = set()
+    run_ids: set[str] = set()
+    seeds: set[int] = set()
+    for row in runs:
+        row = _exact(row, {"run_id", "seed", "base_structural_status",
+                           "adapter_structural_status", "pair_id"}, "receipt run")
+        run_id, seed, pair_id = row["run_id"], row["seed"], row["pair_id"]
+        if (not isinstance(run_id, str) or not re.fullmatch(r"[0-9a-f]{24}", run_id)
+                or run_id in run_ids or type(seed) is not int or not 0 <= seed <= 2**32 - 1):
+            raise BenchError("invalid or repeated run identity in paired receipt")
+        run_ids.add(run_id)
+        seeds.add(seed)
+        statuses = (row["base_structural_status"], row["adapter_structural_status"])
+        if any(status not in ("pass", "fail", "not_evaluable") for status in statuses):
+            raise BenchError("invalid paired structural outcome")
+        eligible = statuses == ("pass", "pass")
+        if eligible:
+            if (not isinstance(pair_id, str) or not re.fullmatch(r"[0-9a-f]{24}", pair_id)
+                    or pair_id in expected):
+                raise BenchError("missing or repeated eligible pair identity")
+            expected.add(pair_id)
+        elif pair_id is not None:
+            raise BenchError("non-evaluable run may not create a blind pair")
+    if len(seeds) != counts["seed_count"] or len(expected) != counts["blinded_pair_count"]:
+        raise BenchError("paired receipt seed or eligible-pair denominator mismatch")
+
+    # The existing human aggregator validates exact display orientation,
+    # complete rubrics and one reviewer pseudonym per pair. The summary strips
+    # manuscript text, rationales and pseudonyms before returning here.
+    summary = summarize_study(human_study)
+    observed = {item["pair_id"]: item for item in summary["pair_summaries"]}
+    if not set(observed).issubset(expected):
+        raise BenchError("human study includes an unadmitted blind pair")
+    covered = sum(item["comparable_preference_count"] >= 2 for item in observed.values())
+    missing = len(expected - set(observed))
+    below_two = len(expected) - covered
+    return {
+        "schema_version": "aeonith.paired_human_coverage.v1",
+        "coverage_status": (
+            "TWO_RATER_COVERAGE_OPERATOR_DECLARED" if expected and below_two == 0
+            else "INCOMPLETE_BLIND_HUMAN_COVERAGE"
+        ),
+        "experiment_id": bench_receipt["experiment_id"],
+        "expected_run_count": counts["run_count"],
+        "ineligible_run_count": counts["run_count"] - len(expected),
+        "seed_count": counts["seed_count"],
+        "declared_distinct_holdout_work_count": counts["distinct_holdout_work_count"],
+        "eligible_pair_count": len(expected),
+        "observed_pair_count": len(observed),
+        "missing_pair_count": missing,
+        "pairs_below_two_comparable_raters": below_two,
+        "covered_pair_count": covered,
+        "disagreement_pair_count": sum(item["rater_disagreement"] is True for item in observed.values()),
+        "semantic_quality": "UNASSESSED",
+        "human_identity_independently_verified": False,
+        "human_independence_and_consent_verified": False,
+        "model_execution_authenticated": False,
+        "holdout_novelty_independently_verified": False,
+        "model_ranking": "NOT_COMPUTED; assignments must remain blinded until human review is locked",
+        "limitations": [
+            "both run receipt and human rubrics are caller-supplied, not independently authenticated",
+            "distinct reviewer pseudonyms do not prove distinct, consenting human raters",
+            "the blinded display hash detects orientation mismatches but is not a signature",
+            "identical generations across seeds are not independent evidence of quality improvement",
+        ],
+    }
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description="Offline audit/blind preparation of caller-generated base/adapter results")
     cmds = parser.add_subparsers(dest="command", required=True)
     prepare_cmd = cmds.add_parser("prepare", help="Validate runs and create private blinded displays/keys")
     prepare_cmd.add_argument("--bundle", type=Path, required=True)
     prepare_cmd.add_argument("--output", type=Path, required=True)
+    coverage_cmd = cmds.add_parser("study-coverage", help="Audit blinded human-rating coverage against every eligible run")
+    coverage_cmd.add_argument("--receipt", type=Path, required=True)
+    coverage_cmd.add_argument("--study", type=Path, required=True)
     args = parser.parse_args(argv)
     try:
-        report = prepare(args.bundle, args.output)
+        if args.command == "study-coverage":
+            receipt_path = _private_path(args.receipt, must_exist=True, label="receipt")
+            study_path = _private_path(args.study, must_exist=True, label="study")
+            receipt, _ = _read_private_json(receipt_path)
+            study, _ = _read_private_json(study_path)
+            report = assess_human_study_coverage(receipt, study)
+        else:
+            report = prepare(args.bundle, args.output)
         print(json.dumps(report, sort_keys=True))
         return 0
     except (BenchError, PrivateOutputError, OSError, UnicodeError) as exc:

@@ -3,6 +3,7 @@
 import contextlib
 import io
 import json
+import os
 from pathlib import Path
 import tempfile
 import unittest
@@ -56,6 +57,7 @@ class DocxBookCliTests(unittest.TestCase):
                                     *extra])
         return result, stderr.getvalue(), stdout.getvalue()
 
+    @unittest.skipIf(os.name == 'nt', 'Windows private output ACL custody is not qualified')
     def test_explicit_docx_prepares_full_content_without_network_or_console_prose(self):
         self.make_docx(paragraph('Canto I') + paragraph('A blue hour.') +
                        '<w:tbl><w:tr><w:tc>' + paragraph('In a table.') +
@@ -200,6 +202,7 @@ class DocxBookCliTests(unittest.TestCase):
                 self.assertFalse(self.output.exists())
                 self.assertNotIn('Secret header', stderr)
 
+    @unittest.skipIf(os.name == 'nt', 'Windows private output ACL custody is not qualified')
     def test_checkpoint_filtering_preserves_post_marker_docx_text_only(self):
         secret = 'PREVIOUS_AUTHOR_DRAFT_NEVER_SEND'
         self.make_docx(paragraph(secret + '[ps]') + paragraph('Canto I') +
@@ -230,6 +233,15 @@ class DocxBookCliTests(unittest.TestCase):
         self.assertEqual(len(calls), 1)
         self.assertEqual(calls[0]['task']['work']['text'], '\nCanto I\nA garden opened.')
         self.assertNotIn(secret, self.output.read_text(encoding='utf-8'))
+
+    @unittest.skipUnless(os.name == 'nt', 'Actual Windows private output ACL refusal')
+    def test_windows_docx_prepares_without_writing_or_provider_call(self):
+        self.make_docx(paragraph('Private synthetic text.'))
+        code, stderr, stdout = self.invoke('--input-format', 'docx')
+        self.assertEqual(code, 2)
+        self.assertEqual(stdout, '')
+        self.assertFalse(self.output.exists())
+        self.assertNotIn('Private synthetic text.', stderr)
 
 
 if __name__ == '__main__':

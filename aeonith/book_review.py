@@ -6,6 +6,7 @@ cost, manuscript disclosure permissions and private storage of review outputs.
 from __future__ import annotations
 
 from collections.abc import Mapping
+import hashlib
 from typing import Any
 
 from .core import CANONICAL_LENSES
@@ -29,6 +30,102 @@ DEFAULT_MAX_SEGMENTS = 8
 
 class BatchReviewError(ValueError):
     """Preflight failed before any provider request was sent."""
+
+
+def _cross_segment_evidence_index(
+    plan: dict[str, Any], reviews: list[dict[str, Any]], *, offset_scope: str,
+) -> dict[str, Any]:
+    """Index observed excerpt evidence without inventing a book-level finding.
+
+    The enclosing review report is private. This derivative deliberately
+    includes only generic section metadata, segment hashes, lens identifiers,
+    evidence counts and short-quote digests—not manuscript or model prose.
+    A support quote proves literal inclusion, not an interpretive relationship.
+    """
+    by_segment = {entry["segment_id"]: entry for entry in reviews}
+    section_rows: list[dict[str, Any]] = []
+    lens_sections: dict[str, set[int]] = {}
+    lens_quote_counts: dict[str, int] = {}
+    completed_total = 0
+    for section in plan["sections"]:
+        section_index = section["section_index"]
+        planned = [segment for segment in plan["segments"]
+                   if segment["section_index"] == section_index]
+        segment_rows: list[dict[str, Any]] = []
+        evidence_rows: list[dict[str, Any]] = []
+        completed = 0
+        attempted = 0
+        for segment in planned:
+            observed = by_segment.get(segment["segment_id"])
+            status = observed["status"] if observed is not None else "not_attempted"
+            if observed is not None:
+                attempted += 1
+            if status == "completed":
+                completed += 1
+                completed_total += 1
+                # `critique` already validated the literal source support of
+                # these normalized rows. Retain only provenance pointers;
+                # neither this index nor a hash certifies literary quality.
+                for lens_row in observed["review"]["lens_reviews"]:
+                    lens = lens_row["lens"]
+                    quotes = [
+                        {
+                            "quote_sha256": hashlib.sha256(anchor["quote"].encode("utf-8")).hexdigest(),
+                            "quote_chars": len(anchor["quote"]),
+                        }
+                        for anchor in lens_row["support"] if anchor["source"] == "work"
+                    ]
+                    evidence_rows.append({
+                        "segment_id": segment["segment_id"],
+                        "lens": lens,
+                        "basis": lens_row["basis"],
+                        "work_quotes": quotes,
+                        "provided_reference_count": sum(
+                            anchor["source"] == "provided_evidence"
+                            for anchor in lens_row["support"]
+                        ),
+                    })
+                    if quotes:
+                        lens_sections.setdefault(lens, set()).add(section_index)
+                        lens_quote_counts[lens] = lens_quote_counts.get(lens, 0) + len(quotes)
+            segment_rows.append({
+                "segment_id": segment["segment_id"],
+                "source_sha256": segment["source_sha256"],
+                "status": status,
+            })
+        section_rows.append({
+            "section_index": section_index,
+            "label": section["label"],
+            "start": section["start"], "end": section["end"],
+            "planned_segments": len(planned),
+            "attempted_segments": attempted,
+            "completed_segments": completed,
+            "status": ("complete" if completed == len(planned) else
+                       "incomplete" if attempted else "not_attempted"),
+            "segments": segment_rows,
+            "evidence_rows": evidence_rows,
+        })
+    return {
+        "schema_version": "aeonith.cross_segment_evidence_index.v1",
+        "status": ("fully_indexed_excerpts" if completed_total == len(plan["segments"]) else
+                   "partially_indexed_excerpts" if completed_total else
+                   "failed_without_completed_excerpt" if reviews else "not_attempted"),
+        "offset_scope": offset_scope,
+        "source_sha256": plan["source_sha256"],
+        "sections": section_rows,
+        "lens_coverage": [
+            {"lens": lens, "sections_with_literal_work_quotes": sorted(section_ids),
+             "literal_quote_anchor_count": lens_quote_counts[lens]}
+            for lens, section_ids in sorted(lens_sections.items())
+        ],
+        "semantic_relationships": "UNASSESSED",
+        "whole_book_interpretation": None,
+        "limitations": [
+            "Sections come from heuristic source headings, not verified narrative chapters.",
+            "Literal work-quote coverage does not prove a theme, causal link or interpretation.",
+            "No cross-section model analysis or additional provider call was performed.",
+        ],
+    }
 
 
 def _limits(max_segments: int) -> None:
@@ -76,6 +173,7 @@ def _execute(
     scope: str,
     full_source_sha256: str | None = None,
     lenses: list[str] | tuple[str, ...] | None = None,
+    offset_scope: str = "full_submitted_source",
 ) -> dict[str, Any]:
     _limits(max_segments)
     selected_lenses = _lenses(lenses)
@@ -103,6 +201,9 @@ def _execute(
         ],
     }
     if provider is None:
+        result["cross_segment_evidence_index"] = _cross_segment_evidence_index(
+            plan, result["reviews"], offset_scope=offset_scope,
+        )
         return result
     for i, segment in enumerate(segments):
         request = request_at(i)
@@ -132,6 +233,9 @@ def _execute(
         result["status"] = "segments_completed"
     else:
         result["status"] = "incomplete"
+    result["cross_segment_evidence_index"] = _cross_segment_evidence_index(
+        plan, result["reviews"], offset_scope=offset_scope,
+    )
     return result
 
 
@@ -200,4 +304,5 @@ def review_checkpoint_plan(
         scope="after_checkpoint_exclusive",
         full_source_sha256=canonical["full_source_sha256"],
         lenses=lenses,
+        offset_scope="eligible_post_checkpoint_source",
     )

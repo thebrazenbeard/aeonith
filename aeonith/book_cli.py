@@ -11,7 +11,6 @@ import argparse
 import json
 import math
 import os
-from pathlib import Path
 import sys
 import time
 from typing import Any
@@ -24,7 +23,8 @@ from .book_review import (
 from .checkpoint import CheckpointError, plan_after_checkpoint
 from .core import CANONICAL_LENSES
 from .docx_source import read_docx_source
-from .longform import LongformPlanError, _read_utf8, plan_longform
+from .longform import _read_utf8, plan_longform
+from .private_output import PrivateOutputError, reserve_private_file
 from .providers import LocalOpenAICompatibleProvider
 
 DEFAULT_CHUNK_CHARS = 2_000
@@ -87,26 +87,9 @@ def _bounded_number(value: Any, low: float, high: float) -> bool:
     return type(value) in (float, int) and math.isfinite(value) and low <= value <= high
 
 
-def _private_output_path(value: str) -> None:
-    """Reject private critique reports inside any discoverable Git checkout."""
-    destination = Path(value).expanduser().resolve()
-    for directory in destination.parents:
-        marker = directory / ".git"
-        if marker.is_dir() and (marker / "HEAD").is_file():
-            raise ValueError("private critique output must be outside Git repositories")
-        if marker.is_file():
-            try:
-                if marker.read_text(encoding="utf-8", errors="ignore").startswith("gitdir:"):
-                    raise ValueError("private critique output must be outside Git repositories")
-            except OSError:
-                # A marker we cannot inspect is not permission to write there.
-                raise ValueError("cannot verify private output location")
-
-
 def _prepare(args: argparse.Namespace) -> tuple[str, dict[str, Any], list[str], Any]:
     if args.input == "-" or not args.output or args.output == "-":
         raise ValueError("private input and output must be named local files")
-    _private_output_path(args.output)
     if (
         len(args.title) > 500 or any(c in args.title for c in ("\x00", "\r", "\n"))
         or len(args.title.splitlines()) > 1
@@ -177,13 +160,14 @@ def main(argv: list[str] | None = None) -> int:
               file=sys.stderr)
         return 2
 
-    # Exclusive creation prevents data loss and checks occupancy *before*
-    # expensive inference. On POSIX, mode 0600 denies other users access.
+    # Reserve through descriptor-pinned parent traversal, exclusive creation,
+    # and validated 0600 owner permissions *before* inference. Windows is
+    # refused until the equivalent anti-reparse/owner-DACL boundary is proven.
     reserved_fd: int | None = None
     try:
-        reserved_fd = os.open(args.output, os.O_CREAT | os.O_EXCL | os.O_WRONLY, 0o600)
-    except OSError:
-        print("Cannot reserve new private output file; existing files are never overwritten",
+        reserved_fd = reserve_private_file(args.output)
+    except (OSError, PrivateOutputError):
+        print("Cannot safely reserve new private output; existing files are never overwritten",
               file=sys.stderr)
         return 2
 

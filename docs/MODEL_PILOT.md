@@ -27,12 +27,19 @@ python -m evaluation.model_pilot \
   --url http://127.0.0.1:5001/v1/chat/completions \
   --lens symbolic \
   --repeats 3 \
-  --output pilot-results.json
+  --output /tmp/aeonith-pilot-results.json
 ```
 
-The output file must not already exist. On POSIX, it is created with mode
-`0600`; on Windows, review the directory's ACL. Without `--output`, the same
-sanitized JSON prints to standard output. The default model timeout is 120
+The output file must not already exist. On POSIX, the parent must pass the
+descriptor-pinned private-output custody check (no symlink/junction-like
+parent traversal, attacker-owned sticky ancestor, or Git checkout); the file
+is exclusively created with owner-only `0600` access **before inference**.
+Use an isolated owner-controlled directory and a unique filename; the `/tmp`
+example assumes that path does not exist. On Windows, private-file output is
+**fail-closed** because the anti-reparse and parent owner/DACL boundary is not
+yet qualified. Omit `--output` to print only sanitized status to standard
+output on either platform; capturing it to an appropriately protected file is
+the operator's separate responsibility. The default model timeout is 120
 seconds per attempt and maximum output is 2,048 tokens. Change these with
 `--timeout` and `--max-tokens` if the model warrants it. Use `--structured-outputs`
 only if the local runner supports JSON Schema; otherwise JSON-object mode is

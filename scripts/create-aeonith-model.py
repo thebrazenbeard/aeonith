@@ -16,6 +16,7 @@ import os
 from pathlib import Path
 import re
 import shutil
+import stat
 import subprocess
 import sys
 import tempfile
@@ -48,11 +49,19 @@ def _creation_lock(name: str):
     except OSError as exc:
         raise ModelPackageError("cannot acquire private model creation lock") from exc
     try:
+        created = os.fstat(descriptor)
+    finally:
         os.close(descriptor)
+    try:
         yield
     finally:
         try:
-            path.unlink(missing_ok=True)
+            observed = path.lstat()
+            if (not stat.S_ISREG(observed.st_mode)
+                    or (observed.st_dev, observed.st_ino) != (created.st_dev, created.st_ino)
+                    or observed.st_size != 0):
+                raise ModelPackageError("model creation lock identity changed; refusing unrelated unlink")
+            path.unlink()
         except OSError as exc:
             raise ModelPackageError("cannot release private model creation lock") from exc
 
@@ -150,9 +159,14 @@ def _check_parameters(readback: str, limits: dict) -> None:
     for key, value in limits.items():
         if key == "qualified_max_lenses":
             continue
-        pattern = rf"(?mi)^\s*PARAMETER\s+{re.escape(key)}\s+{re.escape(str(value))}\s*$"
-        if not re.search(pattern, readback):
+        pattern = rf"(?mi)^\s*PARAMETER\s+{re.escape(key)}\s+([^\r\n]+?)\s*$"
+        observed = re.findall(pattern, readback)
+        if not observed:
             raise ModelPackageError(f"created model readback lacks {key}={value}")
+        if len(observed) != 1:
+            raise ModelPackageError(f"created model readback has ambiguous {key}")
+        if observed[0].strip() != str(value):
+            raise ModelPackageError(f"created model readback disagrees with {key}={value}")
 
 
 def _tag(value: str) -> bool:
@@ -165,6 +179,62 @@ def build(*, create: bool, base_override: str | None = None) -> dict:
         with _creation_lock(recipe["name"]):
             return _build_checked(create=True, base_override=base_override)
     return _build_checked(create=False, base_override=base_override)
+
+
+def inspect_installed(*, base_override: str | None = None) -> dict:
+    """Read back an *existing* local tag without creating or loading a model.
+
+    Ollama tag inventory and Modelfile inspection prove only an observed
+    snapshot. They cannot authenticate which base weights the tag was made
+    from, whether it was trained, or who owns the checkpoint's rights.
+    """
+    recipe, modelfile, fingerprint = _load_recipe()
+    name = recipe["name"]
+    base = recipe["base"]["name"]
+    if base_override is not None:
+        if not _tag(base_override):
+            raise ModelPackageError("--base must name an existing local Ollama tag, not a URL or file path")
+        if base_override != base:
+            if recipe["base"].get("allow_installed_tag_override") is not True:
+                raise ModelPackageError("recipe does not permit a base-model override")
+            content = modelfile.read_text(encoding="utf-8")
+            replacement = content.replace(f"FROM {base}\n", f"FROM {base_override}\n", 1)
+            if replacement == content:
+                raise ModelPackageError("cannot safely substitute installed model tag")
+            fingerprint = hashlib.sha256(replacement.encode("utf-8")).hexdigest()
+            base = base_override
+
+    before = _installed_models()
+    if base not in before:
+        raise ModelPackageError("required base model is absent; no download attempted")
+    if name not in before:
+        raise ModelPackageError("target model is absent; no download attempted")
+    base_digest = before[base].get("digest")
+    model_digest = before[name].get("digest")
+    if (not isinstance(base_digest, str) or not re.fullmatch(r"[0-9a-f]{64}", base_digest)
+            or not isinstance(model_digest, str) or not re.fullmatch(r"[0-9a-f]{64}", model_digest)):
+        raise ModelPackageError("installed model lacks a readable SHA-256 digest")
+    readback = _run_ollama("show", "--modelfile", name).stdout
+    _check_parameters(readback, recipe["limits"])
+    after = _installed_models()
+    if (after.get(base, {}).get("digest") != base_digest
+            or after.get(name, {}).get("digest") != model_digest):
+        raise ModelPackageError("local model digest changed during inspection")
+    return {
+        "schema_version": "aeonith.local_model_inspection.v1",
+        "status": "local_tag_observed_not_provenance_authenticated",
+        "model": name,
+        "model_digest": model_digest,
+        "base": base,
+        "base_digest": base_digest,
+        "effective_modelfile_sha256": fingerprint,
+        "observed_modelfile_sha256": hashlib.sha256(readback.encode("utf-8")).hexdigest(),
+        "source_binding": "UNVERIFIED",
+        "installed_fine_tuned": "UNKNOWN",
+        "base_license_status": recipe["base"]["license_status"],
+        "semantic_quality": "UNASSESSED",
+        "human_evaluation": "NOT_PERFORMED",
+    }
 
 
 def _build_checked(*, create: bool, base_override: str | None = None) -> dict:
@@ -214,7 +284,12 @@ def _build_checked(*, create: bool, base_override: str | None = None) -> dict:
         # stay unchanged and no Hugging Face / Ollama download is requested.
         with tempfile.TemporaryDirectory(prefix="aeonith-local-model-") as temporary:
             selected_file = Path(temporary) / "Modelfile"
-            selected_file.write_text(replacement, encoding="utf-8")
+            flags = os.O_WRONLY | os.O_CREAT | os.O_EXCL
+            if hasattr(os, "O_NOFOLLOW"):
+                flags |= os.O_NOFOLLOW
+            fd = os.open(selected_file, flags, 0o600)
+            with os.fdopen(fd, "w", encoding="utf-8", newline="\n") as stream:
+                stream.write(replacement)
             _run_ollama("create", name, "-f", str(selected_file))
     observed = _installed_models().get(name)
     if observed is None or not isinstance(observed.get("digest"), str) or not re.fullmatch(r"[0-9a-f]{64}", observed["digest"]):
@@ -230,10 +305,12 @@ def main(argv: list[str] | None = None) -> int:
     choices = parser.add_mutually_exclusive_group(required=True)
     choices.add_argument("--check", action="store_true", help="Read-only, verify installed base and safe recipe")
     choices.add_argument("--create", action="store_true", help="Create a new derived local tag; never overwrite")
+    choices.add_argument("--inspect", action="store_true", help="Read-only inspection of an existing target tag and safe parameter snapshot")
     parser.add_argument("--base", help="Override the recipe's base with an already-installed local Ollama tag; never downloads")
     args = parser.parse_args(argv)
     try:
-        receipt = build(create=args.create, base_override=args.base)
+        receipt = (inspect_installed(base_override=args.base) if args.inspect
+                   else build(create=args.create, base_override=args.base))
     except (ModelPackageError, FileNotFoundError, KeyError, TypeError, ValueError) as exc:
         print(f"Aeonith model package: {exc}", file=sys.stderr)
         return 2

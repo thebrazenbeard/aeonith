@@ -109,6 +109,42 @@ training and evaluation prompts. The model files are streamed for hashes, so
 a large local checkpoint will make even inspection take some time. The receipt
 still cannot authenticate the claimed upstream revision against Hugging Face.
 
+### Bind the exact corpus to separately recorded admissions
+
+`inspect` validates record-level self-reported permissions but does **not**
+authorize training. The companion `training.corpus_admission` audit checks
+source passages, exact split hashes and exclusions, and separately records
+rights-holder, steward and editorial *operator attestations*. Before any
+future optimizer can start, the plan's **three exact JSONL byte hashes** must
+match a fresh audit of the manifest and a saved admission receipt, and the
+original approval decisions must still be present and consistent.
+
+After the legitimate human review and the private `corpus_admission admit`
+step documented in [CORPUS_ADMISSION.md](CORPUS_ADMISSION.md), run a **read-only**
+cross-check with no ML dependencies:
+
+```bash
+python -m training.train_lora inspect-admission \
+  --plan /private/training-plan.json \
+  --audit-manifest /private/audit-manifest.json \
+  --approval /private/approval.json \
+  --admission-receipt /private/receipt/admission_receipt.json
+```
+
+This cross-check detects changed approval JSON, altered saved receipts and a
+training plan pointing at different bytes from the approved corpus, without
+copying or printing private texts. The receipt is **not digitally signed**;
+cryptographic hashes bind *bytes*, not real-world identities or legal rights.
+The corpus JSONL parser now hashes each split within the same open-file stream
+used to produce training records, so a separate later hash pass cannot silently
+describe different split bytes. This does not defeat a privileged writer
+modifying an open file concurrently; use trusted host-owned private input
+storage for any eventual optimizer run.
+The named human reviewers and source provenance still require independent
+verification. Windows can perform this read-only check; creating new private
+admission receipts on Windows remains disabled until its ACL/custody boundary
+is qualified.
+
 ## Attempt actual local adapter training
 
 In an isolated environment on the authorized host, provide locally installed
@@ -122,17 +158,32 @@ reduces baseline memory demand but is not a resource guarantee.
 ```bash
 python -m training.train_lora train \
   --plan /local/private/training-plan.json \
+  --audit-manifest /local/private/audit-manifest.json \
+  --approval /local/private/approval.json \
+  --admission-receipt /local/private/receipt/admission_receipt.json \
   --output /local/private/new-aeonith-run \
   --device cpu --execute
 ```
 
-`--execute` is mandatory, and the new output directory must not exist or sit
+**Current execution gate: this command deliberately refuses to start an
+optimizer on any host.** The present `SFTTrainer` runtime, adapter and receipt
+writers follow output paths after a lexical check; there is no host-owned,
+descriptor-pinned output custody broker protecting all ancestor directory
+components and access controls. The source still contains the training logic,
+but execution remains blocked until a bounded POSIX/Windows implementation
+is built, adversarially tested and read back under host authority. This is a
+temporary unqualified runtime boundary, not a claim that local training is
+fundamentally unavailable.
+
+`--execute` and the exact audit-manifest/approval/admission-receipt inputs are
+mandatory for the reserved training path. The new output directory must not exist or sit
 inside **any** Git checkout (including unrelated clones, submodules and Git
 worktrees). The path check also refuses symlink/junction/reparse-point parents,
 UNC/device paths, alternate data streams and parent traversal; use a
 pre-existing, intentionally private local directory as its parent. This is a
 source-side path check, **not** evidence of private host ACLs or protection
-from another process replacing a path between validation and use. The
+from another process replacing a path between validation and use; the current
+gate refuses actual optimizer execution because of that gap. Once qualified, the
 procedure sets Hugging Face and Transformers to
 offline mode, loads only an already-present local safetensors checkpoint with
 `trust_remote_code=False`, and selects `AutoModelForCausalLM` to train the
@@ -150,7 +201,7 @@ competing workloads** before opting in; none of the three model sizes is
 qualified to fit an arbitrary machine. Future GPU support requires a real
 host-enforced allocation and measured memory limits, not another CLI checkbox.
 
-The command rejects records that exceed the configured token context rather
+The source training implementation rejects records that exceed the configured token context rather
 than silently truncating a completion. It checks that trainable tensors really
 changed, training and validation loss are finite, and the PEFT adapter files
 exist before writing `training_receipt.json`. The persisted files are

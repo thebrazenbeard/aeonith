@@ -72,6 +72,7 @@ class BookCliTests(unittest.TestCase):
             ])
         return code, stdout.getvalue(), stderr.getvalue()
 
+    @unittest.skipIf(os.name == "nt", "Windows private output ACL custody is not qualified")
     def test_no_provider_is_honest_and_private(self):
         code, stdout, stderr = self.invoke()
         self.assertEqual(code, 3)
@@ -83,6 +84,7 @@ class BookCliTests(unittest.TestCase):
         self.assertEqual(result["attempted_segments"], 0)
         self.assertIsNone(result["whole_book_synthesis"])
 
+    @unittest.skipIf(os.name == "nt", "Windows private output ACL custody is not qualified")
     def test_one_lens_is_default_and_each_canto_is_reviewed(self):
         code, stdout, stderr = self.invoke(
             "--provider", "local-openai-compatible",
@@ -130,6 +132,45 @@ class BookCliTests(unittest.TestCase):
         self.assertEqual(FakeLocalProvider.calls, [])
         self.assertNotIn(self.source, stderr.getvalue())
 
+    @unittest.skipUnless(os.name == "posix", "POSIX ancestor symlink boundary")
+    def test_private_report_refuses_symlinked_parent_before_provider(self):
+        target = self.root / "real-output"
+        target.mkdir()
+        link = self.root / "redirected-output"
+        link.symlink_to(target, target_is_directory=True)
+        self.output_path = link / "review.json"
+        code, stdout, stderr = self.invoke("--provider", "local-openai-compatible")
+        self.assertEqual(code, 2)
+        self.assertEqual(stdout, "")
+        self.assertFalse((target / "review.json").exists())
+        self.assertEqual(FakeLocalProvider.calls, [])
+        self.assertNotIn(self.source, stderr)
+
+    @unittest.skipUnless(os.name == "posix", "POSIX bare Git custody boundary")
+    def test_private_report_refuses_bare_git_repository_before_provider(self):
+        bare = self.root / "bare.git"
+        bare.mkdir()
+        (bare / "HEAD").write_text("ref: refs/heads/main\n", encoding="utf-8")
+        (bare / "refs").mkdir()
+        (bare / "objects").mkdir()
+        self.output_path = bare / "review.json"
+        code, stdout, stderr = self.invoke("--provider", "local-openai-compatible")
+        self.assertEqual(code, 2)
+        self.assertEqual(stdout, "")
+        self.assertFalse(self.output_path.exists())
+        self.assertEqual(FakeLocalProvider.calls, [])
+        self.assertNotIn(self.source, stderr)
+
+    @unittest.skipUnless(os.name == "posix", "POSIX simulation of Windows refusal")
+    def test_unqualified_windows_private_output_refused_before_provider(self):
+        with patch("aeonith.private_output._is_windows", return_value=True):
+            code, stdout, stderr = self.invoke("--provider", "local-openai-compatible")
+        self.assertEqual(code, 2)
+        self.assertEqual(stdout, "")
+        self.assertFalse(self.output_path.exists())
+        self.assertEqual(FakeLocalProvider.calls, [])
+        self.assertNotIn(self.source, stderr)
+
     def test_bad_budget_and_duplicate_lenses_rejected_before_model(self):
         for arguments in (
             ("--max-segments", "1"),
@@ -148,6 +189,7 @@ class BookCliTests(unittest.TestCase):
                 self.assertFalse(self.output_path.exists())
                 self.assertEqual(FakeLocalProvider.calls, [])
 
+    @unittest.skipIf(os.name == "nt", "Windows private output ACL custody is not qualified")
     def test_checkpoint_excludes_private_prefix_and_marker(self):
         secret = "PRIVATE_PREFIX_SHOULD_NOT_REACH_MODEL"
         self.input_path.write_bytes((secret + "[ps]" + self.source).encode("utf-8"))
@@ -176,6 +218,7 @@ class BookCliTests(unittest.TestCase):
                 self.assertFalse(self.output_path.exists())
                 self.assertEqual(FakeLocalProvider.calls, [])
 
+    @unittest.skipIf(os.name == "nt", "Windows private output ACL custody is not qualified")
     def test_invalid_model_output_reports_partial_without_leak(self):
         FakeLocalProvider.bad_at = 2
         code, stdout, stderr = self.invoke(
@@ -204,6 +247,7 @@ class BookCliTests(unittest.TestCase):
         self.assertNotIn(self.source, stderr.getvalue())
         self.assertFalse(self.output_path.exists())
 
+    @unittest.skipIf(os.name == "nt", "Windows private output ACL custody is not qualified")
     def test_ambient_remote_provider_configuration_is_not_used(self):
         with patch.dict(os.environ, {
             "AEONITH_PROVIDER_URL": "https://example.org/v1/chat/completions",
@@ -223,6 +267,15 @@ class BookCliTests(unittest.TestCase):
             with self.assertRaises(TimeoutError):
                 budget.review({"task": {"work": {"text": "no call"}}})
         self.assertEqual(FakeLocalProvider.calls, [])
+
+    @unittest.skipUnless(os.name == "nt", "Actual Windows private output ACL refusal")
+    def test_windows_refuses_private_report_without_model_call(self):
+        code, stdout, stderr = self.invoke("--provider", "local-openai-compatible")
+        self.assertEqual(code, 2)
+        self.assertEqual(stdout, "")
+        self.assertFalse(self.output_path.exists())
+        self.assertEqual(FakeLocalProvider.calls, [])
+        self.assertNotIn(self.source, stderr)
 
 
 if __name__ == "__main__":
