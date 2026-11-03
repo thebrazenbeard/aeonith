@@ -5,6 +5,7 @@ from __future__ import annotations
 import json
 from http.client import HTTPConnection
 import os
+import tempfile
 import threading
 import unittest
 from pathlib import Path
@@ -127,6 +128,68 @@ class LocalServerTests(unittest.TestCase):
             status, _, body = self._request("/index.html")
         self.assertEqual(status, 200)
         self.assertIn(b"review-form", body)
+
+    @unittest.skipIf(os.name == "nt", "symbolic-link fixture requires POSIX permission semantics")
+    def test_static_asset_symlink_outside_asset_root_is_refused(self):
+        with tempfile.TemporaryDirectory() as root, tempfile.TemporaryDirectory() as outside:
+            secret = Path(outside) / "private.txt"
+            secret.write_bytes(b"secret must never become a public asset")
+            (Path(root) / "index.html").symlink_to(secret)
+            with patch.object(local_server, "_asset_root", return_value=Path(root)):
+                status, _headers, body = self._request("/index.html")
+        self.assertEqual(status, 503)
+        self.assertNotIn(b"secret", body)
+
+    @unittest.skipIf(os.name == "nt", "hard-link fixture uses POSIX inode semantics")
+    def test_static_asset_hardlink_outside_asset_root_is_refused(self):
+        with tempfile.TemporaryDirectory() as root, tempfile.TemporaryDirectory() as outside:
+            secret = Path(outside) / "private.txt"
+            secret.write_bytes(b"private hardlinked bytes must not become public")
+            os.link(secret, Path(root) / "index.html")
+            with patch.object(local_server, "_asset_root", return_value=Path(root)):
+                status, _headers, body = self._request("/index.html")
+        self.assertEqual(status, 503)
+        self.assertNotIn(b"private hardlinked", body)
+
+    @unittest.skipIf(os.name == "nt", "directory symlink fixture uses POSIX semantics")
+    def test_static_asset_symlinked_parent_directory_is_refused(self):
+        with tempfile.TemporaryDirectory() as base, tempfile.TemporaryDirectory() as outside:
+            (Path(outside) / "index.html").write_bytes(b"private parent directory bytes")
+            public = Path(base) / "public"
+            public.symlink_to(outside, target_is_directory=True)
+            with patch.object(local_server, "_asset_root", return_value=public):
+                status, _headers, body = self._request("/index.html")
+        self.assertEqual(status, 503)
+        self.assertNotIn(b"private parent directory", body)
+
+    @unittest.skipIf(os.name == "nt", "descriptor-relative directory walk requires POSIX")
+    def test_static_asset_root_swap_before_dirfd_open_is_refused(self):
+        with tempfile.TemporaryDirectory() as base, tempfile.TemporaryDirectory() as outside:
+            public = Path(base) / "public"
+            public.mkdir()
+            (public / "index.html").write_bytes(b"expected public asset")
+            (Path(outside) / "index.html").write_bytes(b"private swapped root bytes")
+            genuine_open = local_server._open_posix_asset_directory
+
+            def substitute_parent(path):
+                public.rename(Path(base) / "old-public")
+                public.symlink_to(outside, target_is_directory=True)
+                return genuine_open(path)
+
+            with patch.object(local_server, "_asset_root", return_value=public), \
+                 patch.object(local_server, "_open_posix_asset_directory", side_effect=substitute_parent):
+                status, _headers, body = self._request("/index.html")
+        self.assertEqual(status, 503)
+        self.assertNotIn(b"private swapped root", body)
+
+    @unittest.skipIf(os.name == "nt" or not hasattr(os, "mkfifo"), "FIFO fixture requires POSIX")
+    def test_static_asset_fifo_refused_without_blocking(self):
+        with tempfile.TemporaryDirectory() as root:
+            os.mkfifo(Path(root) / "index.html", 0o600)
+            with patch.object(local_server, "_asset_root", return_value=Path(root)):
+                status, _headers, body = self._request("/index.html")
+        self.assertEqual(status, 503)
+        self.assertNotIn(b"secret", body)
 
     def test_public_health_is_liveness_only(self):
         with patch.dict(os.environ, {}, clear=True):

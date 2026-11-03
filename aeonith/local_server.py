@@ -25,6 +25,7 @@ import os
 import re
 import secrets
 import socket
+import stat
 import sysconfig
 import threading
 import time
@@ -103,6 +104,49 @@ def _asset_root() -> Path:
     if (_SOURCE_PUBLIC / "index.html").is_file():
         return _SOURCE_PUBLIC
     return _INSTALLED_PUBLIC
+
+
+def _asset_directory_identity(root: Path) -> tuple[int, int]:
+    """Refuse symlink/reparse ancestors, including the asset directory itself.
+
+    This check is repeated after the read. A same-UID filesystem actor can
+    still mutate files between checks, particularly on Windows where Python's
+    ordinary ``os.open`` does not support descriptor-relative traversal.
+    """
+    if not root.is_absolute() or ".." in root.parts:
+        raise ValueError("asset directory must have an absolute, nontraversing path")
+    root_info = None
+    for component in (root, *root.parents):
+        info = component.lstat()
+        if root_info is None:
+            root_info = info
+        if (not stat.S_ISDIR(info.st_mode)
+                or (hasattr(component, "is_junction") and component.is_junction())
+                or (getattr(info, "st_file_attributes", 0)
+                    & getattr(stat, "FILE_ATTRIBUTE_REPARSE_POINT", 0))):
+            raise ValueError("asset directory ancestry contains an indirect component")
+        if os.name == "nt" and not hasattr(info, "st_file_attributes"):
+            raise ValueError("Windows reparse point metadata is unavailable")
+    assert root_info is not None
+    return root_info.st_dev, root_info.st_ino
+
+
+def _open_posix_asset_directory(root: Path) -> int:
+    """Pin every ancestor via O_DIRECTORY|O_NOFOLLOW, starting from /."""
+    if (os.open not in os.supports_dir_fd or not hasattr(os, "O_DIRECTORY")
+            or not hasattr(os, "O_NOFOLLOW")):
+        raise ValueError("descriptor-relative secure directory traversal unavailable")
+    flags = os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW | getattr(os, "O_CLOEXEC", 0)
+    opened = os.open(root.anchor, flags)
+    try:
+        for part in root.parts[1:]:
+            child = os.open(part, flags, dir_fd=opened)
+            os.close(opened)
+            opened = child
+        return opened
+    except BaseException:
+        os.close(opened)
+        raise
 
 
 def _session_secret() -> str | None:
@@ -370,13 +414,63 @@ class _LocalHandler(ReviewHandler):
 
     def _serve_asset(self, path: str) -> None:
         filename, content_type = _ASSETS[path]
-        resource = _asset_root() / filename
+        root = _asset_root()
+        resource = root / filename
         try:
-            if resource.stat().st_size > _MAX_ASSET_BYTES:
-                raise ValueError("oversized asset")
-            body = resource.read_bytes()
-            if len(body) > _MAX_ASSET_BYTES:
-                raise ValueError("oversized asset")
+            root_identity = _asset_directory_identity(root)
+            root_fd = None
+            try:
+                if os.name != "nt":
+                    root_fd = _open_posix_asset_directory(root)
+                    pinned = os.fstat(root_fd)
+                    if (pinned.st_dev, pinned.st_ino) != root_identity:
+                        raise ValueError("asset directory changed during secure opening")
+                # Fixed names do not make arbitrary filesystem nodes safe.
+                # Root pinning and per-file checks reject directory/leaf
+                # symlinks, hardlinks and FIFOs. They cannot stop a same-UID
+                # actor from copying bytes into a new regular file.
+                expected = resource.lstat()
+                if (not stat.S_ISREG(expected.st_mode)
+                        or expected.st_nlink != 1
+                        or expected.st_size > _MAX_ASSET_BYTES
+                        or (hasattr(resource, "is_junction") and resource.is_junction())
+                        or (getattr(expected, "st_file_attributes", 0)
+                            & getattr(stat, "FILE_ATTRIBUTE_REPARSE_POINT", 0))):
+                    raise ValueError("asset must be a bounded regular file")
+                flags = (os.O_RDONLY | getattr(os, "O_BINARY", 0)
+                         | getattr(os, "O_NONBLOCK", 0) | getattr(os, "O_NOFOLLOW", 0)
+                         | getattr(os, "O_CLOEXEC", 0))
+                fd = (os.open(filename, flags, dir_fd=root_fd) if root_fd is not None
+                      else os.open(resource, flags))
+                try:
+                    observed = os.fstat(fd)
+                    if (not stat.S_ISREG(observed.st_mode)
+                            or observed.st_nlink != 1
+                            or (expected.st_dev, expected.st_ino) != (observed.st_dev, observed.st_ino)
+                            or observed.st_size > _MAX_ASSET_BYTES):
+                        raise ValueError("asset changed or is not regular")
+                    chunks: list[bytes] = []
+                    remaining = _MAX_ASSET_BYTES + 1
+                    while remaining:
+                        chunk = os.read(fd, remaining)
+                        if not chunk:
+                            break
+                        chunks.append(chunk)
+                        remaining -= len(chunk)
+                    body = b"".join(chunks)
+                    after = os.fstat(fd)
+                    if (len(body) > _MAX_ASSET_BYTES
+                            or after.st_nlink != 1
+                            or (after.st_size, after.st_mtime_ns) !=
+                               (observed.st_size, observed.st_mtime_ns)):
+                        raise ValueError("asset size or metadata changed during read")
+                finally:
+                    os.close(fd)
+                if _asset_directory_identity(root) != root_identity:
+                    raise ValueError("asset directory changed while reading")
+            finally:
+                if root_fd is not None:
+                    os.close(root_fd)
         except (OSError, ValueError):
             self._respond(503, _error("asset_unavailable", "Local interface is unavailable"))
             return
