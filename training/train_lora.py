@@ -146,9 +146,11 @@ def _train(plan_path: Path, output: Path, *, device: str = "cpu",
     _require_cpu_training(device)
     if audit_manifest is None or approval is None or admission_receipt is None:
         raise CorpusError("exact corpus audit manifest, approval and admission receipt are required")
+    # Fail before hashing model/corpus bytes: no portable host-owned private
+    # output broker currently protects runtime, adapter, and receipt writes.
+    _require_private_output_broker()
     preflight, dataset, admitted = inspect_admitted_plan(
         plan_path, audit_manifest, approval, admission_receipt)
-    _require_private_output_broker()
     # None of these options may trigger a Hub download, phone home, or paid call.
     os.environ["HF_HUB_OFFLINE"] = "1"
     os.environ["TRANSFORMERS_OFFLINE"] = "1"

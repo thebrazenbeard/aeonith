@@ -11,6 +11,7 @@ import tempfile
 import unittest
 
 from training.corpus import CorpusError
+from training.corpus import MAX_LINE_BYTES, _read_split_bound
 from training.corpus_admission import inspect, verify_admission
 from training.train_lora import inspect_admitted_plan
 
@@ -163,6 +164,34 @@ class AdmissionBindingTests(unittest.TestCase):
         self.assertIn("output custody broker", run.stderr)
         self.assertFalse(dest.exists())
         self.assertNotIn("windmill", run.stderr + run.stdout)
+
+    def test_split_reader_limits_line_allocation_before_json_parse(self):
+        # The size check must apply *to the read call*. Iterating raw lines
+        # and checking len(line) afterward could allocate an unbounded line.
+        import io
+        from unittest.mock import patch
+
+        class BoundedStream(io.BytesIO):
+            def __iter__(self):
+                raise AssertionError("unbounded file iteration")
+
+            def readline(self, size: int = -1) -> bytes:
+                if not 0 < size <= MAX_LINE_BYTES + 1:
+                    raise AssertionError("unbounded readline")
+                return super().readline(size)
+
+        huge = b'{"prompt":"' + b'x' * (MAX_LINE_BYTES * 3) + b'"}\n'
+        with patch.object(Path, "open", return_value=BoundedStream(huge)):
+            with self.assertRaisesRegex(CorpusError, "oversized train corpus"):
+                _read_split_bound(self.splits["train"], "train")
+
+    def test_bounded_reader_hashes_exact_bytes_of_valid_jsonl(self):
+        source = self.splits["train"]
+        rows, bound_sha, bound_size = _read_split_bound(source, "train")
+        expected_bytes = source.read_bytes()
+        self.assertEqual(bound_sha, hashlib.sha256(expected_bytes).hexdigest())
+        self.assertEqual(bound_size, len(expected_bytes))
+        self.assertEqual(rows[0]["id"], "record-0")
 
 
 if __name__ == "__main__":

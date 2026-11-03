@@ -137,7 +137,9 @@ copying or printing private texts. The receipt is **not digitally signed**;
 cryptographic hashes bind *bytes*, not real-world identities or legal rights.
 The corpus JSONL parser now hashes each split within the same open-file stream
 used to produce training records, so a separate later hash pass cannot silently
-describe different split bytes. This does not defeat a privileged writer
+describe different split bytes. Each individual JSONL line is also bounded
+at the binary read call, before JSON decoding and allocation of records.
+This does not defeat a privileged writer
 modifying an open file concurrently; use trusted host-owned private input
 storage for any eventual optimizer run.
 The named human reviewers and source provenance still require independent
@@ -166,7 +168,10 @@ python -m training.train_lora train \
 ```
 
 **Current execution gate: this command deliberately refuses to start an
-optimizer on any host.** The present `SFTTrainer` runtime, adapter and receipt
+optimizer on any host.** The host output broker check occurs before reading
+or hashing the potentially multi-gigabyte local base checkpoint or corpus;
+`inspect-admission` remains the separate, deep, read-only verification command.
+The present `SFTTrainer` runtime, adapter and receipt
 writers follow output paths after a lexical check; there is no host-owned,
 descriptor-pinned output custody broker protecting all ancestor directory
 components and access controls. The source still contains the training logic,

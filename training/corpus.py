@@ -106,7 +106,15 @@ def _read_split_bound(path: Path, split: str) -> tuple[list[dict[str, str]], str
     total_bytes = 0
     try:
         with path.open("rb") as source:
-            for number, line in enumerate(source, 1):
+            number = 0
+            while True:
+                # Bound allocation at the read itself; a length check after
+                # unbounded iteration could already have allocated an
+                # attacker-controlled multi-gigabyte JSONL line.
+                line = source.readline(MAX_LINE_BYTES + 1)
+                if not line:
+                    break
+                number += 1
                 total_bytes += len(line)
                 if (number > MAX_ROWS_PER_SPLIT or len(line) > MAX_LINE_BYTES
                         or total_bytes > MAX_SPLIT_BYTES):

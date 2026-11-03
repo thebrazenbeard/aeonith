@@ -190,6 +190,17 @@ class BookCliTests(unittest.TestCase):
                 self.assertEqual(FakeLocalProvider.calls, [])
 
     @unittest.skipIf(os.name == "nt", "Windows private output ACL custody is not qualified")
+    def test_oversized_report_is_refused_without_writing_private_prose(self):
+        # Exercise a strict quota without generating a large manuscript or
+        # trusting a provider to honor its stated token budget.
+        with patch("aeonith.book_cli.MAX_PRIVATE_FILE_BYTES", 100, create=True):
+            code, stdout, stderr = self.invoke()
+        self.assertEqual(code, 2)
+        self.assertEqual(stdout, "")
+        self.assertNotIn(self.source, stderr)
+        self.assertEqual(self.output_path.read_bytes(), b"")
+
+    @unittest.skipIf(os.name == "nt", "Windows private output ACL custody is not qualified")
     def test_checkpoint_excludes_private_prefix_and_marker(self):
         secret = "PRIVATE_PREFIX_SHOULD_NOT_REACH_MODEL"
         self.input_path.write_bytes((secret + "[ps]" + self.source).encode("utf-8"))

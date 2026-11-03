@@ -2,7 +2,7 @@
 setlocal DisableDelayedExpansion
 rem Double-click from Explorer as the SAME Windows account that launched Aeonith.
 rem Only calls the checked-in DPAPI clipboard helper. Does not start a service.
-powershell.exe -NoLogo -NoProfile -NonInteractive -ExecutionPolicy Bypass -File "%~dp0copy-aeonith-token-windows.ps1"
+"%SystemRoot%\System32\WindowsPowerShell\v1.0\powershell.exe" -NoLogo -NoProfile -NonInteractive -ExecutionPolicy Bypass -File "%~dp0copy-aeonith-token-windows.ps1"
 if errorlevel 1 (
     echo.
     echo Aeonith could not recover this account's token. The clipboard may still contain an older value.

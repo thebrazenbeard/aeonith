@@ -302,7 +302,7 @@ def prepare(input_path: str | Path, output_dir: str | Path) -> dict[str, Any]:
         entry = {"run_id": run_id, "seed": row["seed"],
                  "base_structural_status": item["base_status"],
                  "adapter_structural_status": item["adapter_status"],
-                 "pair_id": None}
+                 "pair_id": None, "pair_display_sha256": None}
         if item["base_status"] == item["adapter_status"] == "pass":
             pair, key = build_blind_pair(row["request"], row["base_review"], row["adapter_review"],
                                          bundle["model_identities"]["base"]["model_id"],
@@ -324,10 +324,14 @@ def prepare(input_path: str | Path, output_dir: str | Path) -> dict[str, Any]:
             key["pair_id"] = run_pair_id
             key["source_content_pair_id"] = original_content_pair_id
             entry["pair_id"] = run_pair_id
+            # Bind the receipt to the *actual orientation and text* written
+            # into the private pair file. The ID alone does not bind display
+            # content after it has been run-qualified above.
+            entry["pair_display_sha256"] = digest(pair)
             pairs.append((run_id, pair, key))
         records.append(entry)
     receipt = {
-        "schema_version": "aeonith.paired_model_bench_receipt.v1",
+        "schema_version": "aeonith.paired_model_bench_receipt.v2",
         "status": "paired_run_validated_not_quality_qualified",
         "experiment_id": bundle["experiment_id"],
         "bundle_sha256": bundle_hash,
@@ -352,6 +356,7 @@ def prepare(input_path: str | Path, output_dir: str | Path) -> dict[str, Any]:
             "run-qualified pair IDs remain distinct across seeds; repeated content is counted separately and is not independent quality evidence",
             "non-completed reviews and structural failures remain in the run denominator",
             "the A/B display contains private manuscript text and must stay with an authorized reviewer",
+            "display fingerprints are caller-declared custody checks, not authenticated human-viewing receipts",
         ],
     }
     # Complete admission occurs in memory before any effect. The root and
@@ -381,8 +386,10 @@ def assess_human_study_coverage(bench_receipt: dict[str, Any],
         raise BenchError("paired run receipt must be an object")
     required = {"schema_version", "status", "experiment_id", "run_count",
                 "seed_count", "distinct_holdout_work_count", "blinded_pair_count", "runs"}
+    if bench_receipt.get("schema_version") == "aeonith.paired_model_bench_receipt.v1":
+        raise BenchError("legacy receipt lacks exact blind-display binding; regenerate v2 from source runs")
     if (not required.issubset(bench_receipt)
-            or bench_receipt["schema_version"] != "aeonith.paired_model_bench_receipt.v1"
+            or bench_receipt["schema_version"] != "aeonith.paired_model_bench_receipt.v2"
             or bench_receipt["status"] != "paired_run_validated_not_quality_qualified"
             or not isinstance(bench_receipt["experiment_id"], str)
             or not NAME.fullmatch(bench_receipt["experiment_id"])):
@@ -400,13 +407,14 @@ def assess_human_study_coverage(bench_receipt: dict[str, Any],
             or not 0 <= counts["blinded_pair_count"] <= counts["run_count"]):
         raise BenchError("paired receipt has an inconsistent run denominator")
 
-    expected: set[str] = set()
+    expected: dict[str, str] = {}
     run_ids: set[str] = set()
     seeds: set[int] = set()
     for row in runs:
         row = _exact(row, {"run_id", "seed", "base_structural_status",
-                           "adapter_structural_status", "pair_id"}, "receipt run")
+                           "adapter_structural_status", "pair_id", "pair_display_sha256"}, "receipt run")
         run_id, seed, pair_id = row["run_id"], row["seed"], row["pair_id"]
+        display_sha = row["pair_display_sha256"]
         if (not isinstance(run_id, str) or not re.fullmatch(r"[0-9a-f]{24}", run_id)
                 or run_id in run_ids or type(seed) is not int or not 0 <= seed <= 2**32 - 1):
             raise BenchError("invalid or repeated run identity in paired receipt")
@@ -418,11 +426,12 @@ def assess_human_study_coverage(bench_receipt: dict[str, Any],
         eligible = statuses == ("pass", "pass")
         if eligible:
             if (not isinstance(pair_id, str) or not re.fullmatch(r"[0-9a-f]{24}", pair_id)
-                    or pair_id in expected):
+                    or pair_id in expected or not isinstance(display_sha, str)
+                    or not HEX64.fullmatch(display_sha)):
                 raise BenchError("missing or repeated eligible pair identity")
-            expected.add(pair_id)
-        elif pair_id is not None:
-            raise BenchError("non-evaluable run may not create a blind pair")
+            expected[pair_id] = display_sha
+        elif pair_id is not None or display_sha is not None:
+            raise BenchError("non-evaluable run may not create a blind pair or display fingerprint")
     if len(seeds) != counts["seed_count"] or len(expected) != counts["blinded_pair_count"]:
         raise BenchError("paired receipt seed or eligible-pair denominator mismatch")
 
@@ -433,8 +442,11 @@ def assess_human_study_coverage(bench_receipt: dict[str, Any],
     observed = {item["pair_id"]: item for item in summary["pair_summaries"]}
     if not set(observed).issubset(expected):
         raise BenchError("human study includes an unadmitted blind pair")
+    if any(item["display_sha256"] != expected[pair_id]
+           for pair_id, item in observed.items()):
+        raise BenchError("human study blind display differs from the admitted bench display")
     covered = sum(item["comparable_preference_count"] >= 2 for item in observed.values())
-    missing = len(expected - set(observed))
+    missing = len(expected.keys() - observed.keys())
     below_two = len(expected) - covered
     return {
         "schema_version": "aeonith.paired_human_coverage.v1",
@@ -463,6 +475,7 @@ def assess_human_study_coverage(bench_receipt: dict[str, Any],
             "both run receipt and human rubrics are caller-supplied, not independently authenticated",
             "distinct reviewer pseudonyms do not prove distinct, consenting human raters",
             "the blinded display hash detects orientation mismatches but is not a signature",
+            "bench and study display hashes must match, but both are caller-supplied and forgeable",
             "identical generations across seeds are not independent evidence of quality improvement",
         ],
     }

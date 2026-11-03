@@ -103,6 +103,11 @@ private if the membership of an evaluated work is sensitive.
   also retains `source_content_pair_id`. The receipt reports repeated content
   pairs, which remain repeated evidence even though the run IDs are distinct.
   Do not count identical generations as independent literary insights.
+- Receipt `aeonith.paired_model_bench_receipt.v2` additionally binds each
+  eligible run-qualified pair ID to the SHA-256 of the **exact private A/B
+  display**, including orientation and critique text. Ineligible runs record
+  `null` for both. Retain the receipt privately: a display digest can expose
+  a linkable fingerprint, though it does not itself contain manuscript text.
 - Use the existing `quality_eval.py validate-annotation`, `bind-annotation`
   and `aggregate` interfaces to collect blinded human ratings and assess
   disagreement. The assignment keys should be revealed only *after* ratings
@@ -187,7 +192,13 @@ schema-compliant critiques do not constitute a human result.
    comparable, distinct-pseudonym rubrics**, and observed rater disagreement.
    It rejects additional unadmitted pair IDs, duplicate pair or run identities,
    inconsistent receipt run/seed grids, and annotations bound to a different
-   A/B display orientation. Neither private manuscript text nor ratings,
+   A/B display orientation. The v2 receipt also rejects a substituted study
+   display with the **same pair ID**, even when the submitted rubrics were
+   rebound to that substitution. Earlier v1 receipts have no exact-display
+   binding; regenerate them from the original source runs rather than claiming
+   complete study coverage. These fingerprints are consistency checks of
+   caller-supplied evidence, **not** signatures or proof of what a human viewed.
+   Neither private manuscript text nor ratings,
    reviewer pseudonyms or rationales are printed.
 
    A result of `TWO_RATER_COVERAGE_OPERATOR_DECLARED` says only that the

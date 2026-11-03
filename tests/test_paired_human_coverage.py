@@ -12,7 +12,7 @@ import unittest
 
 from evaluation.quality_eval import (
     ANNOTATION_SCHEMA, DIMENSIONS, PAIR_SCHEMA, STUDY_SCHEMA,
-    bind_annotation_to_display,
+    bind_annotation_to_display, digest,
 )
 from evaluation.paired_model_bench import BenchError, assess_human_study_coverage
 
@@ -20,7 +20,7 @@ from evaluation.paired_model_bench import BenchError, assess_human_study_coverag
 def fixture():
     ids = [f"{number:024x}" for number in range(1, 5)]
     receipt = {
-        "schema_version": "aeonith.paired_model_bench_receipt.v1",
+        "schema_version": "aeonith.paired_model_bench_receipt.v2",
         "status": "paired_run_validated_not_quality_qualified",
         "experiment_id": "fixture-human-study",
         "run_count": 4, "seed_count": 2,
@@ -29,7 +29,7 @@ def fixture():
         "runs": [
             {"run_id": f"{index + 100:024x}", "seed": (11, 29)[index % 2],
              "base_structural_status": "pass", "adapter_structural_status": "pass",
-             "pair_id": pair_id}
+             "pair_id": pair_id, "pair_display_sha256": None}
             for index, pair_id in enumerate(ids)
         ],
     }
@@ -38,6 +38,7 @@ def fixture():
         pair = {"schema_version": PAIR_SCHEMA, "pair_id": pair_id,
                 "request": {"work": {"text": "Secret synthetic literary scene"}},
                 "A": {}, "B": {}, "directions": "Score before model identity is revealed."}
+        receipt["runs"][len(records)]["pair_display_sha256"] = digest(pair)
         annotations = []
         for name in ("human-one", "human-two"):
             rubric = {"schema_version": ANNOTATION_SCHEMA, "pair_id": pair_id,
@@ -85,6 +86,26 @@ class PairedHumanCoverageTests(unittest.TestCase):
         with self.assertRaises(ValueError):
             assess_human_study_coverage(receipt, bad)
 
+    def test_rejects_rebound_forged_display_with_valid_pair_id_and_rubrics(self):
+        receipt, study = fixture()
+        forged = deepcopy(study)
+        record = forged["records"][0]
+        record["pair"]["A"]["substitution"] = "Different critique substituted after preparation"
+        for bound in record["annotations"]:
+            bound["display_sha256"] = digest(record["pair"])
+        # Both rubrics are internally bound to the swapped display; the v1
+        # coverage implementation erroneously counted this as full coverage.
+        with self.assertRaisesRegex(BenchError, "blind display differs"):
+            assess_human_study_coverage(receipt, forged)
+
+    def test_legacy_unbound_receipt_requires_regeneration(self):
+        receipt, study = fixture()
+        receipt["schema_version"] = "aeonith.paired_model_bench_receipt.v1"
+        for row in receipt["runs"]:
+            row.pop("pair_display_sha256")
+        with self.assertRaisesRegex(BenchError, "legacy receipt lacks"):
+            assess_human_study_coverage(receipt, study)
+
     def test_run_receipt_denominator_and_collisions_are_checked(self):
         receipt, study = fixture()
         for mutation in (lambda r: r.update(run_count=3),
@@ -99,6 +120,7 @@ class PairedHumanCoverageTests(unittest.TestCase):
     def test_missing_records_and_structural_failure_stay_in_denominator(self):
         receipt, study = fixture()
         receipt["runs"][0]["pair_id"] = None
+        receipt["runs"][0]["pair_display_sha256"] = None
         receipt["runs"][0]["base_structural_status"] = "fail"
         receipt["blinded_pair_count"] = 3
         study["records"].pop(0)

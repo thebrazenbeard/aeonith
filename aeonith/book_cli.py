@@ -24,7 +24,7 @@ from .checkpoint import CheckpointError, plan_after_checkpoint
 from .core import CANONICAL_LENSES
 from .docx_source import read_docx_source
 from .longform import _read_utf8, plan_longform
-from .private_output import PrivateOutputError, reserve_private_file
+from .private_output import MAX_PRIVATE_FILE_BYTES, PrivateOutputError, reserve_private_file
 from .providers import LocalOpenAICompatibleProvider
 
 DEFAULT_CHUNK_CHARS = 2_000
@@ -173,9 +173,14 @@ def main(argv: list[str] | None = None) -> int:
 
     try:
         result = _run_batch(source, plan, lenses, provider, args)
-        rendered = json.dumps(result, ensure_ascii=False, indent=2, sort_keys=True,
-                              allow_nan=False) + "\n"
-        with os.fdopen(reserved_fd, "w", encoding="utf-8") as output:
+        rendered = (json.dumps(result, ensure_ascii=False, indent=2, sort_keys=True,
+                               allow_nan=False) + "\n").encode("utf-8")
+        # The private-file reservation is handle-pinned, but it does not
+        # enforce a report-size quota; enforce the shared 64 MB bound before
+        # writing even when a provider returns unexpectedly verbose content.
+        if len(rendered) > MAX_PRIVATE_FILE_BYTES:
+            raise ValueError("private report exceeds the bounded artifact limit")
+        with os.fdopen(reserved_fd, "wb") as output:
             reserved_fd = None
             output.write(rendered)
         if result["status"] == "segments_completed":

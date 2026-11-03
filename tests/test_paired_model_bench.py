@@ -96,6 +96,7 @@ class PairedModelBenchTests(unittest.TestCase):
     def test_outputs_private_blinded_pairs_keys_and_redacted_receipt(self) -> None:
         self.write()
         receipt = prepare(self.input, self.out)
+        self.assertEqual(receipt["schema_version"], "aeonith.paired_model_bench_receipt.v2")
         self.assertEqual(receipt["status"], "paired_run_validated_not_quality_qualified")
         self.assertEqual(receipt["run_count"], 4)
         self.assertEqual(receipt["blinded_pair_count"], 4)
@@ -111,6 +112,8 @@ class PairedModelBenchTests(unittest.TestCase):
         self.assertEqual(set(pair), {"schema_version", "pair_id", "request", "A", "B", "directions"})
         self.assertNotIn("unchanged-base", json.dumps(pair))
         self.assertNotIn("trained-adapter", json.dumps(pair))
+        run = next(row for row in receipt["runs"] if row["pair_id"] == pair["pair_id"])
+        self.assertEqual(run["pair_display_sha256"], digest(pair))
         self.assertTrue((self.out / "bench_receipt.json").is_file())
 
     @unittest.skipIf(os.name == "nt", "Windows private-output ACL custody is not qualified")

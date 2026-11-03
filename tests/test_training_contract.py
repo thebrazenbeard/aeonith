@@ -10,6 +10,7 @@ import subprocess
 import sys
 import tempfile
 import unittest
+from unittest.mock import patch
 
 from training.corpus import CorpusError, inspect_plan
 from training.train_lora import _require_cpu_training, _train, fingerprint_adapter
@@ -225,6 +226,18 @@ class TrainingContractTests(unittest.TestCase):
             _train(self.plan_path, self.root / "adapter", device="cuda")
         self.assertFalse((self.root / "adapter").exists())
         self.assertIsNone(_require_cpu_training("cpu"))
+
+    def test_cpu_train_refuses_unqualified_output_before_expensive_preflight(self) -> None:
+        # An unavailable output broker must not waste time hashing a multi-GB
+        # model or reading private corpora just to refuse the launch afterward.
+        with patch("training.train_lora.inspect_admitted_plan",
+                   side_effect=AssertionError("admission/model bytes read before broker gate")):
+            with self.assertRaisesRegex(CorpusError, "output custody broker"):
+                _train(self.plan_path, self.root / "new-adapter", device="cpu",
+                       audit_manifest=self.root / "missing-manifest.json",
+                       approval=self.root / "missing-approval.json",
+                       admission_receipt=self.root / "missing-receipt.json")
+        self.assertFalse((self.root / "new-adapter").exists())
 
     def test_fingerprint_adapter_hashes_bytes_without_claiming_quality(self) -> None:
         adapter = self.root / "adapter"
