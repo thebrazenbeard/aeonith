@@ -14,7 +14,7 @@ import unittest
 from unittest.mock import patch
 
 from training.corpus import CorpusError, inspect_plan
-from training.train_lora import (_require_cpu_training, _train, fingerprint_adapter,
+from training.train_lora import (_require_chat_context, _require_cpu_training, _train, fingerprint_adapter,
                                  verify_declared_base_checkpoint)
 
 
@@ -31,6 +31,45 @@ def row(identifier: str, prompt: str, *, rights: str = "self_authored") -> dict:
         "permission_to_train": True,
         "permission_to_publish_adapter": True,
     }
+
+
+class FakeDictDefaultTokenizer:
+    """Models Transformers 5.20's default structured chat result."""
+
+    def __init__(self, ids):
+        self.ids = ids
+        self.calls = []
+
+    def apply_chat_template(self, messages, *, tokenize, add_generation_prompt,
+                            return_dict=True):
+        self.calls.append((tokenize, add_generation_prompt, return_dict))
+        if return_dict:
+            return {"input_ids": self.ids, "attention_mask": [1] * len(self.ids)}
+        return self.ids
+
+
+class ChatTemplateContextTests(unittest.TestCase):
+    def setUp(self):
+        self.messages = [{"role": "user", "content": "private"},
+                         {"role": "assistant", "content": "private answer"}]
+
+    def test_actual_flat_ids_not_structured_mapping_key_count(self):
+        tokenizer = FakeDictDefaultTokenizer([1] * 128)
+        self.assertEqual(len(_require_chat_context(tokenizer, self.messages,
+                                                   max_length=128, split="train")), 128)
+        self.assertEqual(tokenizer.calls, [(True, False, False)])
+
+    def test_context_overflow_refused_even_when_mapping_has_two_fields(self):
+        tokenizer = FakeDictDefaultTokenizer([1] * 129)
+        with self.assertRaisesRegex(CorpusError, "exceeds max_length"):
+            _require_chat_context(tokenizer, self.messages, max_length=128, split="validation")
+        self.assertEqual(tokenizer.calls, [(True, False, False)])
+
+    def test_nonflat_or_invalid_token_results_refused(self):
+        for ids in ([], [[1, 2]], [True], [1.2], [-1], {"input_ids": [1]}):
+            with self.subTest(ids=ids), self.assertRaisesRegex(CorpusError, "flat token ID"):
+                _require_chat_context(FakeDictDefaultTokenizer(ids), self.messages,
+                                      max_length=128, split="train")
 
 
 class TrainingContractTests(unittest.TestCase):

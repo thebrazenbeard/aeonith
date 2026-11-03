@@ -174,6 +174,14 @@ def _token_digest(tokens: list[int]) -> str:
     return hashlib.sha256(json.dumps(tokens, separators=(",", ":")).encode("ascii")).hexdigest()
 
 
+def _require_generation_tokens(value: Any, torch: Any) -> Any:
+    """Require a single token-ID tensor, not a BatchEncoding mapping."""
+    if (not torch.is_tensor(value) or value.dtype != torch.long
+            or value.ndim != 2 or value.shape[0] != 1 or value.shape[1] < 1):
+        raise VerificationError("chat tokenizer did not return a single token-ID tensor")
+    return value
+
+
 def smoke_reload(base: Path, adapter: Path, verification: dict[str, Any], *,
                  device: str, max_new_tokens: int) -> dict[str, Any]:
     """Reload the base and adapter in this new CLI process, then generate no prose logs."""
@@ -188,10 +196,11 @@ def smoke_reload(base: Path, adapter: Path, verification: dict[str, Any], *,
         use_safetensors=True, dtype=torch.float32,
     ).to(device)
     tokenizer = AutoTokenizer.from_pretrained(str(base), local_files_only=True, trust_remote_code=False)
-    inputs = tokenizer.apply_chat_template(
+    inputs = _require_generation_tokens(tokenizer.apply_chat_template(
         [{"role": "user", "content": "Read one original sentence closely: " + _SAMPLE}],
         tokenize=True, add_generation_prompt=True, return_tensors="pt",
-    ).to(device)
+        return_dict=False,
+    ), torch).to(device)
     model.eval()
     with torch.inference_mode():
         plain = model.generate(input_ids=inputs, do_sample=False, max_new_tokens=max_new_tokens,

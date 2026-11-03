@@ -23,6 +23,29 @@ from .corpus_admission import AdmissionError, verify_admission
 from .verify_base import BaseVerificationError, verify_checkpoint
 
 
+def _require_chat_context(tokenizer: Any, messages: list[dict[str, str]], *,
+                          max_length: int, split: str) -> list[int]:
+    """Count actual token IDs, never BatchEncoding mapping keys, before training.
+
+    Transformers 5.20 defaults ``apply_chat_template`` to return_dict=True,
+    whose ``len`` reports mapping fields rather than encoded context length.
+    Request a flat sequence explicitly and reject any unexpected representation.
+    """
+    try:
+        tokens = tokenizer.apply_chat_template(
+            messages, tokenize=True, add_generation_prompt=False,
+            return_dict=False,
+        )
+    except (AttributeError, TypeError, ValueError) as exc:
+        raise CorpusError("chat template token length cannot be verified") from exc
+    if (not isinstance(tokens, list) or not tokens
+            or any(type(token) is not int or token < 0 for token in tokens)):
+        raise CorpusError("chat template did not return a flat token ID sequence")
+    if len(tokens) > max_length:
+        raise CorpusError(f"{split} record exceeds max_length; no silent truncation")
+    return tokens
+
+
 def _digest(path: Path) -> str:
     result = hashlib.sha256()
     with path.open("rb") as stream:
@@ -261,13 +284,11 @@ def _train(plan_path: Path, output: Path, *, device: str = "cpu",
     # losing the completion would create apparent training with no target.
     for split in ("train", "validation"):
         for example in dataset[split]:
-            tokens = tokenizer.apply_chat_template(
+            _require_chat_context(tokenizer,
                 [{"role": "user", "content": example["prompt"]},
                  {"role": "assistant", "content": example["completion"]}],
-                tokenize=True, add_generation_prompt=False,
+                max_length=config["max_length"], split=split,
             )
-            if len(tokens) > config["max_length"]:
-                raise CorpusError(f"{split} record exceeds max_length; no silent truncation")
 
     def records(split: str) -> Any:
         return Dataset.from_list([

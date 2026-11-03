@@ -20,7 +20,7 @@ from typing import Any
 from .corpus import CorpusError, inspect_plan
 from .train_lora import (
     _output_path, _require_private_output_broker, _version_at_least,
-    fingerprint_adapter, inspect_admitted_plan,
+    _require_chat_context, fingerprint_adapter, inspect_admitted_plan,
 )
 from .verify_base import BaseVerificationError, verify_checkpoint
 
@@ -203,13 +203,11 @@ def _train(plan: Path, destination: Path, expected_base_manifest: Path, *,
     # Never silently trim an approved answer or adapt from the blind holdout.
     for split in ("train", "validation"):
         for item in records[split]:
-            token_ids = tokenizer.apply_chat_template(
+            _require_chat_context(tokenizer,
                 [{"role": "user", "content": item["prompt"]},
                  {"role": "assistant", "content": item["completion"]}],
-                tokenize=True, add_generation_prompt=False,
+                max_length=settings["max_length"], split=split,
             )
-            if len(token_ids) > settings["max_length"]:
-                raise CorpusError(f"{split} row exceeds configured context; truncation forbidden")
 
     model = prepare_model_for_kbit_training(model, use_gradient_checkpointing=True)
     after_prep_free, _ = _headroom(torch.cuda, minimum_mib=MIN_AFTER_PREP_MIB,

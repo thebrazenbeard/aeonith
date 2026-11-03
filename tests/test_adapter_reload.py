@@ -12,13 +12,38 @@ import unittest
 
 from training.verify_adapter import (
     VerificationError, _require_cpu_smoke, inspect_adapter_receipt,
-    smoke_reload, write_report_exclusive,
+    _require_generation_tokens, smoke_reload, write_report_exclusive,
 )
 
 
 def _fingerprint(path: Path) -> dict[str, object]:
     contents = path.read_bytes()
     return {"name": path.name, "bytes": len(contents), "sha256": hashlib.sha256(contents).hexdigest()}
+
+
+class GenerationInputContractTests(unittest.TestCase):
+    def test_requires_one_long_token_tensor_not_batchencoding(self):
+        class Tensor:
+            dtype = "long"
+            ndim = 2
+            shape = (1, 4)
+
+        class FakeTorch:
+            long = "long"
+
+            @staticmethod
+            def is_tensor(value):
+                return isinstance(value, Tensor)
+
+        good = Tensor()
+        self.assertIs(_require_generation_tokens(good, FakeTorch), good)
+        for bad in ({"input_ids": good, "attention_mask": good},
+                    type("WrongDtype", (), {"dtype": "float", "ndim": 2, "shape": (1, 4)})(),
+                    type("WrongShape", (), {"dtype": "long", "ndim": 2, "shape": (2, 4)})()):
+            with self.subTest(bad=type(bad).__name__), self.assertRaisesRegex(
+                VerificationError, "token-ID tensor"
+            ):
+                _require_generation_tokens(bad, FakeTorch)
 
 
 class AdapterReloadTests(unittest.TestCase):

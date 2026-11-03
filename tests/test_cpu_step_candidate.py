@@ -98,10 +98,15 @@ class FakeTokenizer:
     def __init__(self, *, broken: bool = False) -> None:
         self.broken = broken
 
-    def apply_chat_template(self, messages, *, tokenize, add_generation_prompt):
+    def apply_chat_template(self, messages, *, tokenize, add_generation_prompt,
+                            return_dict=True):
         if add_generation_prompt:
-            return [5, 6]
-        return [7 if self.broken else 5, 6, 8]
+            ids = [5, 6]
+        else:
+            ids = [7 if self.broken else 5, 6, 8]
+        # Transformers 5.20 defaults return_dict=True. If the candidate
+        # forgets return_dict=False, it must not misread mapping keys as IDs.
+        return {"input_ids": ids, "attention_mask": [1] * len(ids)} if return_dict else ids
 
 
 class FakeBroker(PinnedTrainingArtifacts):

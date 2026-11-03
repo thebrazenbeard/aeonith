@@ -64,8 +64,10 @@ def _encode_completion(tokenizer: Any, prompt: str, completion: str,
     user = [{"role": "user", "content": prompt}]
     full = [*user, {"role": "assistant", "content": completion}]
     try:
-        prefix = tokenizer.apply_chat_template(user, tokenize=True, add_generation_prompt=True)
-        sequence = tokenizer.apply_chat_template(full, tokenize=True, add_generation_prompt=False)
+        prefix = tokenizer.apply_chat_template(user, tokenize=True, add_generation_prompt=True,
+                                               return_dict=False)
+        sequence = tokenizer.apply_chat_template(full, tokenize=True, add_generation_prompt=False,
+                                                 return_dict=False)
     except (AttributeError, TypeError, ValueError) as exc:
         raise CandidateStepError("tokenizer cannot encode the exact chat template") from exc
     if (not isinstance(prefix, list) or not isinstance(sequence, list)
