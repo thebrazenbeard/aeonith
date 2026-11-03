@@ -31,9 +31,11 @@ _TEST_BYTES = b"AEONITH_DISPOSABLE_INTERRUPTED_CREATE\n"
 def _crash_child_code() -> str:
     # No arbitrary target is accepted from the public CLI. The only path
     # supplied to this isolated interpreter is created by the parent below.
+    # Windows os.open defaults to CRT text mode; explicit O_BINARY preserves
+    # the exact LF marker bytes checked by the parent after the child exits.
     return (
         "import os,sys\n"
-        "fd=os.open(sys.argv[1],os.O_WRONLY|os.O_CREAT|os.O_EXCL,0o600)\n"
+        "fd=os.open(sys.argv[1],os.O_WRONLY|os.O_CREAT|os.O_EXCL|getattr(os,'O_BINARY',0),0o600)\n"
         "os.write(fd,b'AEONITH_DISPOSABLE_INTERRUPTED_CREATE\\n')\n"
         "os.fsync(fd)\n"
         "os._exit(39)\n"

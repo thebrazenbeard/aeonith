@@ -4,12 +4,37 @@ from contextlib import redirect_stdout
 from io import StringIO
 import json
 import os
+from types import SimpleNamespace
 import unittest
 
 from experimental import windows_custody_matrix as matrix
 
 
 class WindowsCustodyMatrixTests(unittest.TestCase):
+    def test_interrupted_child_requests_binary_file_mode(self):
+        """Exercise the actual generated script's open flags without host effects."""
+        class OpenIntercept(Exception):
+            pass
+
+        observed_flags = []
+
+        def fake_open(_path, flags, _mode):
+            observed_flags.append(flags)
+            raise OpenIntercept
+
+        fake_os = SimpleNamespace(O_WRONLY=1, O_CREAT=2, O_EXCL=4,
+                                  O_BINARY=8, open=fake_open)
+        fake_sys = SimpleNamespace(argv=["child", "synthetic-test-path"])
+
+        def import_fake(name, *_args, **_kwargs):
+            return {"os": fake_os, "sys": fake_sys}[name]
+
+        with self.assertRaises(OpenIntercept):
+            exec(matrix._crash_child_code(), {"__builtins__": {
+                "__import__": import_fake, "getattr": getattr,
+            }})
+        self.assertEqual(observed_flags, [1 | 2 | 4 | 8])
+
     def test_default_cli_never_runs_any_native_probe(self):
         output = StringIO()
         with redirect_stdout(output):

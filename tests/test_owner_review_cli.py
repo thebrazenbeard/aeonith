@@ -17,6 +17,12 @@ from unittest.mock import patch
 from tests.test_synthetic_generated_admission import candidate_example
 
 
+requires_native_linux = unittest.skipUnless(
+    sys.platform == "linux" and os.name != "nt",
+    "owner review requires qualified native Linux private storage",
+)
+
+
 class PrivateTerminal:
     def __init__(self, answers: list[str]):
         self.answers = iter(answers)
@@ -56,6 +62,7 @@ class OwnerReviewCLITests(unittest.TestCase):
         self.candidate_path.chmod(0o600)
         self.digest = hashlib.sha256(self.candidate_path.read_bytes()).hexdigest()
 
+    @requires_native_linux
     def test_review_requires_all_choices_and_exact_final_confirmation(self):
         from training.review_candidates import review_candidates
 
@@ -73,6 +80,7 @@ class OwnerReviewCLITests(unittest.TestCase):
         self.assertFalse(any(item["permission_to_publish_adapter"] for item in approval["records"]))
         self.assertIn(self.candidate["examples"][0]["passage"], terminal.output.getvalue())
 
+    @requires_native_linux
     def test_aborted_review_cannot_create_approval(self):
         from training.review_candidates import review_candidates, ReviewAborted
 
@@ -81,6 +89,7 @@ class OwnerReviewCLITests(unittest.TestCase):
             review_candidates(self.candidate_path, self.output_path, terminal)
         self.assertFalse(self.output_path.exists())
 
+    @requires_native_linux
     def test_wrong_final_hash_cannot_create_approval(self):
         from training.review_candidates import review_candidates, ReviewAborted
 
@@ -90,6 +99,7 @@ class OwnerReviewCLITests(unittest.TestCase):
             review_candidates(self.candidate_path, self.output_path, terminal)
         self.assertFalse(self.output_path.exists())
 
+    @requires_native_linux
     def test_early_eof_or_keyboard_interrupt_leaves_no_approval(self):
         from training.review_candidates import review_candidates, ReviewAborted
 
@@ -110,7 +120,8 @@ class OwnerReviewCLITests(unittest.TestCase):
                               InterruptedTerminal(["admit", "admit"]))
         self.assertFalse(self.output_path.exists())
 
-    def test_unqualified_private_file_or_windows_refused_before_any_output(self):
+    @requires_native_linux
+    def test_unqualified_private_file_refused_before_any_output(self):
         from training.review_candidates import review_candidates, ReviewAborted
 
         self.candidate_path.chmod(0o644)
@@ -120,12 +131,6 @@ class OwnerReviewCLITests(unittest.TestCase):
         self.assertFalse(self.output_path.exists())
         self.candidate_path.chmod(0o600)
 
-        with patch("training.review_candidates.sys.platform", "win32"):
-            with self.assertRaises(ReviewAborted):
-                review_candidates(self.candidate_path, self.output_path,
-                                  PrivateTerminal(["admit"] * 3))
-        self.assertFalse(self.output_path.exists())
-
         linked_path = self.candidate_path.parent / "linked.json"
         os.link(self.candidate_path, linked_path)
         with self.assertRaises(ReviewAborted):
@@ -133,6 +138,19 @@ class OwnerReviewCLITests(unittest.TestCase):
                               PrivateTerminal(["admit"] * 3))
         self.assertFalse(self.output_path.exists())
 
+    def test_windows_refused_before_candidate_read_or_terminal_output(self):
+        from training.review_candidates import review_candidates, ReviewAborted
+
+        terminal = PrivateTerminal(["admit"] * 3)
+        with (patch("training.review_candidates.sys.platform", "win32"),
+              patch("training.review_candidates._private_path",
+                    side_effect=AssertionError("should not inspect private candidate"))):
+            with self.assertRaises(ReviewAborted):
+                review_candidates(self.candidate_path, self.output_path, terminal)
+        self.assertEqual(terminal.output.getvalue(), "")
+        self.assertFalse(self.output_path.exists())
+
+    @requires_native_linux
     def test_candidate_leaf_mount_must_be_independently_qualified(self):
         from aeonith.private_output import PrivateOutputError
         from training.review_candidates import review_candidates, ReviewAborted
@@ -147,7 +165,7 @@ class OwnerReviewCLITests(unittest.TestCase):
                                                    self.digest, "APPROVE_PRIVATE_LOCAL_TRAINING"]))
         self.assertFalse(self.output_path.exists())
 
-    @unittest.skipUnless(sys.platform == "linux", "FIFO race is a Linux open() contract")
+    @requires_native_linux
     def test_candidate_swap_to_fifo_fails_without_blocking(self):
         # The lexical candidate-path check sees a regular file. An attacker
         # then substitutes a FIFO just before openat(). O_NOFOLLOW alone does
@@ -180,6 +198,7 @@ sys.exit(1)
         self.assertEqual(proc.returncode, 0, proc.stderr[:500])
         self.assertFalse(self.output_path.exists())
 
+    @requires_native_linux
     def test_mutating_candidate_during_interactive_review_refuses_approval(self):
         from training.review_candidates import review_candidates, ReviewAborted
 
@@ -197,6 +216,7 @@ sys.exit(1)
             review_candidates(self.candidate_path, self.output_path, terminal)
         self.assertFalse(self.output_path.exists())
 
+    @requires_native_linux
     def test_rejected_record_is_explicit_denial_with_reason_and_no_text_in_approval(self):
         from training.review_candidates import review_candidates
 
@@ -215,6 +235,7 @@ sys.exit(1)
         self.assertEqual(approval["records"][0]["reason_code"], "quality")
         self.assertNotIn("At hour 1, Nira", text)
 
+    @requires_native_linux
     def test_review_displays_untrusted_text_without_terminal_controls_or_bidi_spoofing(self):
         from training.review_candidates import review_candidates
 
