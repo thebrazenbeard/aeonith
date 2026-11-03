@@ -387,10 +387,11 @@ function extractDocxInWorker(buffer) {
     const timer = setTimeout(() => complete(new Error("DOCX parsing timed out; your writing was not changed.")), DOCX_PARSE_TIMEOUT_MS);
     worker.onmessage = (event) => {
       const message = event.data;
-      if (!message || message.ok !== true || typeof message.xml !== "string") {
+      if (!message || message.ok !== true || typeof message.xml !== "string" ||
+          (message.stylesXml != null && typeof message.stylesXml !== "string")) {
         complete(new Error(message && typeof message.error === "string" ? message.error : "The DOCX parser rejected this document."));
       } else {
-        complete(null, message.xml);
+        complete(null, { xml: message.xml, stylesXml: message.stylesXml || null });
       }
     };
     worker.onerror = () => complete(new Error("The local DOCX parser failed. Your writing was not changed."));
@@ -401,7 +402,7 @@ function extractDocxInWorker(buffer) {
   });
 }
 
-function extractDocxText(xml) {
+function extractDocxText(xml, stylesXml = null) {
   // DOMParser is a Window API, not available in Web Workers. Only the
   // worker's strictly bounded document XML enters this detached XML DOM.
   // Never render, insert, or evaluate nodes from an imported document.
@@ -417,6 +418,42 @@ function extractDocxText(xml) {
   // no-absolute-URL invariant for the browser script.
   const wordNamespace = "http:" + "//schemas.openxmlformats.org/wordprocessingml/2006/main";
   const compatibilityNamespace = "http:" + "//schemas.openxmlformats.org/markup-compatibility/2006";
+  // The body alone cannot establish whether an *unstyled* run is actually
+  // visible: Word may inherit w:vanish/webHidden from document defaults or
+  // its default paragraph/character style. The worker also verifies the
+  // optional styles part's ZIP headers, byte limits, and CRC before returning
+  // it. Conservatively reject any stylesheet containing hidden-run markers,
+  // including markers on unused styles, rather than attempting Word's full
+  // style cascade in this dependency-free excerpt reader.
+  if (stylesXml !== null) {
+    if (typeof stylesXml !== "string" || stylesXml.length > 2 * 1024 * 1024 ||
+        /<!DOCTYPE|<!ENTITY/i.test(stylesXml)) {
+      throw new Error("The browser cannot safely parse this Word document's styles.");
+    }
+    const styleDocument = new DOMParser().parseFromString(stylesXml, "application/xml");
+    if (styleDocument.getElementsByTagName("parsererror").length !== 0 ||
+        !styleDocument.documentElement ||
+        styleDocument.documentElement.namespaceURI !== wordNamespace ||
+        styleDocument.documentElement.localName !== "styles") {
+      throw new Error("The Word document contains an unreadable stylesheet.");
+    }
+    const styleWalker = styleDocument.createTreeWalker(styleDocument.documentElement, NodeFilter.SHOW_ELEMENT);
+    let styleElement;
+    let styleCount = 0;
+    while ((styleElement = styleWalker.nextNode())) {
+      if (++styleCount > 50000) {
+        throw new Error("The Word document contains too many stylesheet elements.");
+      }
+      if (styleElement.namespaceURI === compatibilityNamespace &&
+          styleElement.localName === "AlternateContent") {
+        throw new Error("The Word document contains unresolved style compatibility markup.");
+      }
+      if (styleElement.namespaceURI === wordNamespace &&
+          ["vanish", "webHidden", "specVanish"].includes(styleElement.localName)) {
+        throw new Error("The Word document contains a potentially hidden style. Export reviewed visible text first.");
+      }
+    }
+  }
   const root = documentXml.documentElement;
   if (!root || root.namespaceURI !== wordNamespace || root.localName !== "document") {
     throw new Error("The Word document XML has an unexpected root element.");
@@ -437,7 +474,7 @@ function extractDocxText(xml) {
     "del", "delText", "ins", "moveFrom", "moveTo", "moveFromRangeStart",
     "moveFromRangeEnd", "moveToRangeStart", "moveToRangeEnd",
     "customXmlDelRangeStart", "customXmlInsRangeStart", "customXmlMoveFromRangeStart",
-    "customXmlMoveToRangeStart", "vanish", "webHidden",
+    "customXmlMoveToRangeStart", "vanish", "webHidden", "specVanish",
     // No named-style visibility resolver is available in this browser path.
     "rStyle", "pStyle"
   ]);
@@ -552,7 +589,8 @@ fileInput.addEventListener("change", async () => {
     // isolated worker with ZIP metadata/CRC verification, streaming byte caps,
     // and timeout; only bounded XML is parsed into a detached DOM.
     const bytes = await file.arrayBuffer();
-    const text = isDocx ? extractDocxText(await extractDocxInWorker(bytes)) :
+    const text = isDocx ? await extractDocxInWorker(bytes).then((parts) =>
+      extractDocxText(parts.xml, parts.stylesXml)) :
       new TextDecoder("utf-8", { fatal: true }).decode(bytes);
     if (!text.trim() || text.includes("\u0000")) {
       importStatusNode.textContent = "The selected file does not contain usable plain text.";

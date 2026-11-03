@@ -69,6 +69,18 @@ def _open_parent_fd(path: Path) -> int:
                             raise PrivateOutputError("private output cannot be inside a Git checkout")
                     finally:
                         os.close(marker_fd)
+            # Bare Git repositories have no .git child, but are just as unsafe.
+            try:
+                bare_head = os.stat("HEAD", dir_fd=fd, follow_symlinks=False)
+                bare_refs = os.stat("refs", dir_fd=fd, follow_symlinks=False)
+                bare_objects = os.stat("objects", dir_fd=fd, follow_symlinks=False)
+            except FileNotFoundError:
+                pass
+            else:
+                if (stat.S_ISREG(bare_head.st_mode)
+                        and stat.S_ISDIR(bare_refs.st_mode)
+                        and stat.S_ISDIR(bare_objects.st_mode)):
+                    raise PrivateOutputError("private output cannot be inside a bare Git repository")
         return fd
     except BaseException:
         os.close(fd)
@@ -130,6 +142,43 @@ class PrivateOutputDirectory:
         if not isinstance(content, str):
             raise PrivateOutputError("private output text must be a string")
         self.write_bytes(name, content.encode("utf-8"))
+
+
+def reserve_private_file(value: str | os.PathLike[str]) -> int:
+    """Reserve an exclusive, descriptor-pinned private file before inference.
+
+    The caller owns the returned descriptor and must close it. Windows fails
+    closed until its anti-reparse and owner-DACL boundary is qualified.
+    """
+    if _is_windows():
+        raise PrivateOutputError("Windows private output ACL boundary is not yet qualified")
+    if not all(hasattr(os, attr) for attr in ("O_DIRECTORY", "O_NOFOLLOW", "geteuid")):
+        raise PrivateOutputError("required POSIX handle-based protections are unavailable")
+    text = os.fspath(value)
+    if (not isinstance(text, str) or not text or "\x00" in text or "://" in text
+            or text.startswith(("\\", "//")) or ".." in Path(text).parts):
+        raise PrivateOutputError("private output file path is invalid")
+    destination = Path(os.path.abspath(os.path.expanduser(text)))
+    if destination.name in {"", ".", "..", ".git"}:
+        raise PrivateOutputError("private output filename is invalid")
+
+    parent_fd = _open_parent_fd(destination.parent)
+    try:
+        fd = os.open(
+            destination.name, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW,
+            0o600, dir_fd=parent_fd,
+        )
+        try:
+            attrs = os.fstat(fd)
+            if (not stat.S_ISREG(attrs.st_mode) or attrs.st_uid != os.geteuid()
+                    or attrs.st_mode & 0o077):
+                raise PrivateOutputError("private file access controls are not verified")
+            return fd
+        except BaseException:
+            os.close(fd)
+            raise
+    finally:
+        os.close(parent_fd)
 
 
 def create_private_directory(value: str | os.PathLike[str]) -> PrivateOutputDirectory:

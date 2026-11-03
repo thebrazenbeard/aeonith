@@ -227,6 +227,64 @@ class LiteraryGateTests(unittest.TestCase):
         self.assertEqual([row["pair"]["pair_id"] for row in displays["pairs"]],
                          [row["key"]["pair_id"] for row in keys["keys"]])
 
+    def test_self_identifying_prose_is_quarantined_without_erasing_attempts(self):
+        class IdentifyingProvider(FakeProvider):
+            def review(self, payload):
+                reply = super().review(payload)
+                reply["lens_reviews"][0]["analysis"] += (
+                    " This is a judgment by candidate-A, the tested model."
+                )
+                return reply
+
+        a, _ = self.journal("candidate-A", provider=IdentifyingProvider())
+        b, _ = self.journal("candidate-B")
+        displays, keys, accounting = make_packets(
+            self.plan, str(a), str(b), seed="sealed-identity-test")
+        self.assertEqual(accounting["blinded_pairs_eligible"], 6)
+        self.assertEqual(accounting["blinded_pairs_identity_quarantined"], 6)
+        self.assertEqual(accounting["blinded_pairs_displayed"], 0)
+        self.assertEqual(displays["pairs"], [])
+        self.assertEqual(keys["keys"], [])
+        self.assertEqual(accounting["candidates"]["candidate-A"]["structural_pass"], 6)
+        self.assertEqual(accounting["semantic_quality"], "UNASSESSED")
+
+    def test_declared_model_id_in_nonanalysis_prose_is_quarantined(self):
+        class LeakingSynthesis(FakeProvider):
+            def review(self, payload):
+                reply = super().review(payload)
+                reply["synthesis"] += " Model provenance: granite-critic-v2."
+                return reply
+
+        a, _ = self.journal("candidate-A", provider=LeakingSynthesis(),
+                            model="granite-critic-v2")
+        b, _ = self.journal("candidate-B", model="nonleaking-runner")
+        displays, keys, accounting = make_packets(
+            self.plan, str(a), str(b), seed="sealed-model-test")
+        self.assertEqual(accounting["blinded_pairs_identity_quarantined"], 6)
+        self.assertEqual(accounting["blinded_pairs_displayed"], 0)
+        self.assertFalse(displays["pairs"])
+        self.assertFalse(keys["keys"])
+
+    def test_only_contaminated_pair_is_quarantined_and_counted(self):
+        class OneLeak(FakeProvider):
+            def review(self, payload):
+                reply = super().review(payload)
+                if self.calls == 1:
+                    reply["uncertainties"] = ["I am the candidate-B model."]
+                return reply
+
+        a, _ = self.journal("candidate-A")
+        b, _ = self.journal("candidate-B", provider=OneLeak())
+        displays, keys, accounting = make_packets(
+            self.plan, str(a), str(b), seed="sealed-single-leak")
+        self.assertEqual(accounting["blinded_pairs_eligible"], 6)
+        self.assertEqual(accounting["blinded_pairs_identity_quarantined"], 1)
+        self.assertEqual(accounting["blinded_pairs_displayed"], 5)
+        self.assertEqual(len(displays["pairs"]), 5)
+        self.assertEqual(len(keys["keys"]), 5)
+        self.assertEqual((displays["pairs"][0]["case_id"], displays["pairs"][0]["repeat"]),
+                         ("R01-N", 2))
+
     def test_source_anchor_pass_does_not_verify_quotes_in_free_form_analysis(self):
         class InventedProseQuote(FakeProvider):
             def review(self, payload):

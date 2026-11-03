@@ -21,6 +21,7 @@ from typing import Any
 from .core import CANONICAL_LENSES, critique
 from .formatting import EXIT_CODES, render_review_markdown
 from .providers import LocalOpenAICompatibleProvider
+from .private_output import PrivateOutputError, reserve_private_file
 from .text_input import MAX_OUTPUT_BYTES, TextInputError, _read_text, make_request
 
 
@@ -93,16 +94,15 @@ def main(argv: list[str] | None = None) -> int:
               file=sys.stderr)
         return 2
 
-    # Reserve a unique owner-readable output BEFORE invoking the local model.
-    # Existing files are never overwritten, and model calls are never made
-    # when the output path is already occupied.
+    # Descriptor-pin a private, non-Git output BEFORE calling a local model.
+    # Invalid destinations must never trigger model calls.
     reserved_fd: int | None = None
     try:
         if args.output != "-":
             try:
-                reserved_fd = os.open(args.output, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
-            except OSError:
-                print("Could not reserve a new output file; existing files are never overwritten",
+                reserved_fd = reserve_private_file(args.output)
+            except (OSError, PrivateOutputError):
+                print("Could not reserve a private output file outside Git; existing files are never overwritten",
                       file=sys.stderr)
                 return 2
         result = critique(request, provider)

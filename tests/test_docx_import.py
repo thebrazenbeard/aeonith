@@ -71,7 +71,7 @@ const fs = require('node:fs');
 const vm = require('node:vm');
 const scenario = process.argv[1];
 const script = fs.readFileSync('./public/app.js', 'utf8');
-const begin = script.indexOf('function extractDocxText(xml) {');
+const begin = script.indexOf('function extractDocxText(xml, stylesXml = null) {');
 const end = script.indexOf('\nfileInput.addEventListener("change"', begin);
 if (begin < 0 || end < 0) throw new Error('DOCX extractor not found');
 const WORD_NS = 'http://schemas.openxmlformats.org/wordprocessingml/2006/main';
@@ -87,6 +87,8 @@ const textNode = value => ({ nodeType: 3, nodeValue: value });
 const elements = [];
 const pushText = value => elements.push(node('t', [textNode(value)]));
 let rawXml = '<w:document/>';
+let rawStyles = null;
+const styleElements = [];
 if (scenario === 'normal') {
   elements.push(node('p'));
   pushText('A <script>literal</script>');
@@ -146,6 +148,21 @@ if (scenario === 'normal') {
   elements.push(node('pPr'));
   elements.push(node('pStyle'));
   pushText('Potentially hidden by a paragraph style');
+} else if (scenario === 'default_style_hidden') {
+  elements.push(node('p'));
+  pushText('Hidden through a default Word style');
+  rawStyles = '<w:styles><w:style w:default="1"><w:rPr><w:vanish/></w:rPr></w:style></w:styles>';
+  styleElements.push(node('style'), node('rPr'), node('vanish'));
+} else if (scenario === 'unused_style_hidden') {
+  elements.push(node('p'));
+  pushText('Unstyled passage with unsafe style definitions');
+  rawStyles = '<w:styles><w:style><w:rPr><w:webHidden/></w:rPr></w:style></w:styles>';
+  styleElements.push(node('style'), node('rPr'), node('webHidden'));
+} else if (scenario === 'ordinary_styles') {
+  elements.push(node('p'));
+  pushText('Ordinary visible passage');
+  rawStyles = '<w:styles><w:style><w:semiHidden/></w:style></w:styles>';
+  styleElements.push(node('style'), node('semiHidden'));
 } else if (scenario === 'mc_alternate') {
   const alternate = node('AlternateContent', [], MC_NS);
   const choice = node('Choice', [], MC_NS);
@@ -186,13 +203,22 @@ const parsed = {
     return { nextNode: () => elements[index++] || null };
   }
 };
+const stylesRoot = node('styles');
+const stylesDocument = {
+  documentElement: stylesRoot,
+  getElementsByTagName: () => [],
+  createTreeWalker: () => {
+    let index = 0;
+    return { nextNode: () => styleElements[index++] || null };
+  }
+};
 const sandbox = {
-  DOMParser: class { parseFromString() { return parsed; } },
+  DOMParser: class { parseFromString(input) { return input === rawStyles && rawStyles !== null ? stylesDocument : parsed; } },
   NodeFilter: { SHOW_ELEMENT: 1 }
 };
 try {
   const text = vm.runInNewContext('const MAX_MANUSCRIPT_CHARS = 12000;\n' +
-    script.slice(begin, end) + '\nextractDocxText(' + JSON.stringify(rawXml) + ');', sandbox);
+    script.slice(begin, end) + '\nextractDocxText(' + JSON.stringify(rawXml) + ',' + JSON.stringify(rawStyles) + ');', sandbox);
   process.stdout.write(JSON.stringify({ ok: true, text }));
 } catch (error) {
   process.stdout.write(JSON.stringify({ ok: false, error: error.message }));
@@ -271,6 +297,33 @@ class BrowserDocxWorkerTests(unittest.TestCase):
         root = ElementTree.fromstring(result["xml"])
         runs = root.findall(".//{http://schemas.openxmlformats.org/wordprocessingml/2006/main}t")
         self.assertEqual([run.text for run in runs], ["A lantern, a threshold, and a choice."])
+
+    def test_worker_extracts_styles_xml_for_visibility_checks(self):
+        styles = ('<w:styles xmlns:w="http://schemas.openxmlformats.org/'
+                  'wordprocessingml/2006/main"><w:docDefaults/></w:styles>')
+        result = self._run(make_docx("Ordinary prose.", extra_parts={"word/styles.xml": styles}))
+        self.assertTrue(result["ok"], result)
+        self.assertEqual(result.get("stylesXml"), styles)
+
+    def test_worker_rejects_oversized_or_unverified_styles_xml(self):
+        # Use moderately compressible bytes so ZIP ratio checks admit the
+        # entry and the dedicated styles-byte cap is exercised directly.
+        oversized_styles = "".join(f"{i:06d}" for i in range(350000))
+        too_large = self._inspect_directory(make_docx(
+            "Ordinary prose.", extra_parts={"word/styles.xml": oversized_styles}))
+        self.assertFalse(too_large["ok"], too_large)
+        self.assertIn("styles XML exceeds safe limits", too_large["error"])
+
+        corrupted = bytearray(make_docx(
+            "Ordinary prose.", extra_parts={"word/styles.xml": "<w:styles/>"}))
+        # The final ZIP directory entry belongs to styles.xml. Corrupt its
+        # central CRC while leaving the document's CRC valid.
+        central = corrupted.rfind(b"PK\x01\x02")
+        self.assertGreater(central, 0)
+        struct.pack_into("<I", corrupted, central + 16, 0)
+        result = self._run(bytes(corrupted))
+        self.assertFalse(result["ok"], result)
+        self.assertIn("ZIP integrity check", result["error"])
 
     def test_real_docx_revision_and_hidden_markup_survives_bounded_worker(self):
         # Real ZIP/XML fixtures establish that the worker does not suppress
@@ -400,6 +453,16 @@ class BrowserDocxWorkerTests(unittest.TestCase):
                 result = self._run_browser_xml(scenario)
                 self.assertFalse(result['ok'], result)
                 self.assertIn('tracked changes or hidden text', result['error'])
+
+    def test_window_extractor_checks_stylesheet_for_hidden_content(self):
+        for scenario in ('default_style_hidden', 'unused_style_hidden'):
+            with self.subTest(scenario=scenario):
+                result = self._run_browser_xml(scenario)
+                self.assertFalse(result['ok'], result)
+                self.assertIn('hidden style', result['error'])
+        ordinary = self._run_browser_xml('ordinary_styles')
+        self.assertTrue(ordinary['ok'], ordinary)
+        self.assertEqual(ordinary['text'], 'Ordinary visible passage')
 
     def test_window_xml_extractor_rejects_oversize_and_complex_documents(self):
         for scenario, expected in (

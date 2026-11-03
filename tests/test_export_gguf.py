@@ -4,7 +4,9 @@ from __future__ import annotations
 
 import hashlib
 import json
+import os
 from pathlib import Path
+import stat
 import subprocess
 import sys
 import tempfile
@@ -77,6 +79,7 @@ class GGUFHandoffTests(unittest.TestCase):
         self.assertNotIn(str(self.root), json.dumps(report))
         self.assertFalse(self.out.exists())
 
+    @unittest.skipIf(os.name == "nt", "Windows private GGUF recipe writer not qualified")
     def test_private_plan_contains_explicit_offline_unexecuted_argv(self):
         report = prepare_handoff(self.base, self.adapter, self.receipt, self.expected,
                                  self.script, self.script_hash, self.out)
@@ -91,6 +94,40 @@ class GGUFHandoffTests(unittest.TestCase):
         self.assertTrue(plan["conversion_operator_approval_required"])
         self.assertFalse(any(self.out.glob("*.gguf")))
         self.assertNotIn(str(self.root), json.dumps(report))
+        if os.name != "nt":
+            self.assertEqual(stat.S_IMODE(self.out.stat().st_mode), 0o700)
+            self.assertEqual(stat.S_IMODE((self.out / "handoff_plan.json").stat().st_mode), 0o600)
+
+    def test_unrelated_checkout_refuses_private_plan(self):
+        checkout = self.root / "unrelated"
+        (checkout / ".git").mkdir(parents=True)
+        (checkout / ".git" / "HEAD").write_text("ref: refs/heads/main\n", encoding="utf-8")
+        output = checkout / "private-plan"
+        with self.assertRaisesRegex(HandoffError, "Git checkouts"):
+            prepare_handoff(self.base, self.adapter, self.receipt, self.expected,
+                            self.script, self.script_hash, output)
+        self.assertFalse(output.exists())
+
+    def test_linked_worktree_refuses_private_plan(self):
+        checkout = self.root / "linked-worktree"
+        checkout.mkdir()
+        (checkout / ".git").write_text("gitdir: /git/worktrees/elsewhere\n", encoding="utf-8")
+        output = checkout / "private-plan"
+        with self.assertRaisesRegex(HandoffError, "Git checkouts"):
+            prepare_handoff(self.base, self.adapter, self.receipt, self.expected,
+                            self.script, self.script_hash, output)
+        self.assertFalse(output.exists())
+
+    def test_bare_checkout_refuses_private_plan(self):
+        bare = self.root / "bare.git"
+        (bare / "objects").mkdir(parents=True)
+        (bare / "refs").mkdir()
+        (bare / "HEAD").write_text("ref: refs/heads/main\n", encoding="utf-8")
+        output = bare / "private-plan"
+        with self.assertRaisesRegex(HandoffError, "Git checkouts"):
+            prepare_handoff(self.base, self.adapter, self.receipt, self.expected,
+                            self.script, self.script_hash, output)
+        self.assertFalse(output.exists())
 
     def test_output_refuses_overwrite(self):
         self.out.mkdir()
@@ -101,14 +138,15 @@ class GGUFHandoffTests(unittest.TestCase):
                             self.script, self.script_hash, self.out)
         self.assertEqual(marker.read_text(encoding="utf-8"), "don't overwrite")
 
-    def test_windows_legacy_python_refuses_private_plan_before_creation(self):
+    def test_windows_refuses_private_plan_until_handle_acl_qualified(self):
         with patch("training.export_gguf.sys.platform", "win32"):
             with patch("training.export_gguf.sys.version_info", (3, 12, 9)):
-                with self.assertRaisesRegex(HandoffError, "Python 3.13\\+"):
+                with self.assertRaisesRegex(HandoffError, "not yet qualified"):
                     prepare_handoff(self.base, self.adapter, self.receipt, self.expected,
                                     self.script, self.script_hash, self.out)
             with patch("training.export_gguf.sys.version_info", (3, 13, 0)):
-                _require_private_directory_permissions()
+                with self.assertRaisesRegex(HandoffError, "not yet qualified"):
+                    _require_private_directory_permissions()
         self.assertFalse(self.out.exists())
 
     def test_bad_converter_digest_rejected(self):
@@ -168,6 +206,7 @@ class GGUFHandoffTests(unittest.TestCase):
         self.assertFalse(self.out.exists())
         self.assertNotIn(str(self.root), proc.stdout)
 
+    @unittest.skipIf(os.name == "nt", "Windows private GGUF recipe writer not qualified")
     def test_cli_prepare_is_explicit_and_never_runs_converter(self):
         invocation = [
             sys.executable, "-m", "training.export_gguf", "--base", str(self.base),

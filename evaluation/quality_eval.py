@@ -13,6 +13,7 @@ import json
 import math
 import os
 import re
+import stat
 import sys
 from collections import Counter
 from copy import deepcopy
@@ -30,6 +31,7 @@ from aeonith.semantic_controls import (
     MAX_EXCERPT_CHARACTERS as SEMANTIC_TRIAGE_EXCERPT_LIMIT,
     audit_semantic_risks,
 )
+from aeonith.private_output import _open_parent_fd, MAX_PRIVATE_FILE_BYTES
 
 
 REVIEW_SCHEMA = "aeonith.review.v1"
@@ -604,11 +606,64 @@ def _read_json(path: str) -> dict[str, Any]:
 
 
 def _write_json_exclusive(path: str, obj: dict[str, Any]) -> None:
-    # Never replace existing data. Private 0600 even under a permissive umask.
-    fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
-    with os.fdopen(fd, "w", encoding="utf-8") as handle:
-        json.dump(obj, handle, ensure_ascii=False, sort_keys=True, indent=2, allow_nan=False)
-        handle.write("\n")
+    """Write a private JSON artifact using the existing pinned POSIX boundary.
+
+    Windows intentionally fails closed: POSIX 0600 is not an NTFS DACL, and no
+    equivalent qualified Windows anti-reparse writer is available yet.
+    """
+    if os.name == "nt":
+        raise ValueError("Windows private output ACL boundary is not yet qualified")
+    data = (json.dumps(obj, ensure_ascii=False, sort_keys=True, indent=2,
+                       allow_nan=False) + "\n").encode("utf-8")
+    if len(data) > MAX_PRIVATE_FILE_BYTES:
+        raise ValueError("private evaluation output exceeds maximum size")
+    target, parent_fd = _private_output_parent(path)
+    try:
+        fd = os.open(target.name, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW,
+                     0o600, dir_fd=parent_fd)
+        try:
+            attrs = os.fstat(fd)
+            if (not stat.S_ISREG(attrs.st_mode) or attrs.st_uid != os.geteuid()
+                    or attrs.st_mode & 0o077):
+                raise ValueError("private evaluation output permissions are not verified")
+            view = memoryview(data)
+            while view:
+                n = os.write(fd, view)
+                if n <= 0:
+                    raise OSError("private output write did not progress")
+                view = view[n:]
+            os.fsync(fd)
+        finally:
+            os.close(fd)
+        os.fsync(parent_fd)
+    finally:
+        os.close(parent_fd)
+
+
+def _private_output_parent(path: str) -> tuple[Path, int]:
+    """Validate output ancestry without following symlinks or Git checkouts."""
+    if os.name == "nt":
+        raise ValueError("Windows private output ACL boundary is not yet qualified")
+    if not isinstance(path, str) or not path or "\x00" in path:
+        raise ValueError("private evaluation output path is invalid")
+    target = Path(os.path.abspath(os.path.expanduser(path)))
+    if target.name in {"", ".", "..", ".git"}:
+        raise ValueError("private evaluation filename is invalid")
+    parent_fd = _open_parent_fd(target.parent)
+    return target, parent_fd
+
+
+def _preflight_private_output(path: str) -> None:
+    """Detect deterministic unsafe pairs before creating either blind file."""
+    target, parent_fd = _private_output_parent(path)
+    try:
+        try:
+            os.stat(target.name, dir_fd=parent_fd, follow_symlinks=False)
+        except FileNotFoundError:
+            return
+        raise FileExistsError(f"output already exists: {path}")
+    finally:
+        os.close(parent_fd)
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -666,19 +721,15 @@ def main(argv: list[str] | None = None) -> int:
             display, key = build_blind_pair(
                 _read_json(args.request), _read_json(args.first),
                 _read_json(args.second), args.first_id, args.second_id, seed=args.seed)
-            # Avoid creating only a display or key when the other target exists.
+            # Avoid creating either artifact when the other location is unsafe.
             for target in (args.display_out, args.key_out):
-                if Path(target).exists():
-                    raise FileExistsError(f"output already exists: {target}")
-            created_display = False
-            try:
-                _write_json_exclusive(args.display_out, display)
-                created_display = True
-                _write_json_exclusive(args.key_out, key)
-            except Exception:
-                if created_display:
-                    Path(args.display_out).unlink(missing_ok=True)
-                raise
+                _preflight_private_output(target)
+            # Write key first: a post-preflight race may still cause display
+            # failure, but never exposes the assignment without protection.
+            # Leave any safe exclusive partial result rather than unlinking a
+            # path that could have been replaced by a concurrent process.
+            _write_json_exclusive(args.key_out, key)
+            _write_json_exclusive(args.display_out, display)
             print(json.dumps({"pair_id": display["pair_id"],
                               "display_written": args.display_out,
                               "key_written": args.key_out}, sort_keys=True))

@@ -83,6 +83,19 @@ order-swapped comparisons against a controlled baseline. The existing
 `evaluation/quality_eval.py` human-study workflow supports that later stage.
 Do not include the pilot's public sample texts in a supposedly unseen holdout.
 
+### Observed local run (not a literary-quality pass)
+
+The sanitized [2026-11-02 local Ollama receipt](../evaluation/receipts/2026-11-02-ollama-qwen3-structural.json)
+records two separate Windows CPU-hosted inferences on an already-installed
+`qwen3:1.7b` quantized base, packaged locally as `aeonith-critic:0.1` without
+changing its weights. The two distinct, public-fixture `symbolic`-lens
+attempts each completed with a source quotation and a passing structural audit
+in 81.502 and 78.602 seconds respectively. This is a
+**runtime observation**, not a signed weight attestation, repeated reliability
+trial, held-out benchmark, model-fine-tuning result, or human judgment of the
+critique. The base variant's licensing provenance was not independently
+established; neither its weights nor model output are published here.
+
 ## Tests
 
 ```bash

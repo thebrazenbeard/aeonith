@@ -32,6 +32,15 @@ critique can still be banal, culturally insensitive, or fundamentally wrong.
 
 From the repository root, with your own original or permissioned JSON input:
 
+Before any command that writes an output file, prepare an owner-controlled
+private directory **outside every Git checkout or worktree**, on a POSIX host
+with descriptor-relative no-symlink support. For example, create
+`../aeonith-private` using restrictive owner-only permissions and use that
+directory for every `--out`, `--display-out`, and `--key-out` below. The writer
+rejects Git checkout ancestry, unsafe writable ancestors, symlinks, existing
+filenames and Windows private writes until the native ACL/reparse contract is
+qualified. A nominal `0600` file mode is not an NTFS security guarantee.
+
 ```bash
 python -m unittest discover -s tests -p 'test_quality_eval.py' -v
 python evaluation/quality_eval.py audit \
@@ -39,20 +48,21 @@ python evaluation/quality_eval.py audit \
 python evaluation/quality_eval.py blind \
   --request request.json --first model_a.json --second model_b.json \
   --first-id candidate-v1 --second-id candidate-v2 \
-  --display-out blinded_pair.json --key-out private_assignment.json \
+  --display-out ../aeonith-private/blinded_pair.json \
+  --key-out ../aeonith-private/private_assignment.json \
   --seed experiment-001
 python evaluation/quality_eval.py validate-annotation \
-  --pair blinded_pair.json --annotation human_annotation.json
+  --pair ../aeonith-private/blinded_pair.json --annotation human_annotation.json
 python evaluation/quality_eval.py bind-annotation \
-  --pair blinded_pair.json --annotation human_annotation.json \
-  --out private_bound_annotation.json
+  --pair ../aeonith-private/blinded_pair.json --annotation human_annotation.json \
+  --out ../aeonith-private/private_bound_annotation.json
 python evaluation/quality_eval.py aggregate \
-  --study local_human_study.json --out private_study_summary.json
+  --study local_human_study.json --out ../aeonith-private/private_study_summary.json
 python evaluation/quality_eval.py manifest \
   --request request.json --review model_a.json \
   --provider-id provider-name --model-id model-version \
   --code-revision git-sha --prompt-revision prompt-v1 \
-  --parameters decoding_parameters.json --out run_manifest.json
+  --parameters decoding_parameters.json --out ../aeonith-private/run_manifest.json
 ```
 
 ### Precommitted literary challenge-run accounting (source-only; not yet run)
@@ -84,6 +94,8 @@ python -m evaluation.literary_gate account \
   --second ../aeonith-private/challenger.jsonl --out ../aeonith-private/attrition.json
 
 # Offline: only structurally valid paired responses become blind displays.
+# Obvious disclosures of candidate IDs or declared model names in generated
+# critique prose are quarantined, with counts retained in the denominator.
 # Keep the assignment key in a different access-controlled directory.
 python -m evaluation.literary_gate blind \
   --plan screen-plan.json --first ../aeonith-private/incumbent.jsonl \
@@ -122,10 +134,15 @@ until an operator investigates the journal's integrity. A damaged complete
 line or missing header fails closed. This recovery is conservative accounting,
 **not proof of untampered records or permission to use a damaged run for ratings**.
 The runner rejects journals, blind displays and identity keys inside **any
-discoverable Git checkout**, not merely this Aeonith repository.
-On Windows, file permissions inherit the parent directory's ACL: POSIX `0600`
-is not a Windows security guarantee. Create a restricted owner-controlled
-directory **outside the checkout**, preferably encrypted, before running.
+discoverable Git checkout**, not merely this Aeonith repository. The generic
+quality-evaluation commands now apply that policy to every output file,
+including identity-bearing displays, keys and annotation receipts. Their
+output writer uses descriptor-pinned POSIX parent validation and exclusive
+no-symlink file creation. On Windows, output writes fail closed: file
+permissions inherit the parent directory's ACL, and POSIX `0600` cannot
+validate a Windows private-output boundary. Create a restricted owner-controlled
+directory **outside the checkout**, preferably encrypted, before running on a
+qualified POSIX host.
 `.gitignore` cannot prevent deliberate copying of private results into Git.
 
 This harness can only attest the operator **said** the host had spare
@@ -138,6 +155,16 @@ qualification remain unassessed. Repeated identical model outputs get unique
 attempt-instance pair IDs for downstream annotations; repetitions remain
 correlated observations, not independent literary works.
 
+The literary gate's `blind` command now scans reviewer-facing critique prose
+for obvious candidate IDs and declared model names (at least six characters).
+Pairs containing those clues are **quarantined before output**, not silently
+edited; the original attempts remain in the completion denominator. The
+private `blind` accounting reports `blinded_pairs_eligible`,
+`blinded_pairs_identity_quarantined`, and `blinded_pairs_displayed` separately.
+This lexical screen is deliberately not a comprehensive anonymity proof:
+short IDs, nicknames, paraphrased self-identification and stylistic clues may
+still leak. Independently inspect every displayed critique before human rating.
+
 `audit` exits 1 on hard failures, while warnings are nonfatal by default.
 Use `audit --fail-on-warnings` to opt into a stricter policy gate (exit 3),
 recognizing its false-positive risk. `blind`
@@ -146,13 +173,18 @@ Both are created with owner-only permissions (0600) on POSIX; the destination
 directory must still be controlled and protected against other processes.
 Structurally invalid candidate reviews are rejected before blinding, and
 only validated literary fields are projected. Identity clues in free-form
-prose still need manual scrubbing. Existing files are never overwritten. Do not give the private assignment file
+prose still need manual inspection. Existing files are never overwritten. Do not give the private assignment file
 to annotators until all A/B judgments are locked. Use permissions or a separate
 access-controlled directory if running a shared study. The seed is a
 reproducibility control, not a secret or proof of randomness.
 `manifest` also creates a new file without overwriting. Its parameter JSON
 should contain only non-secret scalar settings such as `temperature` or
 `max_output_tokens`; never credentials, manuscript text, or raw prompts.
+Even though the manifest stores digests rather than manuscript prose, its
+caller-supplied model/provider labels can still include sensitive paths or
+metadata. For that reason the writer does not automatically classify the
+manifest as Git-safe. Publish a separately inspected and sanitized manifest
+only after authorizing its disclosure.
 `aggregate --out` likewise creates an owner-only (0600 on POSIX), exclusive
 summary file. Directing stdout with shell `>` may instead create a
 world-readable file under the shell's umask.

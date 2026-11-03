@@ -16,6 +16,10 @@ import re
 import sys
 from typing import Any
 
+from aeonith.private_output import PrivateOutputError, create_private_directory
+
+from .corpus import CorpusError
+from .train_lora import _output_path
 from .verify_adapter import VerificationError, inspect_adapter_receipt
 from .verify_base import BaseVerificationError, verify_checkpoint
 
@@ -30,16 +34,11 @@ MAX_CONVERTER_BYTES = 2 * 1024 * 1024
 
 
 def _require_private_directory_permissions() -> None:
-    """Refuse private recipe creation where the requested mode lacks an ACL.
-
-    CPython 3.13 first applies Windows access controls for mkdir(mode=0o700).
-    Windows 3.11/3.12 silently ignore that protection. Do not create a plan
-    containing private absolute paths under unverified inherited ACLs.
-    """
-    if sys.platform == "win32" and sys.version_info < (3, 13):
+    """Windows needs a qualified handle-pinned writer, not mkdir mode alone."""
+    if sys.platform == "win32" or os.name == "nt":
         raise HandoffError(
-            "private GGUF recipe creation requires Python 3.13+ on Windows "
-            "for owner-only directory access; inspection remains available"
+            "Windows private GGUF recipe ACL and handle-relative writes are not yet qualified; "
+            "read-only inspection remains available"
         )
 
 
@@ -138,6 +137,15 @@ def prepare_handoff(base: str | Path, adapter: str | Path, receipt: str | Path,
     if any(destination == item or item in destination.parents or destination in item.parents
            for item in paths.values()):
         raise HandoffError("output must not overlap a model artifact or evidence file")
+    # A private plan contains sensitive absolute checkpoint paths. Reject any
+    # unrelated checkout, linked worktree or bare Git repository before the
+    # descriptor-pinned POSIX writer performs its own parent walk.
+    try:
+        _output_path(str(destination))
+    except CorpusError as exc:
+        if "outside Git checkouts" in str(exc):
+            raise HandoffError("private GGUF plans must be outside Git checkouts") from exc
+        raise HandoffError("private GGUF output path is unsafe or unavailable") from exc
     _require_private_directory_permissions()
     # The adapter GGUF is intentionally NOT made here. The explicit --base
     # prevents llama.cpp converter's Hub fallback, but this command must still
@@ -157,19 +165,16 @@ def prepare_handoff(base: str | Path, adapter: str | Path, receipt: str | Path,
         "conversion_operator_approval_required": True,
         "runtime_loading_test_required": True,
     }
-    # Directory is exclusive; any partial output after a crash remains a
-    # visible, non-overwritable incomplete artifact for manual inspection.
+    # Exclusive, descriptor-pinned private directory/file writes on POSIX.
+    # A partial directory after a crash stays visible and non-overwritable.
+    payload = (json.dumps(recipe, indent=2, sort_keys=True) + "\n").encode("utf-8")
     try:
-        destination.mkdir(mode=0o700)
-    except FileExistsError as exc:
-        raise HandoffError("output directory already exists") from exc
-    plan = destination / "handoff_plan.json"
-    fd = os.open(plan, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
-    with os.fdopen(fd, "w", encoding="utf-8") as stream:
-        json.dump(recipe, stream, indent=2, sort_keys=True)
-        stream.write("\n")
+        with create_private_directory(str(destination)) as private:
+            private.write_bytes("handoff_plan.json", payload)
+    except (PrivateOutputError, OSError) as exc:
+        raise HandoffError("private GGUF recipe creation could not be safely established") from exc
     return {**result, "status": "private_recipe_prepared_not_executed",
-            "handoff_plan_sha256": _digest(plan)}
+            "handoff_plan_sha256": hashlib.sha256(payload).hexdigest()}
 
 
 def main(argv: list[str] | None = None) -> int:

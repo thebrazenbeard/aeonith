@@ -27,7 +27,7 @@ Aeonith has two separate capabilities:
 
 ### Browser manuscript import boundaries
 
-The browser-only file chooser accepts UTF-8 `.txt`/`.md`/`.markdown`/`.text` files up to 64 KiB and Word `.docx` files up to 2 MiB. DOCX extraction reads the `word/document.xml` entry with browser-native streaming ZIP decompression in an isolated, time-limited worker. It validates ZIP structure, checks declared and actual decompressed byte counts, and rejects unsupported archive features. It requires a browser with Web Workers, `DecompressionStream("deflate-raw")` and XML `DOMParser` support. Extracted text must be no longer than **12,000 characters**; an oversized file or passage is rejected rather than silently truncated. Formatting, embedded images, footnotes and comments are not preserved in plain-text extraction. This is **excerpt review, not whole-book analysis**. Legacy Word `.doc` and PDF files are not currently parsed; convert them locally to DOCX or UTF-8 text first. The original file is never transmitted to a separate conversion service or persisted by the browser interface.
+The browser-only file chooser accepts UTF-8 `.txt`/`.md`/`.markdown`/`.text` files up to 64 KiB and Word `.docx` files up to 2 MiB. DOCX extraction verifies and streams `word/document.xml` and optional `word/styles.xml` in an isolated, time-limited worker, with ZIP size and CRC limits on both XML parts. Browser-native XML parsing rejects documents containing hidden-text stylesheet declarations rather than importing potentially invisible prose; this conservatively rejects even unused hidden styles. It also rejects named styles, revisions, unsupported rich content, and incompatible markup. It requires a browser with Web Workers, `DecompressionStream("deflate-raw")` and XML `DOMParser` support. Extracted text must be no longer than **12,000 characters**; oversized text is rejected rather than silently truncated. Complete Word style inheritance, layout, embedded media, footnotes and comments are **not** rendered. This is **excerpt review, not whole-book analysis**. Legacy Word `.doc` and PDF files are not parsed; convert them locally to DOCX or UTF-8 text first. The original file is never sent to a separate conversion service or persisted by the browser interface.
 
 ## Run locally at no additional service cost
 
@@ -137,9 +137,13 @@ Or from a real manuscript into a new Markdown file (Aeonith will never overwrite
 python3 -m aeonith.workflow --input draft.md --title "Draft" \
   --provider local-openai-compatible \
   --url http://127.0.0.1:5001/v1/chat/completions \
-  --model local --output critique.md
+  --model local --output ~/aeonith-private-critique.md
 ```
 
+Keep private review output **outside all Git repositories**. The workflow CLI
+rejects checkout, linked-worktree, bare-repository and symlinked output paths;
+its private-file writer is currently POSIX-only until a Windows ACL boundary is
+qualified. On Windows use stdout or the protected browser service for now.
 Only run these model-backed commands when the local runner is actually available. The selected local adapter rejects remote endpoints and keeps network protections (including no HTTP redirects or inherited proxy forwarding). The legacy generic remote adapters are **not** an approved route to paid inference.
 
 For programmatic integration:

@@ -63,9 +63,15 @@ To produce a **private, not-yet-executed** command plan instead, supply
 `--prepare --output /private/new-handoff-dir`. The new output directory must
 not exist, and will hold only `handoff_plan.json`, with a locally scoped
 `conversion_argv_not_executed`, offline environment, and file hash references.
-On Windows, private plan creation requires **Python 3.13 or newer**, because
-earlier Python releases do not enforce the private access-control semantics of
-`mkdir(mode=0o700)`; read-only inspection still works on older versions.
+Private plans contain exact private model and adapter paths. On POSIX, the
+directory and plan are created exclusively through Aeonith's descriptor-pinned
+private-output writer (`0700` directory, `0600` file); symlinked ancestry and
+**all Git checkouts**, including unrelated repositories, linked worktrees and
+bare repositories, are rejected. An operator must still secure the output host
+against other processes running under the same user and avoid untrusted writable
+mounts. On Windows, **all private plan creation fails closed**, including Python
+3.13+, until an independently verified DACL and handle-relative anti-reparse
+writer is available. Read-only handoff inspection remains available on Windows.
 No `.gguf` is created by `--prepare`; **there is no conversion execution flag**.
 Review this plan and the exact converter revision before manually performing
 any real conversion outside this source-only tool. Do not put full model
