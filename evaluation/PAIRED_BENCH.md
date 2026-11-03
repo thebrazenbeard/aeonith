@@ -112,6 +112,12 @@ private if the membership of an evaluated work is sensitive.
   and `aggregate` interfaces to collect blinded human ratings and assess
   disagreement. The assignment keys should be revealed only *after* ratings
   have been locked, under custody appropriate for sensitive manuscripts.
+- A separate private human-facing CLI now collects and assembles those exact
+  rubrics **without printing any manuscript or critique to stdout**; see
+  [`PRIVATE_HUMAN_RATER_WORKFLOW.md`](PRIVATE_HUMAN_RATER_WORKFLOW.md). It still
+  requires genuine people, trusted local viewing, and suitable consent and
+  custody. The CLI is POSIX/WSL-only for private file effects until Windows
+  owner-DACL/reparse-point handling has been independently qualified.
 - No automatic model ranking or literary-quality claim is emitted. Real
   source and evaluation custody, verified model invocation, human literary
   adjudication, and analysis of variance across withheld works/seeds remain

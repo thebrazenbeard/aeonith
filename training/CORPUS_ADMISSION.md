@@ -146,15 +146,60 @@ and editor must be different from each other and from both. Every decision
 must be bound to the same exact fingerprint. The CLI accepts only explicit
 JSON boolean true, not placeholders, truthy strings or missing fields.
 
+### Sole original owner option
+
+If and only if **every** listed source is genuinely self-authored and wholly
+owned by one individual, that owner may use the separate opt-in manifest below
+instead of manufacturing independent reviewers or rights officers. The
+`sources` entries must already declare `rights_basis: self_authored` and
+`rights_claimant` exactly matching the real owner's identity (case-folded
+comparison). The original corpus audit must still pass, including explicit
+per-row editorial acceptance, no exclusions leaking across splits, and the
+exact source and JSONL hashes.
+
+```json
+{
+  "schema_version": "aeonith.corpus_audit_owner_approval.v1",
+  "corpus_fingerprint_sha256": "<exact fingerprint from inspect>",
+  "status": "APPROVED_SELF_AUTHORED_PRIVATE_TRAINING",
+  "permission_to_train": true,
+  "sole_owner_decision": {
+    "identity": "<actual sole author/current owner matching every source>",
+    "decision": "approve_sole_owner_original_private_training",
+    "attested_at_utc": "2026-11-03T01:00:00Z",
+    "corpus_fingerprint_sha256": "<same exact fingerprint>"
+  }
+}
+```
+
+This mode refuses licensed/public-domain/CC0/mixed-source declarations,
+claimants other than the signing owner, and **any** declared adapter-publication
+permission. Coauthored works, work-for-hire or subsequently assigned copyright
+must not be relabeled as solely owned to pass. The receipt explicitly records
+`approval_mode=sole_original_owner_self_authored`, no authenticated issuer,
+no independent editorial reviewer, no adapter release permission, and no
+trained model. All ownership and quality statements remain operator claims,
+not legal findings. Previously saved receipts must be regenerated if this
+newer source adds receipt fields, because `verify` compares the whole receipt.
+
 **This manifest contains caller-provided names and decisions, not verifiable
 signatures.** No code can establish that those people exist, made those
 decisions, possess the claimed copyright, or performed a valid editorial
-review. Those independent human and legal checks remain required. A machine
+review. Those independent human and legal checks remain required for the
+mixed-source path; sole original ownership uses an explicit self-attestation. A machine
 receipt never automatically authorizes a model release; publishing adapter
 weights requires a distinct decision.
 
 If a filesystem write fails, the receipt may be incomplete; it must be
 reviewed and never counted as successful admission. No overwrite is attempted.
+On verified native Linux filesystems the destination directory and file are
+opened relative to pinned directory descriptors, guarding against a symlink
+swap of an ancestor after path validation. The writer rejects WSL DrvFS/9p,
+NTFS and other unqualified mounts even when they emulate POSIX permission
+bits; this does **not** isolate files against malicious processes already
+running under the same operating-system identity. It does not establish
+equivalent protection for *input* paths. Windows native receipt writes remain
+disabled pending a qualified ACL/custody broker.
 
 The admit command does not change or copy the input datasets, install weights,
 create a training plan, run an optimizer or grant a host resource. After it

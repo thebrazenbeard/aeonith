@@ -1,8 +1,9 @@
 """Offline, fail-closed admission of *privately approved* critique proposals.
 
-Candidate drafting never grants rights. This converter requires a separate
-per-hash approval manifest from a rights-holder, independent data steward and
-editorial reviewer; their identities are operator claims, not authentication.
+Candidate drafting never grants rights. The original multi-party path requires
+separate rights, steward and editorial decisions. A distinct opt-in path for
+solely owner-authored originals accepts only the owner's explicit declaration;
+neither mode cryptographically authenticates the person or rights.
 It creates only private JSONL, never model weights, a training plan, or a
 publication approval.
 """
@@ -164,30 +165,52 @@ def _candidate_rows(candidate: dict) -> list[dict]:
     return rows
 
 
-def _validated_splits(candidate: dict, approval: dict, digest: str) -> dict[str, list[dict]]:
-    _exact(approval, {"schema_version", "candidate_sha256", "approval_status", "permission_to_train",
-                      "rights_holder_decision", "independent_data_steward_decision", "editorial_decision", "records"},
-           set(), "approval manifest")
-    if (approval["schema_version"] != "aeonith.candidate_admission.v1"
-            or approval["candidate_sha256"] != digest or not HEX64.fullmatch(digest)):
+def _validated_splits(candidate: dict, approval: dict, digest: str) -> tuple[dict[str, list[dict]], str]:
+    schema = approval.get("schema_version")
+    if schema == "aeonith.candidate_admission.v1":
+        _exact(approval, {"schema_version", "candidate_sha256", "approval_status", "permission_to_train",
+                          "rights_holder_decision", "independent_data_steward_decision", "editorial_decision", "records"},
+               set(), "approval manifest")
+        expected_status = "APPROVED_FOR_PRIVATE_LOCAL_TRAINING"
+        mode = "multi_party_private"
+    elif schema == "aeonith.candidate_owner_admission.v1":
+        _exact(approval, {"schema_version", "candidate_sha256", "approval_status", "permission_to_train",
+                          "sole_owner_decision", "records"}, set(), "sole original owner approval manifest")
+        expected_status = "APPROVED_SELF_AUTHORED_PRIVATE_LOCAL_TRAINING"
+        mode = "sole_original_owner_self_authored"
+    else:
+        raise AdmissionError("unsupported candidate approval schema")
+    if approval["candidate_sha256"] != digest or not HEX64.fullmatch(digest):
         raise AdmissionError("approval manifest SHA-256 does not match the candidate file")
-    if (approval["approval_status"] != "APPROVED_FOR_PRIVATE_LOCAL_TRAINING"
+    if (approval["approval_status"] != expected_status
             or approval["permission_to_train"] is not True):
         raise AdmissionError("approval manifest does not authorize private local training")
-    identities = [
-        _attestation(approval["rights_holder_decision"], "rights-holder", "approve_local_training", digest),
-        _attestation(approval["independent_data_steward_decision"], "independent steward", "approve_local_training", digest),
-        _attestation(approval["editorial_decision"], "editorial reviewer", "approve_editorial_targets", digest),
-    ]
-    if len(set(identities)) != len(identities):
-        raise AdmissionError("rights-holder, steward and editor identities must be distinct")
+    owner_identity: str | None = None
+    if mode == "multi_party_private":
+        identities = [
+            _attestation(approval["rights_holder_decision"], "rights-holder", "approve_local_training", digest),
+            _attestation(approval["independent_data_steward_decision"], "independent steward", "approve_local_training", digest),
+            _attestation(approval["editorial_decision"], "editorial reviewer", "approve_editorial_targets", digest),
+        ]
+        if len(set(identities)) != len(identities):
+            raise AdmissionError("rights-holder, steward and editor identities must be distinct")
+    else:
+        owner_identity = _attestation(
+            approval["sole_owner_decision"], "sole original owner",
+            "approve_sole_owner_original_private_training", digest,
+        )
     rows = _candidate_rows(candidate)
     decisions = approval["records"]
     if not isinstance(decisions, list) or len(decisions) != len(rows):
         raise AdmissionError("record-level decisions do not cover the candidate corpus")
     by_id: dict[str, dict] = {}
     for entry in decisions:
-        _exact(entry, RECORD_FIELDS, {"permission_to_publish_adapter", "license_id"}, "record-level approval")
+        if owner_identity is not None and isinstance(entry, dict) and "license_id" in entry:
+            raise AdmissionError("sole original owner path cannot include licensed records")
+        optionals = ({"permission_to_publish_adapter", "license_id"} if owner_identity is None
+                     else {"permission_to_publish_adapter", "rights_claimant"})
+        required = RECORD_FIELDS if owner_identity is None else RECORD_FIELDS | {"rights_claimant"}
+        _exact(entry, required, optionals - required, "record-level approval")
         identifier = entry["id"]
         if not isinstance(identifier, str) or identifier in by_id:
             raise AdmissionError("duplicate or invalid approval record")
@@ -195,6 +218,14 @@ def _validated_splits(candidate: dict, approval: dict, digest: str) -> dict[str,
             raise AdmissionError("every record requires training consent and editorial acceptance")
         if type(entry.get("permission_to_publish_adapter", False)) is not bool:
             raise AdmissionError("publication permission must be an explicit JSON boolean")
+        if owner_identity is not None:
+            if entry["rights_basis"] != "self_authored":
+                raise AdmissionError("sole original owner path requires self-authored rights for every record")
+            claimant = entry["rights_claimant"]
+            if not isinstance(claimant, str) or claimant.strip().casefold() != owner_identity:
+                raise AdmissionError("sole original owner must match every rights claimant")
+            if entry.get("permission_to_publish_adapter", False) is not False:
+                raise AdmissionError("sole original owner private approval never authorizes adapter publication")
         by_id[identifier] = entry
     if set(by_id) != {row["id"] for row in rows}:
         raise AdmissionError("record IDs differ between proposals and approvals")
@@ -228,7 +259,7 @@ def _validated_splits(candidate: dict, approval: dict, digest: str) -> dict[str,
         _check_isolation(output)
     except CorpusError as exc:
         raise AdmissionError(f"split isolation failed: {exc}") from exc
-    return output
+    return output, mode
 
 
 def admit(candidate_path: str | Path, approval_path: str | Path, output_path: str | Path) -> dict:
@@ -244,7 +275,7 @@ def admit(candidate_path: str | Path, approval_path: str | Path, output_path: st
         raise AdmissionError("output parent must already exist")
     candidate, candidate_sha256 = _read(candidate_file, "candidate")
     approval, approval_sha256 = _read(approval_file, "approval manifest")
-    splits = _validated_splits(candidate, approval, candidate_sha256)
+    splits, mode = _validated_splits(candidate, approval, candidate_sha256)
     lens_coverage = {
         split: sorted({row["lens"] for row in candidate["examples"] if row["split"] == split})
         for split in SPLITS
@@ -257,6 +288,7 @@ def admit(candidate_path: str | Path, approval_path: str | Path, output_path: st
     receipt = {
         "schema_version": "aeonith.candidate_admission_receipt.v1",
         "status": "admitted_private_only_not_trained",
+        "approval_mode": mode,
         "candidate_sha256": candidate_sha256,
         "approval_manifest_sha256": approval_sha256,
         "split_counts": {split: len(splits[split]) for split in SPLITS},
@@ -269,6 +301,7 @@ def admit(candidate_path: str | Path, approval_path: str | Path, output_path: st
         ),
         "attestation_verification": "operator_attested_not_cryptographically_verified",
         "attestation_issuer_identities_independently_authenticated": False,
+        "independent_editorial_review_claimed": mode == "multi_party_private",
         "editorial_semantic_quality_independently_verified_by_program": False,
         "blind_holdout_qualified": False,
         "model_trained": False,

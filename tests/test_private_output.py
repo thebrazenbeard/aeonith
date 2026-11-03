@@ -11,7 +11,7 @@ import unittest
 from unittest.mock import patch
 
 from aeonith.private_output import (
-    PrivateOutputError, create_private_directory, reserve_private_file,
+    PrivateOutputDirectory, PrivateOutputError, create_private_directory, reserve_private_file,
 )
 
 
@@ -128,6 +128,46 @@ class PrivateOutputDirectoryTests(unittest.TestCase):
             with self.assertRaisesRegex(PrivateOutputError, "Windows private output"):
                 create_private_directory(self.root / "run")
         self.assertFalse((self.root / "run").exists())
+
+    def test_linux_mount_fstype_is_bound_to_fd_mount_id(self):
+        from aeonith.private_output import _parse_linux_mount_type
+        fdinfo = "pos:\t0\nflags:\t0100000\nmnt_id:\t37\n"
+        mountinfo = ("12 1 0:1 / / rw - ext4 /dev/root rw\n"
+                     "37 12 0:2 / /mnt/d rw - 9p C:\\ rw\n")
+        self.assertEqual(_parse_linux_mount_type(fdinfo, mountinfo), "9p")
+        with self.assertRaisesRegex(PrivateOutputError, "mount identity"):
+            _parse_linux_mount_type("flags:\t00\n", mountinfo)
+        with self.assertRaisesRegex(PrivateOutputError, "mount identity"):
+            _parse_linux_mount_type("mnt_id:\t999\n", mountinfo)
+
+    def test_wsl_drvfs_and_remote_mounts_fail_before_file_creation(self):
+        for kind in ("9p", "drvfs", "cifs", "nfs4", "fuseblk", "ntfs3"):
+            with self.subTest(kind=kind), patch(
+                "aeonith.private_output._linux_mount_type_for_fd", return_value=kind
+            ):
+                with self.assertRaisesRegex(PrivateOutputError, "filesystem is not qualified"):
+                    create_private_directory(self.root / "run")
+                with self.assertRaisesRegex(PrivateOutputError, "filesystem is not qualified"):
+                    reserve_private_file(self.root / "private.json")
+            self.assertFalse((self.root / "run").exists())
+            self.assertFalse((self.root / "private.json").exists())
+
+    def test_native_ext4_mock_keeps_posix_private_output_enabled(self):
+        with patch("aeonith.private_output._linux_mount_type_for_fd", return_value="ext4"):
+            with create_private_directory(self.root / "native") as output:
+                output.write_bytes("report", b"data")
+        self.assertEqual((self.root / "native" / "report").read_bytes(), b"data")
+
+    def test_direct_child_directory_constructor_cannot_skip_mount_check(self):
+        child = self.root / "child"
+        child.mkdir(mode=0o700)
+        fd = os.open(child, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW)
+        try:
+            with patch("aeonith.private_output._linux_mount_type_for_fd", return_value="9p"):
+                with self.assertRaisesRegex(PrivateOutputError, "filesystem is not qualified"):
+                    PrivateOutputDirectory(child, fd)
+        finally:
+            os.close(fd)
 
 
 if __name__ == "__main__":

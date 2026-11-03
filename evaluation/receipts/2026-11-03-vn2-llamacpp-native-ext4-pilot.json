@@ -1,0 +1,38 @@
+{
+  "schema_version": "aeonith.local_model_pilot.v1",
+  "model_identifier_sha256": "09448beaa5041aa08f01c9924127e78f068af521f74a5832b56d8a930bc3a2bf",
+  "transport": "explicit_uncredentialed_loopback_chat",
+  "selected_lenses": [
+    "symbolic"
+  ],
+  "semantic_quality": "UNASSESSED",
+  "human_evaluation": "NOT_PERFORMED",
+  "summary": {
+    "attempts": 1,
+    "completed": 1,
+    "structural_pass": 1,
+    "structural_fail": 0,
+    "provider_or_model_failures": 0
+  },
+  "attempts": [
+    {
+      "case_id": "mirror-at-dusk",
+      "case_sha256": "3fb4b73452472c3b00ce41854a903ec9f542b8bf8465f54a5e067f1a78fbef5a",
+      "repeat": 1,
+      "elapsed_seconds": 79.536,
+      "status": "completed",
+      "structural_status": "pass",
+      "quote_supported_lenses": 1,
+      "lens_outcomes": [
+        {
+          "lens": "symbolic",
+          "basis": "textual",
+          "work_quote_count": 1,
+          "limitation_count": 1
+        }
+      ],
+      "audit_violations": [],
+      "audit_warnings": []
+    }
+  ]
+}

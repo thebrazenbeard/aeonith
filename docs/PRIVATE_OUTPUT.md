@@ -12,6 +12,15 @@ On POSIX/Linux, this helper:
   and open directory descriptors. New directory creation and file writes are
   relative to pinned descriptors, rather than trusting a pathname after a
   preflight check.
+- Reads the **open directory descriptor's** kernel mount ID via
+  `/proc/self/fdinfo` and matches it to `/proc/self/mountinfo` at every ancestor.
+  Only a conservative set of native Linux filesystem types is admitted;
+  WSL's Windows-drive DrvFS/9p paths, CIFS/NFS, FUSE, NTFS emulation, and
+  unrecognized mounts are refused before private outputs are created. The
+  check applies to the newly opened output directory as well. Thus WSL users
+  must keep private reports on a Linux-native filesystem such as `/home`, not
+  `/mnt/c` or `/mnt/d`. A filesystem type is not proof of isolation from the
+  same UID, host administrator, or unsafe backing storage.
 - Refuses directories inside any discoverable Git checkout, including
   worktree `.git` files, and refuses ancestors that other users can replace
   via non-sticky group/world-write permissions. Shared sticky directories

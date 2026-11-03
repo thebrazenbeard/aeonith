@@ -12,6 +12,7 @@ from __future__ import annotations
 import os
 from pathlib import Path
 import stat
+import sys
 from typing import Self
 
 
@@ -21,9 +22,51 @@ class PrivateOutputError(ValueError):
 
 MAX_PRIVATE_FILE_BYTES = 64_000_000
 
+# POSIX owner/mode bits reported by WSL DrvFS/9p can be emulated and do not
+# establish the Windows-side effective ACL. Limit this helper to known native
+# Linux filesystem families; this is still not a same-UID or host-root sandbox.
+_LOCAL_LINUX_FILESYSTEMS = frozenset({
+    "ext2", "ext3", "ext4", "xfs", "btrfs", "f2fs", "tmpfs", "overlay", "zfs",
+})
+
 
 def _is_windows() -> bool:
     return os.name == "nt"
+
+
+def _parse_linux_mount_type(fdinfo: str, mountinfo: str) -> str:
+    """Match the kernel's exact open-file mount ID, not a mutable path prefix."""
+    mount_ids = [line.split(":", 1)[1].strip() for line in fdinfo.splitlines()
+                 if line.startswith("mnt_id:")]
+    if len(mount_ids) != 1 or not mount_ids[0].isdigit():
+        raise PrivateOutputError("private output mount identity is unavailable")
+    for line in mountinfo.splitlines():
+        leading, separator, trailing = line.partition(" - ")
+        if not separator:
+            continue
+        fields = leading.split()
+        if fields and fields[0] == mount_ids[0]:
+            details = trailing.split()
+            if details:
+                return details[0]
+    raise PrivateOutputError("private output mount identity was not found")
+
+
+def _linux_mount_type_for_fd(fd: int) -> str:
+    """Read a kernel-issued mount ID for the pinned directory descriptor."""
+    try:
+        fdinfo = Path(f"/proc/self/fdinfo/{fd}").read_text(encoding="utf-8")
+        mountinfo = Path("/proc/self/mountinfo").read_text(encoding="utf-8")
+    except (OSError, UnicodeError) as exc:
+        raise PrivateOutputError("private output mount identity cannot be verified") from exc
+    return _parse_linux_mount_type(fdinfo, mountinfo)
+
+
+def _require_local_posix_mount(fd: int) -> None:
+    if sys.platform != "linux":
+        raise PrivateOutputError("private output requires a verified local Linux filesystem")
+    if _linux_mount_type_for_fd(fd) not in _LOCAL_LINUX_FILESYSTEMS:
+        raise PrivateOutputError("private output filesystem is not qualified for POSIX privacy")
 
 
 def _open_parent_fd(path: Path) -> int:
@@ -33,10 +76,12 @@ def _open_parent_fd(path: Path) -> int:
     flags = os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW
     fd = os.open("/", flags)
     try:
+        _require_local_posix_mount(fd)
         for component in path.parts[1:]:
             next_fd = os.open(component, flags, dir_fd=fd)
             os.close(fd)
             fd = next_fd
+            _require_local_posix_mount(fd)
             attrs = os.fstat(fd)
             if not stat.S_ISDIR(attrs.st_mode):
                 raise PrivateOutputError("private output parent is not a directory")
@@ -99,6 +144,16 @@ class PrivateOutputDirectory:
     """
 
     def __init__(self, path: Path, directory_fd: int) -> None:
+        # Some callers create child directories directly beneath an existing
+        # pinned parent. Recheck the exact new FD here, rather than relying on
+        # every caller to remember the mount and ownership invariants.
+        if _is_windows():
+            raise PrivateOutputError("Windows private output ACL boundary is not yet qualified")
+        _require_local_posix_mount(directory_fd)
+        attrs = os.fstat(directory_fd)
+        if (not stat.S_ISDIR(attrs.st_mode) or attrs.st_uid != os.geteuid()
+                or attrs.st_mode & 0o077):
+            raise PrivateOutputError("private output directory access controls are not verified")
         self.path = path
         self._directory_fd: int | None = directory_fd
 
@@ -212,6 +267,7 @@ def create_private_directory(value: str | os.PathLike[str]) -> PrivateOutputDire
             dir_fd=parent_fd,
         )
         try:
+            _require_local_posix_mount(directory_fd)
             attrs = os.fstat(directory_fd)
             if (not stat.S_ISDIR(attrs.st_mode) or attrs.st_uid != os.geteuid()
                     or attrs.st_mode & 0o077):

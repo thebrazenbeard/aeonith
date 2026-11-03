@@ -52,6 +52,43 @@ class LinuxPrivateTrainingBrokerTests(unittest.TestCase):
         self.assertFalse((attacker / "run").exists())
         self.assertEqual((self.root / "moved" / "run" / "training_receipt.json").read_bytes(), b"not manuscript text\n")
 
+    def test_allowlisted_adapter_bytes_survive_parent_rename_and_symlink_swap(self):
+        original = self.root / "source-parent"
+        original.mkdir(mode=0o700)
+        attacker = self.root / "attacker"
+        attacker.mkdir(mode=0o700)
+        with PinnedTrainingArtifacts.create(original / "private-run") as broker:
+            original.rename(self.root / "moved-parent")
+            original.symlink_to(attacker, target_is_directory=True)
+            broker.write_adapter_bytes("adapter_config.json", b'{"peft_type":"LORA"}')
+            broker.write_adapter_bytes("adapter_model.safetensors", b"synthetic-bytes-only")
+            with self.assertRaises(PrivateOutputError):
+                broker.write_adapter_bytes("../escaped.json", b"leak")
+            with self.assertRaises(PrivateOutputError):
+                broker.write_adapter_bytes("adapter_config.json", b"overwrite")
+        moved = self.root / "moved-parent" / "private-run" / "adapter"
+        self.assertEqual((moved / "adapter_config.json").read_bytes(), b'{"peft_type":"LORA"}')
+        self.assertEqual((moved / "adapter_model.safetensors").read_bytes(), b"synthetic-bytes-only")
+        self.assertFalse((attacker / "private-run").exists())
+        self.assertEqual(stat.S_IMODE((moved / "adapter_config.json").stat().st_mode), 0o600)
+
+    def test_adapter_write_rejects_non_peft_names_and_oversized_input_before_creation(self):
+        from aeonith.private_output import MAX_PRIVATE_FILE_BYTES
+        with PinnedTrainingArtifacts.create(self.root / "bounded") as broker:
+            for name in ("checkpoint.bin", ".git", "other.safetensors"):
+                with self.subTest(name=name), self.assertRaises(PrivateOutputError):
+                    broker.write_adapter_bytes(name, b"test")
+            with patch("aeonith.private_output.MAX_PRIVATE_FILE_BYTES", 4):
+                with self.assertRaises(PrivateOutputError):
+                    broker.write_adapter_bytes("adapter_model.safetensors", b"oversized")
+            self.assertFalse((self.root / "bounded" / "adapter" / "adapter_model.safetensors").exists())
+
+    def test_adapter_writer_refuses_use_after_broker_close(self):
+        broker = PinnedTrainingArtifacts.create(self.root / "closed-adapter")
+        broker.close()
+        with self.assertRaisesRegex(PrivateOutputError, "closed"):
+            broker.write_adapter_bytes("adapter_config.json", b"no")
+
     def test_realpath_consumer_breaks_procfd_guarantee_so_trainer_gate_stays_closed(self):
         # This is a deliberately hostile *counterexample*: a framework that
         # canonicalizes /proc/self/fd/N before opening files can lose custody.

@@ -21,6 +21,7 @@ import sys
 import unicodedata
 from typing import Any
 
+from aeonith.private_output import PrivateOutputError, _require_local_posix_mount
 from .corpus import CorpusError, RIGHTS_BASIS, SPLITS, _check_isolation, _read_split_bound
 
 
@@ -105,6 +106,35 @@ def _git_checkout_ancestor(path: Path) -> bool:
             except OSError:
                 raise AdmissionError("cannot verify private path Git marker")
     return False
+
+
+def _open_pinned_directory_tree(directory: Path) -> int:
+    """Open each POSIX ancestor without following a symlink at any depth.
+
+    Holding the returned directory handle prevents later ancestor renames from
+    redirecting descriptor-relative receipt creation. This does not stop a
+    malicious process *already running as the same user* from reading files;
+    it is an output path-custody safeguard, not a process identity boundary.
+    """
+    if os.name == "nt" or not all(hasattr(os, flag) for flag in ("O_DIRECTORY", "O_NOFOLLOW")):
+        raise AdmissionError("private receipt requires POSIX descriptor-relative custody")
+    flags = os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW | getattr(os, "O_CLOEXEC", 0)
+    anchor = Path(directory.anchor)
+    fd = os.open(anchor, flags)
+    try:
+        _require_local_posix_mount(fd)
+        for part in directory.relative_to(anchor).parts:
+            next_fd = os.open(part, flags, dir_fd=fd)
+            os.close(fd)
+            fd = next_fd
+            _require_local_posix_mount(fd)
+        return fd
+    except PrivateOutputError as exc:
+        os.close(fd)
+        raise AdmissionError("private receipt parent filesystem is unqualified") from exc
+    except BaseException:
+        os.close(fd)
+        raise
 
 
 def _private_file(raw_value: Any, parent: Path) -> Path:
@@ -328,6 +358,9 @@ def inspect(manifest_path: str | Path) -> dict[str, Any]:
         "split_sha256": digests,
         "split_counts": {split: len(dataset[split]) for split in SPLITS},
         "source_count": len(observed),
+        "any_adapter_publication_permission_declared": any(
+            row["permission_to_publish_adapter"] for rows in dataset.values() for row in rows
+        ),
         "independent_rights_authentication": False,
         "blind_holdout_qualified": False,
         "semantic_leakage_absent_proven": False,
@@ -335,12 +368,12 @@ def inspect(manifest_path: str | Path) -> dict[str, Any]:
     }
 
 
-def _attestation(obj: Any, role: str, fingerprint: str) -> str:
+def _attestation(obj: Any, role: str, fingerprint: str, *, decision: str | None = None) -> str:
     data = _exact(obj, {"identity", "decision", "attested_at_utc", "corpus_fingerprint_sha256"})
     identity = data["identity"]
     if not isinstance(identity, str) or not 2 <= len(identity.strip()) <= 160 or identity.strip().casefold() in BAD_IDENTITIES:
         raise AdmissionError("missing attestor identity")
-    if data["decision"] != ROLES[role] or data["corpus_fingerprint_sha256"] != fingerprint:
+    if data["decision"] != (decision if decision is not None else ROLES[role]) or data["corpus_fingerprint_sha256"] != fingerprint:
         raise AdmissionError("attestation does not cover exact corpus fingerprint")
     when = data["attested_at_utc"]
     if not isinstance(when, str) or not when.endswith("Z"):
@@ -362,29 +395,71 @@ def check_approvals(manifest_path: str | Path, approval_path: str | Path) -> dic
     """
     receipt = inspect(manifest_path)
     approvals, approval_sha = _read_metadata(_private_file(str(approval_path), Path.cwd()))
+    schema = approvals.get("schema_version")
+    if schema == "aeonith.corpus_audit_approval.v1":
+        _exact(approvals, {"schema_version", "corpus_fingerprint_sha256", "status",
+                           "permission_to_train", *ROLES})
+        if (approvals["corpus_fingerprint_sha256"] != receipt["corpus_fingerprint_sha256"]
+                or approvals["status"] != "APPROVED_PRIVATE_LOCAL_TRAINING"
+                or approvals["permission_to_train"] is not True):
+            raise AdmissionError("corpus not approved for private local training")
+        identities = {role: _attestation(approvals[role], role, receipt["corpus_fingerprint_sha256"])
+                      for role in ROLES}
+        if len({identities["rights_holder"], identities["data_steward"],
+                identities["editorial_reviewer"]}) != 3:
+            raise AdmissionError("rights, steward and editorial attestors must be distinct")
+        if identities["corpus_owner"] in {identities["data_steward"], identities["editorial_reviewer"]}:
+            raise AdmissionError("data steward/editor must be distinct from corpus owner")
+        return {
+            **receipt,
+            "status": "operator_attested_private_training_only_not_trained",
+            "approval_mode": "multi_party_private",
+            "approval_sha256": approval_sha,
+            "attestation_identities_independently_authenticated": False,
+            "rights_and_editorial_claims_operator_attested_only": True,
+            "independent_editorial_review_claimed": True,
+            "adapter_publication_authorized": False,
+        }
+    if schema != "aeonith.corpus_audit_owner_approval.v1":
+        raise AdmissionError("unsupported corpus approval schema")
     _exact(approvals, {"schema_version", "corpus_fingerprint_sha256", "status",
-                       "permission_to_train", *ROLES})
-    if (approvals["schema_version"] != "aeonith.corpus_audit_approval.v1"
-            or approvals["corpus_fingerprint_sha256"] != receipt["corpus_fingerprint_sha256"]
-            or approvals["status"] != "APPROVED_PRIVATE_LOCAL_TRAINING"
+                       "permission_to_train", "sole_owner_decision"})
+    if (approvals["corpus_fingerprint_sha256"] != receipt["corpus_fingerprint_sha256"]
+            or approvals["status"] != "APPROVED_SELF_AUTHORED_PRIVATE_TRAINING"
             or approvals["permission_to_train"] is not True):
-        raise AdmissionError("corpus not approved for private local training")
-    identities = {role: _attestation(approvals[role], role, receipt["corpus_fingerprint_sha256"])
-                  for role in ROLES}
-    if len({identities["rights_holder"], identities["data_steward"],
-            identities["editorial_reviewer"]}) != 3:
-        raise AdmissionError("rights, steward and editorial attestors must be distinct")
-    if identities["corpus_owner"] in {identities["data_steward"], identities["editorial_reviewer"]}:
-        raise AdmissionError("data steward/editor must be distinct from corpus owner")
-    result = {
+        raise AdmissionError("sole original owner approval does not match private corpus")
+    if receipt["any_adapter_publication_permission_declared"]:
+        raise AdmissionError("sole original owner private training cannot include adapter publication permission")
+    owner = _attestation(
+        approvals["sole_owner_decision"], "sole_owner", receipt["corpus_fingerprint_sha256"],
+        decision="approve_sole_owner_original_private_training",
+    )
+    # The audit above already validated per-source rights basis against every
+    # row; bind this additional owner-only claim to the *same manifest bytes*.
+    # A genuinely mixed/third-party corpus must use the separate multi-party
+    # path rather than manufacturing reviewers or relabeling rights metadata.
+    current_manifest, current_sha = _read_metadata(_private_file(str(manifest_path), Path.cwd()))
+    if current_sha != receipt["manifest_sha256"]:
+        raise AdmissionError("source manifest changed during sole original owner approval")
+    sources = current_manifest["sources"]
+    if not isinstance(sources, list) or not sources or any(
+        not isinstance(source, dict)
+        or source.get("rights_basis") != "self_authored"
+        or not isinstance(source.get("rights_claimant"), str)
+        or source["rights_claimant"].strip().casefold() != owner
+        for source in sources
+    ):
+        raise AdmissionError("sole original owner does not match every self-authored source rights claimant")
+    return {
         **receipt,
-        "status": "operator_attested_private_training_only_not_trained",
+        "status": "operator_attested_sole_original_owner_private_only_not_trained",
+        "approval_mode": "sole_original_owner_self_authored",
         "approval_sha256": approval_sha,
         "attestation_identities_independently_authenticated": False,
         "rights_and_editorial_claims_operator_attested_only": True,
+        "independent_editorial_review_claimed": False,
         "adapter_publication_authorized": False,
     }
-    return result
 
 
 def verify_admission(manifest_path: str | Path, approval_path: str | Path,
@@ -422,18 +497,38 @@ def admit(manifest_path: str | Path, approval_path: str | Path,
     # cannot establish those properties: leave inspection usable, deny writes.
     if os.name == "nt":
         raise AdmissionError("private receipt writes on Windows require a qualified ACL/custody broker")
+    # Never re-open the newly created directory through its mutable absolute
+    # pathname. A parent rename plus replacement symlink after mkdir could
+    # otherwise redirect the private approval receipt into an attacker folder.
+    parent_fd = _open_pinned_directory_tree(path.parent)
     try:
-        path.mkdir(mode=0o700)
-    except FileExistsError as exc:
-        raise AdmissionError("receipt destination already exists") from exc
-    fd = os.open(path / "admission_receipt.json", os.O_CREAT | os.O_EXCL | os.O_WRONLY, 0o600)
-    try:
-        with os.fdopen(fd, "w", encoding="utf-8") as stream:
-            json.dump(result, stream, indent=2, sort_keys=True)
-            stream.write("\n")
-    except BaseException:
-        # Leave an incomplete receipt for explicit operator review.
-        raise
+        try:
+            os.mkdir(path.name, mode=0o700, dir_fd=parent_fd)
+        except FileExistsError as exc:
+            raise AdmissionError("receipt destination already exists") from exc
+        flags = os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW | getattr(os, "O_CLOEXEC", 0)
+        try:
+            directory_fd = os.open(path.name, flags, dir_fd=parent_fd)
+        except OSError as exc:
+            raise AdmissionError("private receipt directory changed after creation") from exc
+        try:
+            try:
+                _require_local_posix_mount(directory_fd)
+            except PrivateOutputError as exc:
+                raise AdmissionError("private receipt destination filesystem is unqualified") from exc
+            identity = os.fstat(directory_fd)
+            if (not stat.S_ISDIR(identity.st_mode) or identity.st_uid != os.geteuid()
+                    or stat.S_IMODE(identity.st_mode) & 0o077):
+                raise AdmissionError("private receipt directory ownership or mode is unqualified")
+            file_flags = os.O_CREAT | os.O_EXCL | os.O_WRONLY | os.O_NOFOLLOW | getattr(os, "O_CLOEXEC", 0)
+            file_fd = os.open("admission_receipt.json", file_flags, 0o600, dir_fd=directory_fd)
+            with os.fdopen(file_fd, "w", encoding="utf-8") as stream:
+                json.dump(result, stream, indent=2, sort_keys=True)
+                stream.write("\n")
+        finally:
+            os.close(directory_fd)
+    finally:
+        os.close(parent_fd)
     return result
 
 

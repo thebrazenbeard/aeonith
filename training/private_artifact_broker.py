@@ -207,6 +207,32 @@ class PinnedTrainingArtifacts:
             raise PrivateOutputError("private training broker is closed")
         self._root.write_bytes("training_receipt.json", content)
 
+    def write_adapter_bytes(self, filename: str, content: bytes) -> None:
+        """Create one exclusive PEFT-named artifact through the pinned child fd.
+
+        This only qualifies *opaque, already-serialized bytes* written by our
+        own code. It does not validate a safetensors payload, admit a model,
+        qualify an ML trainer's path-based outputs, or enable training.
+        File creation is exclusive; an interrupted two-file bundle is never
+        claimed to be an atomic checkpoint or silently removed.
+        """
+        if filename not in {"adapter_config.json", "adapter_model.safetensors"}:
+            raise PrivateOutputError("private adapter artifact name is not allowlisted")
+        if self._root is None or "adapter" not in self._children:
+            raise PrivateOutputError("private training broker is closed")
+        self.verify_live()
+        # Duplication gives this write a temporary owned fd. The original
+        # broker retains custody even if the private writer closes its copy.
+        writer_fd = os.dup(self._children["adapter"])
+        with PrivateOutputDirectory(Path("/proc/self/fd") / str(writer_fd), writer_fd) as writer:
+            self._verify_fd(writer_fd)
+            try:
+                writer.write_bytes(filename, content)
+            except FileExistsError as exc:
+                raise PrivateOutputError("private adapter artifact already exists") from exc
+            except OSError as exc:
+                raise PrivateOutputError("private adapter artifact write failed") from exc
+
     def verify_live(self) -> None:
         if self._root is None:
             raise PrivateOutputError("private training broker is closed")

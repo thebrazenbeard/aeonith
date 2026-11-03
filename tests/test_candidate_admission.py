@@ -121,6 +121,50 @@ class AdmissionTests(unittest.TestCase):
             self.run_admission()
         self.assertFalse(self.output.exists())
 
+    def owner_approval(self) -> None:
+        digest = self.approval["candidate_sha256"]
+        self.approval = {
+            "schema_version": "aeonith.candidate_owner_admission.v1",
+            "candidate_sha256": digest,
+            "approval_status": "APPROVED_SELF_AUTHORED_PRIVATE_LOCAL_TRAINING",
+            "permission_to_train": True,
+            "sole_owner_decision": self.attestation(
+                "Fixture Holder", "approve_sole_owner_original_private_training", digest),
+            "records": [
+                {"id": obj["id"], "source_id": obj["source_id"],
+                 "rights_basis": "self_authored", "rights_claimant": "Fixture Holder",
+                 "permission_to_train": True,
+                 "permission_to_publish_adapter": False,
+                 "editorial_accepted": True}
+                for obj in self.candidates["examples"]
+            ],
+        }
+        self.write_approval()
+
+    @unittest.skipUnless(os.name == "posix", "private output requires POSIX custody")
+    def test_sole_original_owner_admits_without_invented_reviewers(self) -> None:
+        self.owner_approval()
+        receipt = self.run_admission()
+        self.assertEqual(receipt["approval_mode"], "sole_original_owner_self_authored")
+        self.assertFalse(receipt["independent_editorial_review_claimed"])
+        self.assertFalse(receipt["attestation_issuer_identities_independently_authenticated"])
+        self.assertEqual(sum(receipt["split_counts"].values()), 3)
+
+    def test_owner_only_mode_refuses_mixed_rights_and_other_claimants(self) -> None:
+        self.owner_approval()
+        self.approval["records"][0]["rights_basis"] = "licensed"
+        self.approval["records"][0]["license_id"] = "TEST-LICENSE"
+        self.write_approval()
+        with self.assertRaisesRegex(AdmissionError, "sole original owner|self.authored"):
+            self.run_admission()
+        self.assertFalse(self.output.exists())
+        self.owner_approval()
+        self.approval["records"][0]["rights_claimant"] = "Someone Else"
+        self.write_approval()
+        with self.assertRaisesRegex(AdmissionError, "rights claimant|sole original owner"):
+            self.run_admission()
+        self.assertFalse(self.output.exists())
+
     def test_attestor_has_to_approve_exact_hash_and_role(self) -> None:
         self.approval["editorial_decision"]["decision"] = "approve_local_training"
         self.write_approval()

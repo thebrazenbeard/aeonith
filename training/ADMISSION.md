@@ -4,11 +4,12 @@
 approved* `aeonith.candidate_corpus.v1` proposal into private JSONL files for
 the offline trainer. It **does not** approve the current 14 review-pending
 Aeonith drafts, install weights, start training, validate copyright, or authorize
-publication. Only the user's real rights-holder and an independent human data
-steward and editorial reviewer can make those decisions.
+publication. There are two explicit modes: independent human decisions for
+third-party/mixed-source material, and a **sole original owner** declaration
+for material the operator actually authored and owns outright.
 
 The candidate proposal remains immutable. Make a **separate private** JSON
-approval manifest after those human reviews. It has this structure (the
+approval manifest after those human reviews. The multi-party form has this structure (the
 illustrative `null`/`false` fields intentionally **fail** admission):
 
 ```json
@@ -44,6 +45,50 @@ For licensed sources an actual `license_id` is required. The optional
 only records a per-item claim, **not a release authorization**. There is no
 automatic transfer of approval from a global status to individual works.
 
+## Sole original owner, private training only
+
+An owner who **personally authored and exclusively owns every passage and
+target** can opt into a separate schema. This does not apply to coauthored,
+employer-owned/work-for-hire, transferred, licensed, or otherwise third-party
+material; use the multi-party form for mixed sources. Do not invent reviewer
+identities for your own original works. The owner must make a real declaration,
+not assume a tool has verified their legal rights or editorial quality.
+
+```json
+{
+  "schema_version": "aeonith.candidate_owner_admission.v1",
+  "candidate_sha256": "<exact lowercase SHA-256 of candidates.json>",
+  "approval_status": "APPROVED_SELF_AUTHORED_PRIVATE_LOCAL_TRAINING",
+  "permission_to_train": true,
+  "sole_owner_decision": {
+    "identity": "<actual author and sole current owner>",
+    "decision": "approve_sole_owner_original_private_training",
+    "attested_at_utc": "2026-11-03T01:00:00Z",
+    "candidate_sha256": "<same exact candidate SHA-256>"
+  },
+  "records": [
+    {
+      "id": "<exact candidate record ID>",
+      "source_id": "<exact candidate source ID>",
+      "rights_basis": "self_authored",
+      "rights_claimant": "<same actual author/sole owner identity>",
+      "permission_to_train": true,
+      "editorial_accepted": true,
+      "permission_to_publish_adapter": false
+    }
+  ]
+}
+```
+
+Provide **one record decision per candidate**, not merely the single
+illustrative record above. No `license_id` or adapter-publication permission
+is accepted in this mode. It checks exact candidate hash, record IDs,
+source IDs, own-rights claims and split isolation, but cannot independently
+prove authorship, ownership, identity or useful critique quality. Its receipt
+marks `approval_mode=sole_original_owner_self_authored` and explicitly
+`independent_editorial_review_claimed=false`. Only private local model training
+is authorized; distribution/release needs separate authorization.
+
 Identity strings and timestamps are **self-reported**, not cryptographic
 signatures or external independent attestation. The tool cannot detect forged
 names, false ownership claims, superficial editor review, or semantic dataset
@@ -61,7 +106,7 @@ python -m training.admit_candidates \
 ```
 
 This never calls a model or network service. It runs exact SHA-256, strict
-schema/boolean, distinct-identity, per-work train/editorial permission,
+schema/boolean, role-appropriate identities, per-work train/editorial permission,
 literal-quote/lens, source-split overlap and non-overwrite checks *before*
 writing. It then exclusively creates `train.jsonl`, `validation.jsonl`,
 `holdout.jsonl` and a **text-free** `admission_receipt.json` that reports

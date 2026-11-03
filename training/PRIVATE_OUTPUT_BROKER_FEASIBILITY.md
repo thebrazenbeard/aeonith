@@ -22,6 +22,15 @@ pinned root handle. The broker refuses Windows and non-Linux hosts.
   after the original ancestor is renamed and replaced by a symlink.
 - **SURVIVES (narrow):** Child creation, ownership, mode, bare Git denial,
   exclusive receipt and refusal after broker close.
+- **SURVIVES (narrow):** The broker can now write already-serialized bytes
+  for exactly `adapter_config.json` and `adapter_model.safetensors` through a
+  duplicated, verified adapter directory handle. The shared private-file
+  writer enforces exclusive mode-0600 creation and the 64 MB-per-file byte cap.
+  A parent directory rename followed by a hostile symlink did not redirect
+  these writes; duplicate/other names, oversized input, and writes after
+  closure failed closed. This is **not** a PEFT encoder or genuine checkpoint
+  persistence proof: bytes were synthetic, the two files are not an atomic
+  bundle, and host-owned process isolation is still absent.
 - **FAILS (falsifier):** A consumer first calling `Path.resolve()` on the
   procfd path receives the conventional absolute path. After ancestor rename
   and symlink substitution, a later write through that canonicalized path can
@@ -102,3 +111,18 @@ authorization, trainer source audit or hardware lease.
 `train_lora._require_private_output_broker()` remains deliberately
 fail-closed. This artifact is a tested piece of *research*, not an approved
 training destination or evidence that any neural weights changed.
+
+### Possible path-free PEFT adapter save, not yet implemented
+
+Official PEFT exposes `get_peft_model_state_dict(model)` for adapter-only
+parameters, and Safetensors exposes `safetensors.torch.save(tensors) -> bytes`.
+That combination could avoid calling PEFT's pathname-oriented
+`save_pretrained()` for *the two final adapter files*: serialize the verified
+adapter state in memory, then supply its bounded bytes to
+`write_adapter_bytes()` through the pinned descriptor. The adapter config
+would require exact PEFT-compatible serialization, and a **fresh-process
+reload and inference comparison** before qualification. This does not solve
+the training runtime's other path writes or resource authorization.
+
+- [Official PEFT state-dict API](https://huggingface.co/docs/peft/package_reference/peft_model)
+- [Official Safetensors in-memory Torch save](https://huggingface.co/docs/safetensors/api/torch)

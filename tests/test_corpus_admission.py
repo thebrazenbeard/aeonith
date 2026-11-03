@@ -10,6 +10,7 @@ import subprocess
 import sys
 import tempfile
 import unittest
+from unittest.mock import patch
 
 from training.corpus_admission import AdmissionError, admit, fingerprints_for_text, inspect
 
@@ -137,6 +138,126 @@ class CorpusAdmissionTests(unittest.TestCase):
         self.assertNotIn("windmill", self.receipt_file.read_text())
         with self.assertRaisesRegex(AdmissionError, "already exists"):
             admit(self.manifest, self.approvals, self.output_dir)
+
+    @unittest.skipIf(os.name == "nt", "Windows private receipt writing is intentionally disabled")
+    def test_explicit_sole_original_owner_does_not_need_fictional_third_party(self) -> None:
+        fingerprint = inspect(self.manifest)["corpus_fingerprint_sha256"]
+        self.approval_data = {
+            "schema_version": "aeonith.corpus_audit_owner_approval.v1",
+            "corpus_fingerprint_sha256": fingerprint,
+            "status": "APPROVED_SELF_AUTHORED_PRIVATE_TRAINING",
+            "permission_to_train": True,
+            "sole_owner_decision": {
+                "identity": "Synthetic Rights Holder",
+                "decision": "approve_sole_owner_original_private_training",
+                "attested_at_utc": "2026-11-02T18:00:00Z",
+                "corpus_fingerprint_sha256": fingerprint,
+            },
+        }
+        self.write_approvals()
+        receipt = admit(self.manifest, self.approvals, self.output_dir)
+        self.assertEqual(receipt["status"], "operator_attested_sole_original_owner_private_only_not_trained")
+        self.assertEqual(receipt["approval_mode"], "sole_original_owner_self_authored")
+        self.assertFalse(receipt["independent_rights_authentication"])
+        self.assertFalse(receipt["independent_editorial_review_claimed"])
+        self.assertFalse(receipt["adapter_publication_authorized"])
+        self.assertEqual(json.loads(self.receipt_file.read_text()), receipt)
+
+    def test_sole_owner_cannot_claim_sources_of_another_rights_claimant(self) -> None:
+        fingerprint = inspect(self.manifest)["corpus_fingerprint_sha256"]
+        self.approval_data = {
+            "schema_version": "aeonith.corpus_audit_owner_approval.v1",
+            "corpus_fingerprint_sha256": fingerprint,
+            "status": "APPROVED_SELF_AUTHORED_PRIVATE_TRAINING",
+            "permission_to_train": True,
+            "sole_owner_decision": {
+                "identity": "Someone Else", "decision": "approve_sole_owner_original_private_training",
+                "attested_at_utc": "2026-11-02T18:00:00Z",
+                "corpus_fingerprint_sha256": fingerprint,
+            },
+        }
+        self.write_approvals()
+        with self.assertRaisesRegex(AdmissionError, "sole original owner|rights claimant"):
+            admit(self.manifest, self.approvals, self.output_dir)
+        self.assertFalse(self.receipt_file.exists())
+
+    def test_owner_only_refuses_any_record_adapter_publication_permission(self) -> None:
+        self.data["train"][0]["permission_to_publish_adapter"] = True
+        self.files["train"].write_text(json.dumps(self.data["train"][0]) + "\n", encoding="utf-8")
+        self.manifest_data["splits"]["train"]["sha256"] = _sha(self.files["train"])
+        self.write_manifest()
+        fingerprint = inspect(self.manifest)["corpus_fingerprint_sha256"]
+        self.approval_data = {
+            "schema_version": "aeonith.corpus_audit_owner_approval.v1",
+            "corpus_fingerprint_sha256": fingerprint,
+            "status": "APPROVED_SELF_AUTHORED_PRIVATE_TRAINING", "permission_to_train": True,
+            "sole_owner_decision": {"identity": "Synthetic Rights Holder",
+                "decision": "approve_sole_owner_original_private_training",
+                "attested_at_utc": "2026-11-02T18:00:00Z", "corpus_fingerprint_sha256": fingerprint},
+        }
+        self.write_approvals()
+        with self.assertRaisesRegex(AdmissionError, "adapter publication"):
+            admit(self.manifest, self.approvals, self.output_dir)
+        self.assertFalse(self.receipt_file.exists())
+
+    def test_owner_only_refuses_other_valid_rights_basis(self) -> None:
+        # Public-domain material may be usable under a different policy, but
+        # it is not evidence of sole ownership of every source in this mode.
+        self.data["train"][0]["rights_basis"] = "public_domain"
+        self.write_all()
+        self.manifest_data["sources"][0]["rights_basis"] = "public_domain"
+        self.write_manifest()
+        fingerprint = inspect(self.manifest)["corpus_fingerprint_sha256"]
+        self.approval_data = {
+            "schema_version": "aeonith.corpus_audit_owner_approval.v1",
+            "corpus_fingerprint_sha256": fingerprint,
+            "status": "APPROVED_SELF_AUTHORED_PRIVATE_TRAINING", "permission_to_train": True,
+            "sole_owner_decision": {"identity": "Synthetic Rights Holder",
+                "decision": "approve_sole_owner_original_private_training",
+                "attested_at_utc": "2026-11-02T18:00:00Z", "corpus_fingerprint_sha256": fingerprint},
+        }
+        self.write_approvals()
+        with self.assertRaisesRegex(AdmissionError, "self-authored source"):
+            admit(self.manifest, self.approvals, self.output_dir)
+        self.assertFalse(self.output_dir.exists())
+
+    @unittest.skipIf(os.name == "nt", "Windows private receipt writing is intentionally disabled")
+    def test_ancestor_swap_after_receipt_mkdir_cannot_redirect_private_bytes(self) -> None:
+        """Synthetic same-user attacker swaps a newly created receipt directory."""
+        attacker = self.root / "attacker-readable"
+        attacker.mkdir()
+        displaced = self.root / "displaced-private"
+        actual_mkdir = os.mkdir
+
+        def swap_after_mkdir(path, mode=0o777, *, dir_fd=None):
+            if dir_fd is None:
+                result = actual_mkdir(path, mode)
+            else:
+                result = actual_mkdir(path, mode, dir_fd=dir_fd)
+            if str(path) in {str(self.output_dir), self.output_dir.name}:
+                self.output_dir.rename(displaced)
+                self.output_dir.symlink_to(attacker, target_is_directory=True)
+            return result
+
+        try:
+            with patch("training.corpus_admission.os.mkdir", side_effect=swap_after_mkdir):
+                with self.assertRaises((AdmissionError, OSError)):
+                    admit(self.manifest, self.approvals, self.output_dir)
+            self.assertFalse((attacker / "admission_receipt.json").exists())
+            self.assertFalse((displaced / "admission_receipt.json").exists())
+        finally:
+            # Only synthetic paths created by this test are touched.
+            if self.output_dir.is_symlink():
+                self.output_dir.unlink()
+
+    @unittest.skipIf(os.name == "nt", "Windows private receipt writing is intentionally disabled")
+    def test_wsl_drvfs_9p_or_ntfs_mount_rejected_before_creating_receipt(self) -> None:
+        for unsupported in ("9p", "drvfs", "ntfs3"):
+            with self.subTest(filesystem=unsupported):
+                with patch("aeonith.private_output._linux_mount_type_for_fd", return_value=unsupported):
+                    with self.assertRaisesRegex(AdmissionError, "filesystem is unqualified"):
+                        admit(self.manifest, self.approvals, self.output_dir)
+                self.assertFalse(self.output_dir.exists())
 
     def test_wrong_attestation_or_consent_fails_without_output(self) -> None:
         self.approval_data["permission_to_train"] = False
