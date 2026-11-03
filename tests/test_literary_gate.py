@@ -73,6 +73,7 @@ class LiteraryGateTests(unittest.TestCase):
         self.assertEqual(full["repeats_per_case"], 3)
         self.assertEqual(full["case_set_sha256"], self.plan["case_set_sha256"])
 
+    @unittest.skipIf(os.name == "nt", "Windows private journal ACL custody is not qualified")
     def test_journals_include_all_failures_not_just_successes(self):
         a, _ = self.journal("candidate-A", provider=FakeProvider(fail_on={2, 6}))
         b, _ = self.journal("candidate-B")
@@ -92,6 +93,7 @@ class LiteraryGateTests(unittest.TestCase):
         if os.name == "posix":
             self.assertEqual(a.stat().st_mode & 0o777, 0o600)
 
+    @unittest.skipIf(os.name == "nt", "Windows private journal ACL custody is not qualified")
     def test_crash_during_inference_is_interrupted_not_never_attempted(self):
         a, _ = self.journal("candidate-A")
         b, _ = self.journal("candidate-B")
@@ -109,6 +111,7 @@ class LiteraryGateTests(unittest.TestCase):
         self.assertEqual(result["candidates"]["candidate-B"]["not_attempted"], 1)
         self.assertEqual(result["candidates"]["candidate-B"]["interrupted"], 0)
 
+    @unittest.skipIf(os.name == "nt", "Windows private journal ACL custody is not qualified")
     def test_truncated_tail_is_conservatively_counted_and_duplicate_jsonl_rejected(self):
         a, _ = self.journal("candidate-A")
         b, _ = self.journal("candidate-B")
@@ -186,6 +189,17 @@ class LiteraryGateTests(unittest.TestCase):
         self.assertFalse(target.exists())
         self.assertEqual(provider.calls, 0)
 
+    @unittest.skipUnless(os.name == "nt", "Actual Windows private-output denial")
+    def test_windows_rejects_private_journal_before_inference(self):
+        target = self.root / "unqualified-windows-private.jsonl"
+        provider = FakeProvider()
+        with self.assertRaisesRegex(ValueError, "Windows private output ACL boundary is not yet qualified"):
+            run_candidate(self.plan, "candidate-A", provider=provider,
+                          model="fake", lane="production", journal_path=str(target))
+        self.assertEqual(provider.calls, 0)
+        self.assertFalse(target.exists())
+
+    @unittest.skipIf(os.name == "nt", "Windows private journal ACL custody is not qualified")
     def test_identity_preflight_refuses_same_label_or_same_local_bytes(self):
         a, _ = self.journal("candidate-A", model="same-model-label")
         b, _ = self.journal("candidate-B", model="same-model-label")
@@ -209,6 +223,7 @@ class LiteraryGateTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "same local model-artifact digest"):
             account(self.plan, str(a), str(b))
 
+    @unittest.skipIf(os.name == "nt", "Windows private journal ACL custody is not qualified")
     def test_distinct_local_bytes_still_cannot_prove_provider_binding(self):
         one = self.root / "base.gguf"
         two = self.root / "adapter.gguf"
@@ -238,6 +253,7 @@ class LiteraryGateTests(unittest.TestCase):
         old_path.unlink()
         return self.journal(candidate)
 
+    @unittest.skipIf(os.name == "nt", "Windows private journal ACL custody is not qualified")
     def test_blinded_packets_contain_no_candidate_or_provider_identity(self):
         a, _ = self.journal("candidate-A", provider=FakeProvider(spoofed=True))
         b, _ = self.journal("candidate-B")
@@ -256,6 +272,7 @@ class LiteraryGateTests(unittest.TestCase):
         self.assertEqual([row["pair"]["pair_id"] for row in displays["pairs"]],
                          [row["key"]["pair_id"] for row in keys["keys"]])
 
+    @unittest.skipIf(os.name == "nt", "Windows private journal ACL custody is not qualified")
     def test_self_identifying_prose_is_quarantined_without_erasing_attempts(self):
         class IdentifyingProvider(FakeProvider):
             def review(self, payload):
@@ -277,6 +294,7 @@ class LiteraryGateTests(unittest.TestCase):
         self.assertEqual(accounting["candidates"]["candidate-A"]["structural_pass"], 6)
         self.assertEqual(accounting["semantic_quality"], "UNASSESSED")
 
+    @unittest.skipIf(os.name == "nt", "Windows private journal ACL custody is not qualified")
     def test_declared_model_id_in_nonanalysis_prose_is_quarantined(self):
         class LeakingSynthesis(FakeProvider):
             def review(self, payload):
@@ -294,6 +312,7 @@ class LiteraryGateTests(unittest.TestCase):
         self.assertFalse(displays["pairs"])
         self.assertFalse(keys["keys"])
 
+    @unittest.skipIf(os.name == "nt", "Windows private journal ACL custody is not qualified")
     def test_only_contaminated_pair_is_quarantined_and_counted(self):
         class OneLeak(FakeProvider):
             def review(self, payload):
@@ -333,6 +352,7 @@ class LiteraryGateTests(unittest.TestCase):
         self.assertEqual(audit["structural_status"], "pass")
         self.assertEqual(audit["semantic_quality"], "UNASSESSED")
 
+    @unittest.skipIf(os.name == "nt", "Windows private journal ACL custody is not qualified")
     def test_cross_candidate_and_lane_journals_refused(self):
         a, _ = self.journal("candidate-A")
         with self.assertRaisesRegex(ValueError, "distinct candidates"):
@@ -342,9 +362,14 @@ class LiteraryGateTests(unittest.TestCase):
         path = self.root / "candidate-A.jsonl"
         path.write_text("existing user data", encoding="utf-8")
         provider = FakeProvider()
-        with self.assertRaises(FileExistsError):
-            run_candidate(self.plan, "candidate-A", provider=provider,
-                          model="fake", lane="production", journal_path=str(path))
+        if os.name == "nt":
+            with self.assertRaisesRegex(ValueError, "Windows private output ACL boundary is not yet qualified"):
+                run_candidate(self.plan, "candidate-A", provider=provider,
+                              model="fake", lane="production", journal_path=str(path))
+        else:
+            with self.assertRaises(FileExistsError):
+                run_candidate(self.plan, "candidate-A", provider=provider,
+                              model="fake", lane="production", journal_path=str(path))
         self.assertEqual(provider.calls, 0)
         self.assertEqual(path.read_text(encoding="utf-8"), "existing user data")
 

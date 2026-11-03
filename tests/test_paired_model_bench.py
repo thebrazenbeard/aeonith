@@ -4,12 +4,15 @@ from __future__ import annotations
 
 from copy import deepcopy
 import json
+import os
 from pathlib import Path
 import subprocess
 import sys
 import tempfile
 import unittest
+from unittest.mock import patch
 
+from aeonith.private_output import PrivateOutputError
 from evaluation.paired_model_bench import BenchError, prepare
 from evaluation.quality_eval import build_blind_pair, digest, make_manifest
 
@@ -89,6 +92,7 @@ class PairedModelBenchTests(unittest.TestCase):
     def write(self) -> None:
         self.input.write_text(json.dumps(self.data), encoding="utf-8")
 
+    @unittest.skipIf(os.name == "nt", "Windows private-output ACL custody is not qualified")
     def test_outputs_private_blinded_pairs_keys_and_redacted_receipt(self) -> None:
         self.write()
         receipt = prepare(self.input, self.out)
@@ -109,6 +113,7 @@ class PairedModelBenchTests(unittest.TestCase):
         self.assertNotIn("trained-adapter", json.dumps(pair))
         self.assertTrue((self.out / "bench_receipt.json").is_file())
 
+    @unittest.skipIf(os.name == "nt", "Windows private-output ACL custody is not qualified")
     def test_identical_outputs_across_seeds_get_unique_aligned_pair_ids_even_if_order_flips(self) -> None:
         source = "fresh-one"
         representative = next(run for run in self.data["runs"] if run["source_id"] == source)
@@ -161,6 +166,7 @@ class PairedModelBenchTests(unittest.TestCase):
             prepare(self.input, self.out)
         self.assertFalse(self.out.exists())
 
+    @unittest.skipIf(os.name == "nt", "Windows private-output ACL custody is not qualified")
     def test_official_slash_qualified_base_model_name_is_supported(self) -> None:
         official_id = "Qwen/Qwen3.5-0.8B"
         self.data["model_identities"]["base"]["model_id"] = official_id
@@ -223,6 +229,7 @@ class PairedModelBenchTests(unittest.TestCase):
                     prepare(self.input, self.out)
                 self.assertFalse(self.out.exists())
 
+    @unittest.skipIf(os.name == "nt", "Windows private-output ACL custody is not qualified")
     def test_invalid_model_review_is_counted_not_silently_excluded(self) -> None:
         bad = self.data["runs"][0]
         bad["adapter_review"]["lens_reviews"][0]["support"][0]["quote"] = "never occurred"
@@ -234,6 +241,7 @@ class PairedModelBenchTests(unittest.TestCase):
         self.assertEqual(receipt["adapter_structural_failures"], 1)
         self.assertEqual(receipt["base_structural_failures"], 0)
 
+    @unittest.skipIf(os.name == "nt", "Windows private-output ACL custody is not qualified")
     def test_failed_model_response_is_not_semantic_quality_result(self) -> None:
         item = self.data["runs"][0]
         item["base_review"] = {"status": "provider_unavailable"}
@@ -270,9 +278,30 @@ class PairedModelBenchTests(unittest.TestCase):
             "--bundle", str(self.input), "--output", str(self.out),
         ], cwd=Path(__file__).resolve().parents[1], capture_output=True, text=True,
            check=False, timeout=10)
-        self.assertEqual(run.returncode, 0, run.stderr)
-        self.assertEqual(json.loads(run.stdout)["run_count"], 4)
-        self.assertNotIn("Ada stood", run.stdout)
+        if os.name == "nt":
+            self.assertEqual(run.returncode, 2, run.stderr)
+            self.assertIn("Windows private output ACL boundary is not yet qualified", run.stderr)
+            self.assertFalse(self.out.exists())
+        else:
+            self.assertEqual(run.returncode, 0, run.stderr)
+            self.assertEqual(json.loads(run.stdout)["run_count"], 4)
+        self.assertNotIn("Ada stood", run.stdout + run.stderr)
+
+    @unittest.skipUnless(os.name == "nt", "Windows-only private-output denial")
+    def test_windows_rejects_valid_bench_before_private_output_write(self) -> None:
+        self.write()
+        with self.assertRaisesRegex(PrivateOutputError, "Windows private output ACL boundary is not yet qualified"):
+            prepare(self.input, self.out)
+        self.assertFalse(self.out.exists())
+        self.assertTrue(self.input.is_file())
+
+    @unittest.skipUnless(os.name == "posix", "POSIX simulation of Windows private-output denial")
+    def test_windows_boundary_simulation_rejects_valid_bundle_without_writing(self) -> None:
+        self.write()
+        with patch("aeonith.private_output._is_windows", return_value=True):
+            with self.assertRaisesRegex(PrivateOutputError, "Windows private output ACL"):
+                prepare(self.input, self.out)
+        self.assertFalse(self.out.exists())
 
 
 if __name__ == "__main__":

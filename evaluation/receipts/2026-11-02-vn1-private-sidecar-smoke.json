@@ -1,0 +1,30 @@
+{
+  "schema_version": "aeonith.local_sidecar_host_receipt.v1",
+  "evidence_class": "RUNTIME_PROBE",
+  "host_role": "VN1",
+  "source_commit_sha": "0c9f24d5f2fd31672cf00c17385ca214dc3bf093",
+  "model_tag": "aeonith-critic:0.1",
+  "transport": "local_loopback_http",
+  "sidecar_port": 8766,
+  "input_class": "synthetic_test_fixture",
+  "response": {
+    "status": "smoke_complete",
+    "structural_status": "quote_grounded",
+    "quote_supported_lenses": 1,
+    "cleanup_verified": true,
+    "primary_unchanged": true
+  },
+  "separate_coordinator_post_run_readback": {
+    "port_8766_listener_present": false,
+    "port_8765_listener_pid": 2224,
+    "port_8765_health": "ok",
+    "port_8765_review_configured": true,
+    "model_unloaded_after_test": true
+  },
+  "limitations": [
+    "One synthetic request only; no prolonged or concurrent-load reliability claim.",
+    "Quote-grounded structural completion is not a human literary-quality judgment.",
+    "Existing public-facing 8765 deployment was not changed or promoted.",
+    "The host receipt was observed by the coordinator; it is not an independently signed host attestation."
+  ]
+}
