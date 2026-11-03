@@ -484,9 +484,50 @@ class PublicSessionTests(unittest.TestCase):
                 ("POST", "/api/review", {"Cookie": cookie, "Host": "evil.example"}),
             ):
                 with self.subTest(path=path, headers=headers):
-                    status, _, raw = self._request(path, method=method, body=b"private", headers=headers)
+                    # A rejected Host with an unread POST body can cause a
+                    # Windows TCP abort before the peer receives the 403.
+                    # Check the exact HTTP status without a pending body here;
+                    # the separate test below covers the malicious-body case.
+                    request_body = None if headers.get("Host") == "evil.example" else b"private"
+                    status, _, raw = self._request(path, method=method, body=request_body, headers=headers)
                     self.assertEqual(status, 403)
                     self.assertEqual(json.loads(raw)["error"]["code"], "forbidden_origin")
+
+    def test_bad_host_post_with_unread_body_still_fails_closed(self):
+        with patch.dict(os.environ, _CONFIG, clear=True):
+            cookie = self._login()
+            fake_provider = _FakeLocalModel()
+            with patch("aeonith.service._construct_provider", return_value=fake_provider) as provider_factory, \
+                 patch.object(fake_provider, "review", wraps=fake_provider.review) as model_review:
+                try:
+                    status, headers, raw = self._request(
+                        "/api/review", method="POST", body=b"private",
+                        headers={"Cookie": cookie, "Host": "evil.example"},
+                    )
+                except ConnectionAbortedError as exc:
+                    # Winsock may abort a rejected connection when its inbound
+                    # POST body is intentionally left unread. This is only an
+                    # allowed denial if the server stays alive and no provider
+                    # work follows; those assertions run below in both cases.
+                    if os.name != "nt" or getattr(exc, "winerror", None) != 10053:
+                        raise
+                else:
+                    self.assertEqual(status, 403)
+                    self.assertEqual(json.loads(raw)["error"]["code"], "forbidden_origin")
+                    self.assertNotIn("Set-Cookie", headers)
+
+                provider_factory.assert_not_called()
+                health_status, _, health_body = self._request("/healthz")
+                self.assertEqual(health_status, 200)
+                self.assertEqual(json.loads(health_body)["status"], "ok")
+                session_status, session_headers, session_body = self._request("/api/session")
+                self.assertEqual(session_status, 200)
+                self.assertFalse(json.loads(session_body)["authenticated"])
+                self.assertNotIn("Set-Cookie", session_headers)
+                # /healthz checks provider configuration and constructs one;
+                # the rejected POST must not construct or call another model.
+                provider_factory.assert_called_once()
+                model_review.assert_not_called()
 
     def test_login_failures_never_issue_cookies_or_read_bodies(self):
         with patch.dict(os.environ, _CONFIG, clear=True):
