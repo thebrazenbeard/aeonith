@@ -14,6 +14,7 @@ import math
 import os
 from pathlib import Path
 import re
+import stat
 import sys
 from typing import Any
 
@@ -38,10 +39,49 @@ def fingerprint_adapter(directory: str | Path) -> list[dict[str, Any]]:
 
 
 def _output_path(value: str) -> Path:
-    destination = Path(value).expanduser().resolve()
-    repo = Path(__file__).resolve().parents[1]
-    if destination == repo or repo in destination.parents:
-        raise CorpusError("training outputs must be outside the Aeonith Git checkout")
+    # Private adapters must not enter *any* checkout, not merely this source
+    # tree. Git worktrees and submodules use a .git file instead of a directory.
+    if not value or not value.strip() or "\x00" in value or "://" in value:
+        raise CorpusError("output must be a nonempty local filesystem path")
+    if value.startswith(("\\", "//")):
+        raise CorpusError("UNC and device output paths are unsafe for private training artifacts")
+    if ":" in value and (os.name != "nt" or not re.match(r"^[A-Za-z]:[\\/]", value)
+                         or ":" in value[2:]):
+        raise CorpusError("drive-relative and alternate-stream output paths are unsafe")
+    raw = Path(value).expanduser()
+    if ".." in raw.parts:
+        raise CorpusError("output paths containing parent traversal are unsafe")
+
+    # Do not follow symlinks, Windows junctions, or other reparse points into
+    # an uninspected filesystem. The final output leaf must not exist.
+    lexical = raw.absolute()
+    cursor = Path(lexical.anchor)
+    for part in lexical.parts[1:]:
+        cursor = cursor / part
+        try:
+            info = cursor.lstat()
+        except FileNotFoundError:
+            continue
+        except OSError as exc:
+            raise CorpusError("cannot inspect output path components safely") from exc
+        if (stat.S_ISLNK(info.st_mode) or
+                getattr(info, "st_file_attributes", 0) & getattr(stat, "FILE_ATTRIBUTE_REPARSE_POINT", 0) or
+                (hasattr(cursor, "is_junction") and cursor.is_junction())):
+            raise CorpusError("symlinks and reparse points are unsafe output paths")
+
+    destination = raw.resolve()
+    for ancestor in (destination, *destination.parents):
+        marker = ancestor / ".git"
+        try:
+            if (marker.is_symlink() or marker.is_file()
+                    or (marker.is_dir() and (marker / "HEAD").is_file())):
+                raise CorpusError("training outputs must be outside Git checkouts")
+            # Bare Git repositories have HEAD/objects/refs at their root.
+            if ((ancestor / "HEAD").is_file() and (ancestor / "objects").is_dir()
+                    and (ancestor / "refs").is_dir()):
+                raise CorpusError("training outputs must be outside Git checkouts")
+        except OSError as exc:
+            raise CorpusError("cannot inspect Git ancestry of training output safely") from exc
     if destination.exists() or destination.parent == destination:
         raise CorpusError("output directory already exists or is unsafe; never overwrite training artifacts")
     if not destination.parent.is_dir():

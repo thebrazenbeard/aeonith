@@ -127,7 +127,13 @@ python -m training.train_lora train \
 ```
 
 `--execute` is mandatory, and the new output directory must not exist or sit
-inside the Git checkout. The procedure sets Hugging Face and Transformers to
+inside **any** Git checkout (including unrelated clones, submodules and Git
+worktrees). The path check also refuses symlink/junction/reparse-point parents,
+UNC/device paths, alternate data streams and parent traversal; use a
+pre-existing, intentionally private local directory as its parent. This is a
+source-side path check, **not** evidence of private host ACLs or protection
+from another process replacing a path between validation and use. The
+procedure sets Hugging Face and Transformers to
 offline mode, loads only an already-present local safetensors checkpoint with
 `trust_remote_code=False`, and selects `AutoModelForCausalLM` to train the
 Qwen3.5 **text-only** tower. It uses a small LoRA targeting `q_proj` and

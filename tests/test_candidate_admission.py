@@ -4,11 +4,13 @@ from __future__ import annotations
 
 import hashlib
 import json
+import os
 from pathlib import Path
 import subprocess
 import sys
 import tempfile
 import unittest
+from unittest.mock import patch
 
 from training.admit_candidates import AdmissionError, admit
 
@@ -78,6 +80,7 @@ class AdmissionTests(unittest.TestCase):
     def run_admission(self) -> dict:
         return admit(self.candidate_path, self.approval_path, self.output)
 
+    @unittest.skipUnless(os.name == "posix", "private candidate output requires POSIX custody")
     def test_explicit_private_attestations_export_three_trainer_compatible_splits(self) -> None:
         receipt = self.run_admission()
         self.assertEqual(receipt["status"], "admitted_private_only_not_trained")
@@ -149,6 +152,7 @@ class AdmissionTests(unittest.TestCase):
             self.run_admission()
         self.assertFalse(self.output.exists())
 
+    @unittest.skipUnless(os.name == "posix", "private candidate output requires POSIX custody")
     def test_publication_defaults_to_false_in_every_exported_record(self) -> None:
         for item in self.approval["records"]:
             item.pop("permission_to_publish_adapter")
@@ -178,6 +182,54 @@ class AdmissionTests(unittest.TestCase):
             admit(self.candidate_path, self.approval_path,
                   Path(__file__).resolve().parents[1] / "training" / "scratch-export")
         self.assertFalse(self.output.exists())
+
+    def test_rejects_source_and_destination_inside_unrelated_checkout(self) -> None:
+        checkout = self.root / "an-unrelated-repository"
+        (checkout / ".git").mkdir(parents=True)
+        (checkout / ".git" / "HEAD").write_text("ref: refs/heads/main\n", encoding="utf-8")
+        copy = checkout / "candidate-private-copy.json"
+        copy.write_bytes(self.candidate_path.read_bytes())
+        with self.assertRaisesRegex(AdmissionError, "Git checkout"):
+            admit(copy, self.approval_path, self.output)
+        with self.assertRaisesRegex(AdmissionError, "Git checkout"):
+            admit(self.candidate_path, self.approval_path, checkout / "published-output")
+        self.assertFalse(self.output.exists())
+        self.assertFalse((checkout / "published-output").exists())
+
+    def test_rejects_linked_git_worktree_markers_as_input_and_output(self) -> None:
+        checkout = self.root / "linked-worktree"
+        checkout.mkdir()
+        (checkout / ".git").write_text("gitdir: /example/.git/worktrees/linked\n", encoding="utf-8")
+        copy = checkout / "source.json"
+        copy.write_bytes(self.candidate_path.read_bytes())
+        with self.assertRaisesRegex(AdmissionError, "Git checkout"):
+            admit(copy, self.approval_path, self.output)
+        with self.assertRaisesRegex(AdmissionError, "Git checkout"):
+            admit(self.candidate_path, self.approval_path, checkout / "source-rich-output")
+        self.assertFalse(self.output.exists())
+        self.assertFalse((checkout / "source-rich-output").exists())
+
+    @unittest.skipUnless(os.name == "posix", "POSIX symlink fixture")
+    def test_rejects_symlinked_parent_for_private_inputs_and_output(self) -> None:
+        indirect = self.root / "indirect"
+        indirect.symlink_to(self.root, target_is_directory=True)
+        with self.assertRaisesRegex(AdmissionError, "indirect"):
+            admit(indirect / "candidates.json", self.approval_path, self.output)
+        with self.assertRaisesRegex(AdmissionError, "indirect"):
+            admit(self.candidate_path, self.approval_path, indirect / "export")
+        self.assertFalse(self.output.exists())
+
+    def test_windows_private_output_fails_closed_without_acl_verification(self) -> None:
+        with patch("aeonith.private_output._is_windows", return_value=True):
+            with self.assertRaisesRegex(AdmissionError, "Windows private output ACL"):
+                self.run_admission()
+        self.assertFalse(self.output.exists())
+
+    def test_rejects_unc_and_device_style_paths(self) -> None:
+        for value in ("//server/share/private", r"\\server\share\private", r"\\?\C:\private"):
+            with self.subTest(value=value):
+                with self.assertRaisesRegex(AdmissionError, "UNC or device"):
+                    admit(self.candidate_path, self.approval_path, value)
 
     def test_no_overwrite_even_when_approval_is_valid(self) -> None:
         self.output.mkdir()

@@ -17,9 +17,11 @@ import json
 import os
 from pathlib import Path
 import re
+import stat
 import sys
 from typing import Any
 
+from aeonith.private_output import PrivateOutputError, create_private_directory
 from evaluation.quality_eval import CANONICAL_LENSES, audit_review
 from .corpus import CorpusError, SPLITS, _check_isolation, _check_row
 
@@ -71,15 +73,36 @@ def _read(path: Path, description: str) -> tuple[dict, str]:
 
 
 def _private_path(value: str | Path, *, exists: bool, label: str) -> Path:
-    raw = Path(value).expanduser()
-    if raw.is_symlink():
-        raise AdmissionError(f"{label} must not be a symlink")
-    path = raw.resolve()
+    # Preserve the lexical ancestry before resolving anything: resolve() would
+    # hide a symlink/reparse parent that can redirect private source material.
+    raw_text = os.fspath(value)
+    if raw_text.startswith(("//", "\\\\")) or (os.name != "nt" and re.match(r"^[A-Za-z]:", raw_text)):
+        raise AdmissionError(f"{label} UNC or device paths are not permitted")
+    path = Path(os.path.abspath(Path(value).expanduser()))
+    for ancestor in (path, *path.parents):
+        if ancestor.is_symlink() or (hasattr(ancestor, "is_junction") and ancestor.is_junction()):
+            raise AdmissionError(f"{label} must not traverse an indirect path")
+        try:
+            attrs = ancestor.lstat()
+        except FileNotFoundError:
+            continue
+        if (os.name == "nt" and getattr(attrs, "st_file_attributes", 0)
+                & getattr(stat, "FILE_ATTRIBUTE_REPARSE_POINT", 0)):
+            raise AdmissionError(f"{label} must not traverse an indirect path")
+        marker = ancestor / ".git"
+        if marker.is_symlink():
+            raise AdmissionError(f"{label} must not traverse an indirect Git marker")
+        if marker.is_dir() and (marker / "HEAD").exists():
+            raise AdmissionError(f"{label} must be outside the Git checkout (or any other Git checkout)")
+        if marker.is_file():
+            with marker.open("rb") as stream:
+                if stream.read(7) == b"gitdir:":
+                    raise AdmissionError(f"{label} must be outside the Git checkout (or any other Git checkout)")
     if path == REPO_ROOT or REPO_ROOT in path.parents:
         raise AdmissionError(f"{label} must be outside the Git checkout")
     if exists and not path.is_file():
         raise AdmissionError(f"{label} file missing")
-    if not exists and (raw.exists() or raw.is_symlink() or path.exists()):
+    if not exists and path.exists():
         raise AdmissionError("output directory already exists; never overwrite")
     return path
 
@@ -208,12 +231,6 @@ def _validated_splits(candidate: dict, approval: dict, digest: str) -> dict[str,
     return output
 
 
-def _exclusive_private_write(path: Path, content: str) -> None:
-    fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
-    with os.fdopen(fd, "w", encoding="utf-8", newline="\n") as stream:
-        stream.write(content)
-
-
 def admit(candidate_path: str | Path, approval_path: str | Path, output_path: str | Path) -> dict:
     """Admit only exact-hash, explicitly approved private inputs to NEW JSONL.
 
@@ -261,16 +278,21 @@ def admit(candidate_path: str | Path, approval_path: str | Path, output_path: st
             "separate consent and artifact review remain required before publication",
         ],
     }
-    # All checks run before creating anything. Atomic mkdir prevents accidental
-    # overwrite; in a crash, an incomplete directory remains for manual review.
+    # POSIX: exclusively create a private directory and write via pinned FDs,
+    # refusing symlink ancestry, unsafe parent permissions and Git checkouts.
+    # Windows: fail closed until a verified DACL/handle-based writer exists.
+    # All validations run before creating anything; an interrupted write leaves
+    # an incomplete directory for manual review, never an automatic overwrite.
     try:
-        output.mkdir(mode=0o700)
+        with create_private_directory(output) as private:
+            for split in SPLITS:
+                private.write_text(f"{split}.jsonl", serial[split])
+            private.write_text("admission_receipt.json",
+                               json.dumps(receipt, indent=2, sort_keys=True) + "\n")
+    except PrivateOutputError as exc:
+        raise AdmissionError(str(exc)) from exc
     except FileExistsError as exc:
         raise AdmissionError("output directory already exists; never overwrite") from exc
-    for split in SPLITS:
-        _exclusive_private_write(output / f"{split}.jsonl", serial[split])
-    _exclusive_private_write(output / "admission_receipt.json",
-                             json.dumps(receipt, indent=2, sort_keys=True) + "\n")
     return receipt
 
 
