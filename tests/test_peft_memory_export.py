@@ -5,8 +5,10 @@ from __future__ import annotations
 from enum import Enum
 import hashlib
 import json
+import multiprocessing
 import os
 from pathlib import Path
+import socket
 import stat
 import sys
 import tempfile
@@ -17,6 +19,15 @@ from unittest.mock import patch
 from aeonith.private_output import PrivateOutputError
 from training.peft_memory_export import export_peft_adapter_to_broker
 from training.private_artifact_broker import PinnedTrainingArtifacts
+
+
+def _expect_readback_refusal_in_child(broker, manifest):
+    """Separate-process check so a regressed blocking FIFO open cannot hang CI."""
+    try:
+        broker.verify_adapter_bundle(manifest)
+    except PrivateOutputError:
+        return
+    raise AssertionError("non-regular adapter object was accepted")
 
 
 class _PeftKind(str, Enum):
@@ -99,6 +110,10 @@ class PeftMemoryExportTests(unittest.TestCase):
         self.assertFalse(result["gradient_update_verified"])
         self.assertFalse(result["fresh_process_reload_qualified"])
         self.assertFalse(result["optimizer_start_authorized"])
+        self.assertEqual(result["pinned_bytes_readback"]["status"],
+                         "point_in_time_private_adapter_readback_not_training_qualified")
+        self.assertEqual(result["pinned_bytes_readback"]["files"], result["files"])
+        self.assertFalse(result["pinned_bytes_readback"]["atomic_bundle"])
         self.assertEqual((adapter / "adapter_model.safetensors").read_bytes(), self.fake_weights)
         config = json.loads((adapter / "adapter_config.json").read_text(encoding="utf-8"))
         self.assertEqual(config["target_modules"], ["q_proj", "v_proj"])
@@ -152,6 +167,111 @@ class PeftMemoryExportTests(unittest.TestCase):
                 with self.assertRaisesRegex(PrivateOutputError, "local PEFT"):
                     export_peft_adapter_to_broker(_Model(), broker)
             self.assertEqual(list(broker.adapter_path.iterdir()), [])
+
+    def test_pinned_bundle_readback_refuses_mutation_mode_and_surplus(self):
+        with PinnedTrainingArtifacts.create(self.root / "run") as broker:
+            with patch.dict(sys.modules, self._modules()):
+                expected = export_peft_adapter_to_broker(_Model(), broker)["files"]
+            config = broker.adapter_path / "adapter_config.json"
+            original = config.read_bytes()
+            config.write_bytes(original + b" ")
+            with self.assertRaisesRegex(PrivateOutputError, "identity|readback"):
+                broker.verify_adapter_bundle(expected)
+            config.write_bytes(original)
+            config.chmod(0o644)
+            with self.assertRaisesRegex(PrivateOutputError, "access mode"):
+                broker.verify_adapter_bundle(expected)
+            config.chmod(0o600)
+            (broker.adapter_path / "unexpected.json").write_bytes(b"untrusted")
+            with self.assertRaisesRegex(PrivateOutputError, "extra files"):
+                broker.verify_adapter_bundle(expected)
+
+    def test_interrupted_bundle_never_promotes_partial_bytes(self):
+        with PinnedTrainingArtifacts.create(self.root / "run") as broker:
+            original_write = broker.write_adapter_bytes
+
+            def fail_config(name, payload):
+                if name == "adapter_config.json":
+                    raise PrivateOutputError("injected interruption")
+                return original_write(name, payload)
+
+            with patch.dict(sys.modules, self._modules()):
+                with patch.object(broker, "write_adapter_bytes", side_effect=fail_config):
+                    with self.assertRaisesRegex(PrivateOutputError, "injected interruption"):
+                        export_peft_adapter_to_broker(_Model(), broker)
+            self.assertEqual(set(os.listdir(broker.adapter_path)), {"adapter_model.safetensors"})
+            expected = [
+                {"path": "adapter_model.safetensors", "bytes": len(self.fake_weights),
+                 "sha256": hashlib.sha256(self.fake_weights).hexdigest()},
+                {"path": "adapter_config.json", "bytes": 1,
+                 "sha256": "0" * 64},
+            ]
+            with self.assertRaisesRegex(PrivateOutputError, "incomplete"):
+                broker.verify_adapter_bundle(expected)
+
+    def test_readback_requires_exact_bounded_manifest(self):
+        with PinnedTrainingArtifacts.create(self.root / "run") as broker:
+            with patch.dict(sys.modules, self._modules()):
+                expected = export_peft_adapter_to_broker(_Model(), broker)["files"]
+            altered = [dict(item) for item in expected]
+            altered[0]["bytes"] = True
+            with self.assertRaisesRegex(PrivateOutputError, "digest or size"):
+                broker.verify_adapter_bundle(altered)
+            altered = [dict(item) for item in expected]
+            altered[1]["sha256"] = "F" * 64
+            with self.assertRaisesRegex(PrivateOutputError, "digest or size"):
+                broker.verify_adapter_bundle(altered)
+            altered = [dict(item) for item in expected]
+            altered[1]["path"] = ["adapter_config.json"]
+            with self.assertRaisesRegex(PrivateOutputError, "expected artifacts"):
+                broker.verify_adapter_bundle(altered)
+
+    def test_replaced_adapter_fifo_refuses_without_hanging(self):
+        with PinnedTrainingArtifacts.create(self.root / "run") as broker:
+            with patch.dict(sys.modules, self._modules()):
+                manifest = export_peft_adapter_to_broker(_Model(), broker)["files"]
+            config = broker.adapter_path / "adapter_config.json"
+            config.unlink()
+            os.mkfifo(config, 0o600)
+            child = multiprocessing.get_context("fork").Process(
+                target=_expect_readback_refusal_in_child, args=(broker, manifest))
+            child.start()
+            child.join(2.0)
+            try:
+                self.assertFalse(child.is_alive(), "readback blocked on attacker FIFO")
+                self.assertEqual(child.exitcode, 0)
+            finally:
+                if child.is_alive():
+                    child.terminate()
+                    child.join(2.0)
+
+    def test_replaced_adapter_directory_and_symlink_refuse(self):
+        with PinnedTrainingArtifacts.create(self.root / "run") as broker:
+            with patch.dict(sys.modules, self._modules()):
+                manifest = export_peft_adapter_to_broker(_Model(), broker)["files"]
+            config = broker.adapter_path / "adapter_config.json"
+            config.unlink()
+            config.mkdir(mode=0o700)
+            with self.assertRaises(PrivateOutputError):
+                broker.verify_adapter_bundle(manifest)
+            config.rmdir()
+            config.symlink_to(broker.adapter_path / "adapter_model.safetensors")
+            with self.assertRaises(PrivateOutputError):
+                broker.verify_adapter_bundle(manifest)
+
+    def test_replaced_adapter_socket_refuses_if_socket_creation_permitted(self):
+        try:
+            endpoint = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+        except PermissionError:
+            self.skipTest("sandbox disallows AF_UNIX socket creation")
+        with endpoint, PinnedTrainingArtifacts.create(self.root / "run") as broker:
+            with patch.dict(sys.modules, self._modules()):
+                manifest = export_peft_adapter_to_broker(_Model(), broker)["files"]
+            config = broker.adapter_path / "adapter_config.json"
+            config.unlink()
+            endpoint.bind(str(config))
+            with self.assertRaises(PrivateOutputError):
+                broker.verify_adapter_bundle(manifest)
 
 
 if __name__ == "__main__":

@@ -17,6 +17,20 @@ private file cap (currently 64 MiB). The returned SHA-256 and byte-count
 manifest is **not a training receipt**; its exact status is
 `adapter_bytes_exported_not_training_qualified`.
 
+Before reporting the export, the broker now opens both files by pinned
+`dir_fd` with `O_NOFOLLOW`, rejects extra/missing entries, checks exact mode
+`0600`, owner, regular-file type, single hard link, length, digest and stable
+file metadata across the read. The descriptor is opened with `O_NONBLOCK`:
+even if a same-UID adversary swaps an expected file for a FIFO, readback
+refuses immediately rather than hanging before `fstat`. Socket, directory
+and symlink substitutions are also rejected. Its separate
+`point_in_time_private_adapter_readback_not_training_qualified` receipt
+proves only a bounded, immediate disk readback. An interrupted two-file
+export has no completed receipt and remains private for manual inspection;
+the API does not erase it or accept incomplete outputs. There is still no
+atomic bundle commit, crash-recovery transaction, immutable artifact custody,
+publisher-authenticated provenance or fresh-process PEFT reload proof.
+
 ### Actual verification
 
 `python -m unittest tests.test_peft_memory_export -v` tests six synthetic

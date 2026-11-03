@@ -95,17 +95,20 @@ def export_peft_adapter_to_broker(model: Any, broker: PinnedTrainingArtifacts, *
     # complete pair, and the broker never overwrites existing bytes.
     broker.write_adapter_bytes("adapter_model.safetensors", weights)
     broker.write_adapter_bytes("adapter_config.json", config_bytes)
+    files = [
+        {"path": "adapter_config.json", "bytes": len(config_bytes),
+         "sha256": hashlib.sha256(config_bytes).hexdigest()},
+        {"path": "adapter_model.safetensors", "bytes": len(weights),
+         "sha256": hashlib.sha256(weights).hexdigest()},
+    ]
+    readback = broker.verify_adapter_bundle(files)
     return {
         "schema_version": "aeonith.peft_pinned_export.v1",
         "status": "adapter_bytes_exported_not_training_qualified",
         "adapter_name": adapter_name,
         "tensors_exported": len(tensors),
-        "files": [
-            {"path": "adapter_config.json", "bytes": len(config_bytes),
-             "sha256": hashlib.sha256(config_bytes).hexdigest()},
-            {"path": "adapter_model.safetensors", "bytes": len(weights),
-             "sha256": hashlib.sha256(weights).hexdigest()},
-        ],
+        "files": files,
+        "pinned_bytes_readback": readback,
         "fresh_process_reload_qualified": False,
         "gradient_update_verified": False,
         "optimizer_start_authorized": False,

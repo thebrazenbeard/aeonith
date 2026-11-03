@@ -12,6 +12,7 @@ ancestors. The descriptors remain open for the whole broker context.
 from __future__ import annotations
 
 import json
+import hashlib
 import os
 from dataclasses import dataclass
 from pathlib import Path
@@ -20,7 +21,8 @@ import sys
 from typing import Self
 
 from aeonith.private_output import (
-    PrivateOutputDirectory, PrivateOutputError, create_private_directory,
+    MAX_PRIVATE_FILE_BYTES, PrivateOutputDirectory, PrivateOutputError,
+    create_private_directory,
 )
 
 
@@ -232,6 +234,79 @@ class PinnedTrainingArtifacts:
                 raise PrivateOutputError("private adapter artifact already exists") from exc
             except OSError as exc:
                 raise PrivateOutputError("private adapter artifact write failed") from exc
+
+    def verify_adapter_bundle(self, expected: list[dict[str, object]]) -> dict[str, object]:
+        """Read back exactly two private PEFT files through the pinned directory.
+
+        This is a *point-in-time* byte/mode check, NOT an atomic commit,
+        immutable-file guarantee, PEFT reload, or authorization to train.
+        An interrupted export remains incomplete and must never be promoted.
+        """
+        self.verify_live()
+        directory = self._children["adapter"]
+        allowlist = {"adapter_config.json", "adapter_model.safetensors"}
+        if (not isinstance(expected, list) or len(expected) != 2
+                or any(not isinstance(item, dict)
+                       or set(item) != {"path", "bytes", "sha256"}
+                       or not isinstance(item["path"], str)
+                       for item in expected)):
+            raise PrivateOutputError("adapter readback requires exactly two expected artifacts")
+        by_name = {item["path"]: item for item in expected}
+        if set(by_name) != allowlist or len(by_name) != len(expected):
+            raise PrivateOutputError("adapter readback manifest names are invalid")
+        try:
+            contents = set(os.listdir(directory))
+        except OSError as exc:
+            raise PrivateOutputError("private adapter contents cannot be inspected") from exc
+        if contents != allowlist:
+            raise PrivateOutputError("private adapter bundle is incomplete or contains extra files")
+        result = []
+        for name in sorted(allowlist):
+            item = by_name[name]
+            if (type(item["bytes"]) is not int
+                    or not 0 < item["bytes"] <= MAX_PRIVATE_FILE_BYTES
+                    or not isinstance(item["sha256"], str)
+                    or len(item["sha256"]) != 64
+                    or any(char not in "0123456789abcdef" for char in item["sha256"])):
+                raise PrivateOutputError("invalid adapter readback digest or size")
+            try:
+                # O_NONBLOCK is essential before fstat: a same-UID attacker
+                # could replace this expected file with a FIFO, making a
+                # blocking O_RDONLY open wait indefinitely for a writer.
+                # Regular files ignore O_NONBLOCK; all other types are
+                # rejected by the subsequent fstat before any read occurs.
+                fd = os.open(name, os.O_RDONLY | os.O_NONBLOCK
+                             | os.O_NOFOLLOW | os.O_CLOEXEC,
+                             dir_fd=directory)
+                try:
+                    before = os.fstat(fd)
+                    if (not stat.S_ISREG(before.st_mode) or before.st_uid != os.geteuid()
+                            or stat.S_IMODE(before.st_mode) != 0o600 or before.st_nlink != 1
+                            or before.st_size != item["bytes"]):
+                        raise PrivateOutputError("private adapter file identity or access mode changed")
+                    digest = hashlib.sha256()
+                    total = 0
+                    while chunk := os.read(fd, 1024 * 1024):
+                        total += len(chunk)
+                        if total > item["bytes"]:
+                            raise PrivateOutputError("private adapter file grew during readback")
+                        digest.update(chunk)
+                    after = os.fstat(fd)
+                    if (total != item["bytes"] or digest.hexdigest() != item["sha256"]
+                            or (before.st_dev, before.st_ino, before.st_size,
+                                before.st_mtime_ns, before.st_ctime_ns)
+                            != (after.st_dev, after.st_ino, after.st_size,
+                                after.st_mtime_ns, after.st_ctime_ns)):
+                        raise PrivateOutputError("private adapter bytes changed or failed readback")
+                finally:
+                    os.close(fd)
+            except OSError as exc:
+                raise PrivateOutputError("private adapter descriptor readback failed") from exc
+            result.append({"path": name, "bytes": total, "sha256": digest.hexdigest()})
+        self.verify_live()
+        return {"status": "point_in_time_private_adapter_readback_not_training_qualified",
+                "files": result, "atomic_bundle": False,
+                "fresh_process_reload_qualified": False}
 
     def verify_live(self) -> None:
         if self._root is None:
