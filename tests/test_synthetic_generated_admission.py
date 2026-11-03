@@ -4,11 +4,12 @@ from __future__ import annotations
 
 import hashlib
 import json
+import os
 from pathlib import Path
 import tempfile
 import unittest
 
-from training.admit_candidates import AdmissionError, admit
+from training.admit_candidates import AdmissionError, _validated_splits, admit
 from training.corpus import CorpusError, _check_row
 from training.corpus_admission import (AdmissionError as AuditAdmissionError,
                                       check_approvals, fingerprints_for_text, inspect)
@@ -78,6 +79,19 @@ class SyntheticGeneratedAdmissionTests(unittest.TestCase):
         self.approval_path.write_text(json.dumps(self.approval, sort_keys=True), encoding="utf-8")
 
     def test_approves_exact_model_generated_private_pilot_without_false_human_authorship(self) -> None:
+        if os.name == "nt":
+            # A semantically valid synthetic approval does not grant Windows
+            # private-write authority. Check the admission contract in memory,
+            # then independently verify the Windows custody gate refuses I/O.
+            candidate_sha = hashlib.sha256(self.candidate_path.read_bytes()).hexdigest()
+            splits, mode = _validated_splits(self.candidate, self.approval, candidate_sha)
+            self.assertEqual(mode, "operator_approved_model_generated_private_only")
+            self.assertEqual({split: len(rows) for split, rows in splits.items()},
+                             {"train": 1, "validation": 1, "holdout": 1})
+            with self.assertRaisesRegex(AdmissionError, "Windows private output ACL boundary"):
+                admit(self.candidate_path, self.approval_path, self.output_path)
+            self.assertFalse(self.output_path.exists())
+            return
         receipt = admit(self.candidate_path, self.approval_path, self.output_path)
         self.assertEqual(receipt["approval_mode"], "operator_approved_model_generated_private_only")
         self.assertFalse(receipt["independent_editorial_review_claimed"])
