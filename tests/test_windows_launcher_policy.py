@@ -12,6 +12,7 @@ import unittest
 ROOT = Path(__file__).resolve().parents[1]
 START = (ROOT / "scripts" / "start-aeonith-windows.ps1").read_text(encoding="utf-8")
 STOP = (ROOT / "scripts" / "stop-aeonith-windows.ps1").read_text(encoding="utf-8")
+COPY = (ROOT / "scripts" / "copy-aeonith-token-windows.ps1").read_text(encoding="utf-8") if (ROOT / "scripts" / "copy-aeonith-token-windows.ps1").exists() else ""
 
 
 class WindowsLauncherPolicyTests(unittest.TestCase):
@@ -24,6 +25,17 @@ class WindowsLauncherPolicyTests(unittest.TestCase):
         self.assertIn("ZeroFreeBSTR", START)
         self.assertIn("CopyTokenToClipboard", START)
         self.assertNotIn("Write-Output $token", START)
+
+    def test_token_recovery_does_not_require_restarting_or_reconfiguring_service(self):
+        self.assertIn("Join-Path $env:LOCALAPPDATA 'Aeonith'", COPY)
+        self.assertIn("'token.dpapi'", COPY)
+        self.assertIn("ConvertTo-SecureString", COPY)
+        self.assertIn("SecureStringToBSTR", COPY)
+        self.assertIn("ZeroFreeBSTR", COPY)
+        self.assertIn("Set-Clipboard -Value $token", COPY)
+        for forbidden in ("Start-Process", "Stop-Process", "Set-Content", "Invoke-RestMethod", "Write-Output $token", "tailscale", "ollama", "python.exe"):
+            with self.subTest(forbidden=forbidden):
+                self.assertNotIn(forbidden, COPY)
 
     def test_model_is_literal_loopback_and_preinstalled(self):
         self.assertIn("Get-Command ollama.exe", START)
@@ -50,7 +62,7 @@ class WindowsLauncherPolicyTests(unittest.TestCase):
         self.assertNotIn("Stop-Process -Name", STOP)
 
     def test_scripts_do_not_change_tailscale_or_billing(self):
-        for source in (START, STOP):
+        for source in (START, STOP, COPY):
             with self.subTest(source=source[:80]):
                 self.assertNotIn("tailscale funnel --", source.lower())
                 self.assertNotIn("tailscale funnel reset", source.lower())

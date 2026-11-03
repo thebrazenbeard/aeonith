@@ -69,6 +69,10 @@ the Windows user's profile, outside Git. It does not install software,
 enable Funnel, or configure auto-start. A small local model has only been
 qualified for a synthetic **single-lens** review; the browser defaults to
 one lens and more demanding reviews require independent model validation.
+To retrieve that existing token without restarting Aeonith or remembering
+launcher settings, run `.\scripts\copy-aeonith-token-windows.ps1` in PowerShell
+as the same Windows user. This intentionally uses that user's local clipboard;
+it does not transfer the secret to another device.
 
 `AEONITH_PROVIDER_MODEL=local` is a model label for a simple single-model KoboldCpp instance, not a model download instruction. If your runner requires a particular model ID, use the ID it exposes. Local model interoperability and output quality must be checked with a harmless test passage; not all compatible APIs support JSON mode or structured output equally. The service deliberately does **not** fall back to a remote model if local inference fails.
 

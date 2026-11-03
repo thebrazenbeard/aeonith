@@ -57,7 +57,22 @@ prolonged contention. Preloading can consume multiple GiB and cold requests
 may exceed the application's 50-second provider timeout. Check shared
 workloads before starting it. This performs no explicit download or paid call.
 From the **same Windows user account**, intentionally copy the token to the
-local clipboard with:
+local clipboard with the **standalone recovery command**, even if Aeonith is
+already running or you no longer know which model or Funnel options started it:
+
+```powershell
+.\scripts\copy-aeonith-token-windows.ps1
+```
+
+This command reads the existing per-user DPAPI token, copies it only to that
+Windows session's clipboard, and does not start, stop, warm, or reconfigure
+Aeonith or Ollama. If the token does not exist for this user, it fails without
+generating one. A different Windows login cannot recover the owning account's
+token. It also cannot prove the running process is using that token; if your
+browser rejects it, check service ownership and startup configuration rather
+than changing the token on the fly.
+
+The original launcher option also remains available:
 
 ```powershell
 .\scripts\start-aeonith-windows.ps1 -FunnelOrigin 'https://machine.tailnet.ts.net' -CopyTokenToClipboard
