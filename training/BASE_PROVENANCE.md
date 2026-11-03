@@ -100,3 +100,9 @@ check if the directory changes.
   before loading. Host-owned immutable source custody remains unqualified.
 - This source-only tool does **not** make the unavailable official model
   weights appear on Lappy; no model was downloaded or trained by its tests.
+
+An additional experimental Linux FD-pinned copy-and-digest candidate is
+described in [CHECKPOINT_SNAPSHOT_FEASIBILITY.md](CHECKPOINT_SNAPSHOT_FEASIBILITY.md).
+It reduces pathname-substitution exposure during materialization, but it does
+**not** prove immutable host-owned custody of the checkpoint actually loaded
+by Transformers and must not open the training gates.

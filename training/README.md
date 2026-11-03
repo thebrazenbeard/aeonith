@@ -23,6 +23,10 @@ Related optional, independently gated source tools:
 - [GGUF_HANDOFF.md](GGUF_HANDOFF.md): inspect a saved PEFT adapter and prepare
   a private, unexecuted llama.cpp conversion recipe. No GGUF output is built
   by this source tool.
+- [LOADED_CPU_STEP_FEASIBILITY.md](LOADED_CPU_STEP_FEASIBILITY.md): opt-in,
+  **unwired** path-free CPU LoRA optimizer-loop experiment on a separately
+  loaded PEFT model and in-memory rows. Synthetic tests only; it does not
+  qualify real training or lift the protected execution gates.
 
 The current route targets the **text tower** of the official
 [`Qwen/Qwen3.5-0.8B`](https://huggingface.co/Qwen/Qwen3.5-0.8B),
