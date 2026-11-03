@@ -33,7 +33,7 @@ The browser-only file chooser accepts UTF-8 `.txt`/`.md`/`.markdown`/`.text` fil
 
 Use an existing local model runner such as [KoboldCpp](https://github.com/LostRuins/koboldcpp) with a GGUF text model you already possess or have permission to use. KoboldCpp documents an OpenAI-compatible API at its local `/v1` route, normally port `5001`. Use a model you are licensed to run; Aeonith does not ship or acquire model weights.
 
-1. Launch your own KoboldCpp model **locally** and verify its API is listening on `127.0.0.1:5001`. Its Chat Completions endpoint is ordinarily `http://127.0.0.1:5001/v1/chat/completions` ([upstream endpoint reference](https://github.com/LostRuins/koboldcpp.net/blob/main/src/content/docs/docs/api/endpoints.mdoc)). Keep its listener off public networks.
+1. Launch your own KoboldCpp model **locally**, explicitly setting Network **Host** to `127.0.0.1` (CLI `--host 127.0.0.1`). **KoboldCpp listens on all interfaces by default**; a successful request to `127.0.0.1:5001` alone does *not* prove that LAN clients cannot connect. Check the actual bound listening address before supplying any manuscript. Its Chat Completions endpoint is ordinarily `http://127.0.0.1:5001/v1/chat/completions` ([upstream endpoint reference](https://github.com/LostRuins/koboldcpp.net/blob/main/src/content/docs/docs/api/endpoints.mdoc), [upstream binding guidance](https://koboldcpp.net/docs/api/remote-access/)). See the [read-only qualification checklist](docs/KOBOLDCPP_RUNTIME_QUALIFICATION.md).
 2. From this repository, configure only the local endpoint and generate a fresh service token. No paid API key is needed:
 
    ```bash
