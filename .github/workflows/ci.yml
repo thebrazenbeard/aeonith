@@ -55,6 +55,9 @@ jobs:
           python evaluation/quality_eval.py --help
           cd "$RUNNER_TEMP"
           python -c "import aeonith; assert 'site-packages' in aeonith.__file__, aeonith.__file__"
+          # Imports alone do not prove wheel data-files serve from the installed package.
+          python "$GITHUB_WORKSPACE/scripts/smoke-installed-wheel.py"
+          python -O "$GITHUB_WORKSPACE/scripts/smoke-installed-wheel.py"
           python -m aeonith --help
           python -m aeonith.text_input --help
           python -m aeonith.formatting --help

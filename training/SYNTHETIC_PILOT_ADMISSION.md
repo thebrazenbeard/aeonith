@@ -49,6 +49,37 @@ publish an adapter, or claim independent human editorial quality.
    Repeat the record decision for **each** candidate; a placeholder is not
    admission. Identity strings are operator assertions, not signatures.
 
+   If a record does not meet the operator's standards, use
+   `aeonith.candidate_synthetic_admission.v2` with the same top-level fields,
+   but require an explicit `disposition` on **every** record:
+
+   ```json
+   "records": [
+     {"id": "<candidate ID retained>", "source_id": "<source ID>",
+      "rights_basis": "synthetic_generated", "disposition": "admit",
+      "permission_to_train": true, "editorial_accepted": false,
+      "permission_to_publish_adapter": false},
+     {"id": "<candidate ID rejected>", "source_id": "<source ID>",
+      "rights_basis": "synthetic_generated", "disposition": "reject",
+      "reason_code": "quality", "permission_to_train": false,
+      "editorial_accepted": false, "permission_to_publish_adapter": false},
+     {"id": "<candidate ID excluded>", "source_id": "<source ID>",
+      "rights_basis": "synthetic_generated", "disposition": "exclude",
+      "reason_code": "rights_unclear", "permission_to_train": false,
+      "editorial_accepted": false, "permission_to_publish_adapter": false}
+   ]
+   ```
+
+   Valid exclusion reasons: `rights_unclear`, `quality`, `duplicate`,
+   `out_of_scope`, `other`. This is only a *shape example*: the actual manifest
+   must enumerate each of the candidate IDs once and bind the candidate's
+   exact SHA-256. Rejected/excluded rows are omitted from the emitted JSONL;
+   all train/validation/holdout splits must still retain at least one admitted
+   record. The text-free receipt reports aggregate disposition counts.
+   Revision to any decision requires a new approval-manifest digest and later
+   a new, separate corpus-audit approval. No program may preapprove for the
+   operator or reinterpret `exclude` as consent.
+
 3. `python -m training.admit_candidates --candidates PRIVATE/candidates.json`
    `--approval PRIVATE/approval.json --output PRIVATE/new-admitted-directory`
    mechanically checks exact candidate hashes, record-level decisions, quote

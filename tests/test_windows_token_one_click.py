@@ -13,9 +13,21 @@ import unittest
 
 ROOT = Path(__file__).resolve().parents[1]
 WRAPPER = ROOT / "scripts" / "copy-aeonith-token-windows.cmd"
+INDEX = ROOT / "public" / "index.html"
 
 
 class WindowsTokenOneClickTests(unittest.TestCase):
+    def test_token_field_explains_same_machine_recovery(self):
+        """An operator must not assume a remote browser has VN1's clipboard."""
+        page = INDEX.read_text(encoding="utf-8")
+        self.assertIn('id="service-token"', page)
+        self.assertIn('id="token-note"', page)
+        self.assertIn("copy-aeonith-token-windows.cmd", page)
+        self.assertIn("same Windows account", page)
+        self.assertIn("clipboard stays on that Windows computer", page)
+        self.assertIn("does not restart Aeonith", page)
+        self.assertIn("Never put the token in a URL, chat, or screenshot", page)
+
     @unittest.skipUnless(os.name == "nt", "Windows cmd.exe contract")
     def test_one_click_recovers_with_empty_path_and_missing_token(self):
         """A broken PATH must not bypass the shipped PowerShell interpreter.

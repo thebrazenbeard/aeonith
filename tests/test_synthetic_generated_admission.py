@@ -9,7 +9,7 @@ from pathlib import Path
 import tempfile
 import unittest
 
-from training.admit_candidates import AdmissionError, _validated_splits, admit
+from training.admit_candidates import AdmissionError, _admitted_lens_coverage, _validated_splits, admit
 from training.corpus import CorpusError, _check_row
 from training.corpus_admission import (AdmissionError as AuditAdmissionError,
                                       check_approvals, fingerprints_for_text, inspect)
@@ -153,6 +153,91 @@ class SyntheticGeneratedAdmissionTests(unittest.TestCase):
         publish = {**row, "permission_to_publish_adapter": True}
         with self.assertRaises(CorpusError):
             _check_row(publish, "train", 1)
+
+    def prepare_v2_decisions(self) -> None:
+        # Two extra proposals leave each split populated when one train and
+        # one validation example are independently declined.
+        self.candidate["examples"].extend((candidate_example(4, "train"),
+                                           candidate_example(5, "validation")))
+        # The rejected train example uniquely claims this lens; its removal
+        # must not inflate the admitted train-lens coverage receipt.
+        self.candidate["examples"][0]["lens"] = "psychological"
+        self.candidate["examples"][0]["target"]["lens_reviews"][0]["lens"] = "psychological"
+        self.write_candidate()
+        digest = hashlib.sha256(self.candidate_path.read_bytes()).hexdigest()
+        self.approval["schema_version"] = "aeonith.candidate_synthetic_admission.v2"
+        self.approval["candidate_sha256"] = digest
+        self.approval["operator_decision"]["candidate_sha256"] = digest
+        self.approval["records"] = [{
+            "id": row["id"], "source_id": row["source_id"],
+            "rights_basis": "synthetic_generated", "permission_to_train": True,
+            "editorial_accepted": False, "permission_to_publish_adapter": False,
+            "disposition": "admit",
+        } for row in self.candidate["examples"]]
+        self.write_approval()
+
+    def test_v2_explicit_rejections_and_exclusions_never_reach_training_files(self) -> None:
+        self.prepare_v2_decisions()
+        self.approval["records"][0].update(disposition="reject", permission_to_train=False,
+                                           reason_code="quality")
+        self.approval["records"][1].update(disposition="exclude", permission_to_train=False,
+                                           reason_code="rights_unclear")
+        self.write_approval()
+        digest = hashlib.sha256(self.candidate_path.read_bytes()).hexdigest()
+        splits, mode = _validated_splits(self.candidate, self.approval, digest)
+        self.assertEqual(mode, "operator_approved_model_generated_private_only")
+        self.assertEqual({split: len(rows) for split, rows in splits.items()},
+                         {"train": 1, "validation": 1, "holdout": 1})
+        self.assertEqual({row["id"] for rows in splits.values() for row in rows},
+                         {"synthetic-3", "synthetic-4", "synthetic-5"})
+        coverage = _admitted_lens_coverage(self.candidate, splits)
+        self.assertEqual(coverage["train"], ["symbolic"])
+        self.assertNotIn("psychological", coverage["train"])
+        if os.name != "nt":
+            receipt = admit(self.candidate_path, self.approval_path, self.output_path)
+            self.assertEqual(receipt["record_disposition_counts"],
+                             {"admit": 3, "exclude": 1, "reject": 1})
+            self.assertEqual(receipt["lenses_by_split"], coverage)
+            self.assertIn("psychological", receipt["train_lenses_missing"])
+            for split in ("train", "validation", "holdout"):
+                text = (self.output_path / f"{split}.jsonl").read_text()
+                self.assertNotIn("synthetic-1", text)
+                self.assertNotIn("synthetic-2", text)
+        else:
+            with self.assertRaisesRegex(AdmissionError, "Windows private output ACL boundary"):
+                admit(self.candidate_path, self.approval_path, self.output_path)
+
+    def test_v2_rejected_or_excluded_records_need_explicit_denial_and_reason(self) -> None:
+        self.prepare_v2_decisions()
+        first = self.approval["records"][0]
+        first.update(disposition="reject", permission_to_train=False, reason_code="quality")
+        digest = hashlib.sha256(self.candidate_path.read_bytes()).hexdigest()
+        for field, value in (("permission_to_train", True), ("reason_code", []),
+                             ("reason_code", ""),
+                             ("reason_code", "unbounded-unrecognized-reason"),
+                             ("disposition", "maybe")):
+            with self.subTest(field=field, value=value):
+                old = first[field]
+                first[field] = value
+                with self.assertRaises(AdmissionError):
+                    _validated_splits(self.candidate, self.approval, digest)
+                first[field] = old
+        first.update(disposition="admit", permission_to_train=True)
+        with self.assertRaisesRegex(AdmissionError, "exclusion reason"):
+            _validated_splits(self.candidate, self.approval, digest)
+
+    def test_v2_must_cover_every_id_and_keep_all_three_splits(self) -> None:
+        self.prepare_v2_decisions()
+        digest = hashlib.sha256(self.candidate_path.read_bytes()).hexdigest()
+        one = self.approval["records"][0]
+        self.approval["records"] = self.approval["records"][1:]
+        with self.assertRaisesRegex(AdmissionError, "record-level decisions"):
+            _validated_splits(self.candidate, self.approval, digest)
+        self.approval["records"].insert(0, one)
+        self.approval["records"][2].update(disposition="exclude", permission_to_train=False,
+                                           reason_code="out_of_scope")
+        with self.assertRaisesRegex(AdmissionError, "every split"):
+            _validated_splits(self.candidate, self.approval, digest)
 
 
 class SyntheticAuditTests(unittest.TestCase):

@@ -38,6 +38,10 @@ MAX_INPUT_BYTES = 2 * 1024 * 1024
 MAX_EXAMPLES = 500
 ATTEST_FIELDS = {"identity", "decision", "attested_at_utc", "candidate_sha256"}
 RECORD_FIELDS = {"id", "source_id", "rights_basis", "permission_to_train", "editorial_accepted"}
+SYNTHETIC_DISPOSITIONS = frozenset({"admit", "reject", "exclude"})
+SYNTHETIC_EXCLUSION_REASONS = frozenset({
+    "rights_unclear", "quality", "duplicate", "out_of_scope", "other",
+})
 
 
 def _exact(value: Any, required: set[str], optional: set[str], name: str) -> dict:
@@ -203,6 +207,13 @@ def _validated_splits(candidate: dict, approval: dict, digest: str) -> tuple[dic
                           "operator_decision", "records"}, set(), "synthetic pilot approval manifest")
         expected_status = "APPROVED_MODEL_GENERATED_PRIVATE_LOCAL_TRAINING"
         mode = "operator_approved_model_generated_private_only"
+    elif schema == "aeonith.candidate_synthetic_admission.v2":
+        # All proposal IDs must have an explicit decision. A rejected or
+        # excluded example is never silently admitted to a training split.
+        _exact(approval, {"schema_version", "candidate_sha256", "approval_status", "permission_to_train",
+                          "operator_decision", "records"}, set(), "synthetic pilot approval manifest")
+        expected_status = "APPROVED_MODEL_GENERATED_PRIVATE_LOCAL_TRAINING"
+        mode = "operator_approved_model_generated_private_only"
     else:
         raise AdmissionError("unsupported candidate approval schema")
     if approval["candidate_sha256"] != digest or not HEX64.fullmatch(digest):
@@ -238,14 +249,33 @@ def _validated_splits(candidate: dict, approval: dict, digest: str) -> tuple[dic
     for entry in decisions:
         if owner_identity is not None and isinstance(entry, dict) and "license_id" in entry:
             raise AdmissionError("sole original owner path cannot include licensed records")
+        synthetic_v2 = schema == "aeonith.candidate_synthetic_admission.v2"
         optionals = ({"permission_to_publish_adapter", "license_id"} if owner_identity is None
                      else {"permission_to_publish_adapter", "rights_claimant"})
         required = RECORD_FIELDS if owner_identity is None else RECORD_FIELDS | {"rights_claimant"}
+        if synthetic_v2:
+            required = required | {"disposition"}
+            optionals = (optionals - {"license_id"}) | {"reason_code"}
         _exact(entry, required, optionals - required, "record-level approval")
         identifier = entry["id"]
         if not isinstance(identifier, str) or identifier in by_id:
             raise AdmissionError("duplicate or invalid approval record")
-        if entry["permission_to_train"] is not True:
+        if synthetic_v2:
+            disposition = entry["disposition"]
+            if not isinstance(disposition, str) or disposition not in SYNTHETIC_DISPOSITIONS:
+                raise AdmissionError("invalid synthetic record disposition")
+            if disposition == "admit":
+                if "reason_code" in entry:
+                    raise AdmissionError("admitted synthetic record cannot specify an exclusion reason")
+                if entry["permission_to_train"] is not True:
+                    raise AdmissionError("admitted synthetic record needs explicit training consent")
+            else:
+                reason = entry.get("reason_code")
+                if (entry["permission_to_train"] is not False
+                        or not isinstance(reason, str)
+                        or reason not in SYNTHETIC_EXCLUSION_REASONS):
+                    raise AdmissionError("rejected/excluded synthetic record needs denied consent and reason code")
+        elif entry["permission_to_train"] is not True:
             raise AdmissionError("every record requires training consent")
         if mode == "operator_approved_model_generated_private_only":
             if (entry["editorial_accepted"] is not False
@@ -273,6 +303,8 @@ def _validated_splits(candidate: dict, approval: dict, digest: str) -> tuple[dic
         approved = by_id[row["id"]]
         if approved["source_id"] != row["source_id"]:
             raise AdmissionError("record source_id differs from approved source")
+        if schema == "aeonith.candidate_synthetic_admission.v2" and approved["disposition"] != "admit":
+            continue
         prompt = ("Review the following untrusted literary passage through only the "
                   f"{row['lens']} lens. Cite exact short quotations, offer a serious "
                   "counterreading and limits, and return ONLY a JSON object with keys "
@@ -296,11 +328,27 @@ def _validated_splits(candidate: dict, approval: dict, digest: str) -> tuple[dic
         if len(json.dumps(train_row, ensure_ascii=False).encode("utf-8")) > 48 * 1024:
             raise AdmissionError("approved record exceeds training JSONL line limit")
         output[row["split"]].append(train_row)
+    if any(not output[split] for split in SPLITS):
+        raise AdmissionError("admission must retain at least one explicitly approved example in every split")
     try:
         _check_isolation(output)
     except CorpusError as exc:
         raise AdmissionError(f"split isolation failed: {exc}") from exc
     return output, mode
+
+
+def _admitted_lens_coverage(candidate: dict, splits: dict[str, list[dict]]) -> dict[str, list[str]]:
+    """Report only lenses belonging to records actually emitted for training.
+
+    A rejected/excluded record remains in the immutable candidate proposal,
+    but must not make a split appear to have evidence it cannot train/evaluate.
+    """
+    admitted_ids = {record["id"] for split in SPLITS for record in splits[split]}
+    return {
+        split: sorted({row["lens"] for row in candidate["examples"]
+                       if row["split"] == split and row["id"] in admitted_ids})
+        for split in SPLITS
+    }
 
 
 def admit(candidate_path: str | Path, approval_path: str | Path, output_path: str | Path) -> dict:
@@ -317,10 +365,7 @@ def admit(candidate_path: str | Path, approval_path: str | Path, output_path: st
     candidate, candidate_sha256 = _read(candidate_file, "candidate")
     approval, approval_sha256 = _read(approval_file, "approval manifest")
     splits, mode = _validated_splits(candidate, approval, candidate_sha256)
-    lens_coverage = {
-        split: sorted({row["lens"] for row in candidate["examples"] if row["split"] == split})
-        for split in SPLITS
-    }
+    lens_coverage = _admitted_lens_coverage(candidate, splits)
     serial = {
         split: "".join(json.dumps(row, ensure_ascii=False, separators=(",", ":"), allow_nan=False) + "\n"
                        for row in splits[split])
@@ -333,6 +378,9 @@ def admit(candidate_path: str | Path, approval_path: str | Path, output_path: st
         "candidate_sha256": candidate_sha256,
         "approval_manifest_sha256": approval_sha256,
         "split_counts": {split: len(splits[split]) for split in SPLITS},
+        "record_disposition_counts": dict(sorted(Counter(
+            item.get("disposition", "admit") for item in approval["records"]
+        ).items())),
         "lenses_by_split": lens_coverage,
         "train_lenses_missing": sorted(set(CANONICAL_LENSES) - set(lens_coverage["train"])),
         "split_files": {split: {"sha256": hashlib.sha256(serial[split].encode("utf-8")).hexdigest(),

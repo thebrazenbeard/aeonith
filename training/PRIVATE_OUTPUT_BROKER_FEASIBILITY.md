@@ -22,6 +22,22 @@ pinned root handle. The broker refuses Windows and non-Linux hosts.
   after the original ancestor is renamed and replaced by a symlink.
 - **SURVIVES (narrow):** Child creation, ownership, mode, bare Git denial,
   exclusive receipt and refusal after broker close.
+- **SURVIVES (bounded descriptor-reuse regression):** A stale integer file
+  descriptor that has been rebound with `dup2` to another mode-0700 directory
+  is rejected on root receipt and adapter-byte writes. Before the fix, both
+  adversarial tests failed: the same-process writer could write to the
+  unintended private directory. The broker now retains the creation-time
+  `(device, inode, uid)` for its root and children; each byte operation
+  duplicates the descriptor and compares the *duplicate* against that stored
+  identity before use. A test also swaps the original root fd in the narrow
+  interval between initial verification and duplication. Adapter readback
+  operates on a pinned duplicate for its entire scan. The child handoff now
+  verifies pinned duplicates and reuses creation-time expectations instead
+  of recapturing mutable fd identities. Additional tests reject runtime-fd
+  substitution during handoff duplication and after handoff issuance before
+  a child write. This protects against
+  inadvertent in-process fd-number reuse; it does not sandbox malicious
+  same-UID code or revoke cached paths after broker close.
 - **SURVIVES (narrow):** The broker can now write already-serialized bytes
   for exactly `adapter_config.json` and `adapter_model.safetensors` through a
   duplicated, verified adapter directory handle. The shared private-file

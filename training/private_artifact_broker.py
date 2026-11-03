@@ -141,6 +141,15 @@ class PinnedTrainingArtifacts:
     def __init__(self, private_root: PrivateOutputDirectory, children: dict[str, int]) -> None:
         self._root: PrivateOutputDirectory | None = private_root
         self._children = children
+        root_fd = private_root._directory_fd
+        if root_fd is None:
+            raise PrivateOutputError("private training root unexpectedly closed")
+        # Retain the original object identities, not just their reusable
+        # integer descriptor numbers. A stale number can later name a foreign
+        # directory with equally convincing mode-0700 owner bits.
+        self._identities = {"root": _ChildDirectoryIdentity.from_fd(root_fd),
+                            **{name: _ChildDirectoryIdentity.from_fd(fd)
+                               for name, fd in children.items()}}
 
     @classmethod
     def create(cls, destination: str | os.PathLike[str]) -> Self:
@@ -193,8 +202,32 @@ class PinnedTrainingArtifacts:
         if self._root is None or name not in self._children:
             raise PrivateOutputError("private training broker is closed")
         fd = self._children[name]
-        self._verify_fd(fd)
+        self.verify_live()
         return Path(f"/proc/self/fd/{fd}")
+
+    def _duplicate_pinned(self, name: str) -> int:
+        """Pin one checked directory object for the entire byte operation.
+
+        A verification followed by use of the original integer fd leaves a
+        gap for an in-process close/dup2 reuse. Dup first, then compare the
+        duplicated descriptor with the broker's creation-time identity.
+        """
+        self.verify_live()
+        identity = self._identities[name]
+        try:
+            duplicate = os.dup(identity.fd)
+        except OSError as exc:
+            raise PrivateOutputError("private training descriptor duplication failed") from exc
+        try:
+            self._verify_fd(duplicate)
+            attributes = os.fstat(duplicate)
+            if (attributes.st_dev, attributes.st_ino, attributes.st_uid) != (
+                    identity.device, identity.inode, identity.uid):
+                raise PrivateOutputError("private training descriptor identity changed")
+            return duplicate
+        except BaseException:
+            os.close(duplicate)
+            raise
 
     @property
     def runtime_path(self) -> Path:
@@ -207,7 +240,14 @@ class PinnedTrainingArtifacts:
     def write_receipt(self, content: bytes) -> None:
         if self._root is None:
             raise PrivateOutputError("private training broker is closed")
-        self._root.write_bytes("training_receipt.json", content)
+        writer_fd = self._duplicate_pinned("root")
+        try:
+            writer = PrivateOutputDirectory(Path("/proc/self/fd") / str(writer_fd), writer_fd)
+        except BaseException:
+            os.close(writer_fd)
+            raise
+        with writer:
+            writer.write_bytes("training_receipt.json", content)
 
     def write_adapter_bytes(self, filename: str, content: bytes) -> None:
         """Create one exclusive PEFT-named artifact through the pinned child fd.
@@ -222,12 +262,15 @@ class PinnedTrainingArtifacts:
             raise PrivateOutputError("private adapter artifact name is not allowlisted")
         if self._root is None or "adapter" not in self._children:
             raise PrivateOutputError("private training broker is closed")
-        self.verify_live()
         # Duplication gives this write a temporary owned fd. The original
         # broker retains custody even if the private writer closes its copy.
-        writer_fd = os.dup(self._children["adapter"])
-        with PrivateOutputDirectory(Path("/proc/self/fd") / str(writer_fd), writer_fd) as writer:
-            self._verify_fd(writer_fd)
+        writer_fd = self._duplicate_pinned("adapter")
+        try:
+            writer = PrivateOutputDirectory(Path("/proc/self/fd") / str(writer_fd), writer_fd)
+        except BaseException:
+            os.close(writer_fd)
+            raise
+        with writer:
             try:
                 writer.write_bytes(filename, content)
             except FileExistsError as exc:
@@ -242,8 +285,15 @@ class PinnedTrainingArtifacts:
         immutable-file guarantee, PEFT reload, or authorization to train.
         An interrupted export remains incomplete and must never be promoted.
         """
-        self.verify_live()
-        directory = self._children["adapter"]
+        directory = self._duplicate_pinned("adapter")
+        try:
+            return self._verify_adapter_bundle_fd(directory, expected)
+        finally:
+            os.close(directory)
+
+    def _verify_adapter_bundle_fd(self, directory: int,
+                                  expected: list[dict[str, object]]) -> dict[str, object]:
+        """Readback within an already pinned descriptor; never a mutable fd number."""
         allowlist = {"adapter_config.json", "adapter_model.safetensors"}
         if (not isinstance(expected, list) or len(expected) != 2
                 or any(not isinstance(item, dict)
@@ -311,16 +361,32 @@ class PinnedTrainingArtifacts:
     def verify_live(self) -> None:
         if self._root is None:
             raise PrivateOutputError("private training broker is closed")
-        for fd in self._children.values():
-            self._verify_fd(fd)
+        if self._root._directory_fd != self._identities["root"].fd:
+            raise PrivateOutputError("private training root descriptor identity changed")
+        for name, identity in self._identities.items():
+            if name != "root" and self._children.get(name) != identity.fd:
+                raise PrivateOutputError("private training child descriptor identity changed")
+            identity.verify()
 
     def child_handoff(self) -> TrainingChildHandoff:
-        """Describe currently pinned fds for explicit trusted-child inheritance."""
-        self.verify_live()
-        return TrainingChildHandoff(
-            _ChildDirectoryIdentity.from_fd(self._children["runtime"]),
-            _ChildDirectoryIdentity.from_fd(self._children["adapter"]),
-        )
+        """Describe original fd identities for explicit trusted-child inheritance.
+
+        A freshly observed identity can be laundered if the original integer
+        fd is reassigned after verification but before ``from_fd``. Check
+        duplicates against creation-time identities, then hand off those
+        immutable *original* expectations. A post-return fd substitution is
+        refused by ``TrainingChildHandoff.verify_current_process`` in the
+        child, not silently redescribed as an authorized directory.
+        """
+        duplicates = []
+        try:
+            for name in ("runtime", "adapter"):
+                duplicates.append(self._duplicate_pinned(name))
+            return TrainingChildHandoff(self._identities["runtime"],
+                                        self._identities["adapter"])
+        finally:
+            for fd in duplicates:
+                os.close(fd)
 
     def close(self) -> None:
         children, self._children = self._children, {}

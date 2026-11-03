@@ -85,7 +85,7 @@
           <div class="access-panel">
             <label id="service-token-label" for="service-token">Service access token</label>
             <input id="service-token" name="service-token" type="password" autocomplete="off" placeholder="Enter your access token" aria-describedby="token-note auth-status">
-            <p id="token-note" class="field-note">Enter the operator-issued token to review, or sign in once on HTTPS to use a seven-day browser session. On localhost HTTP, use the token for each review. The token is never saved to browser storage. Do not use an untrusted network connection.</p>
+            <p id="token-note" class="field-note">Need your token? On the Windows computer running Aeonith, under the same Windows account that started it, double-click <code>scripts\copy-aeonith-token-windows.cmd</code> in the Aeonith checkout. This copies the existing token and does not restart Aeonith. The clipboard stays on that Windows computer; it is not automatically available in a browser on another device. Use a trusted transfer if necessary. Never put the token in a URL, chat, or screenshot. Paste the token here for each localhost HTTP review, or sign in once on HTTPS for a seven-day browser session. The token is never saved to browser storage.</p>
             <div id="session-controls">
               <button id="session-sign-in" type="button" class="secondary-action">Remember this browser for 7 days</button>
               <button id="session-sign-out" type="button" class="secondary-action" hidden>Sign out of this browser</button>

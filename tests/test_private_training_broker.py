@@ -13,7 +13,9 @@ import unittest
 from unittest.mock import patch
 
 from aeonith.private_output import PrivateOutputError
-from training.private_artifact_broker import PinnedTrainingArtifacts, TrainingChildHandoff
+from training.private_artifact_broker import (
+    PinnedTrainingArtifacts, TrainingChildHandoff, _ChildDirectoryIdentity,
+)
 
 
 @unittest.skipUnless(sys.platform == "linux", "Linux procfs fd paths are required")
@@ -271,6 +273,99 @@ class LinuxPrivateTrainingBrokerTests(unittest.TestCase):
             _ = broker.adapter_path
         with self.assertRaisesRegex(PrivateOutputError, "closed"):
             broker.write_receipt(b"too late")
+
+    def test_rebound_root_descriptor_cannot_redirect_receipt(self):
+        foreign = self.root / "foreign-root"
+        foreign.mkdir(mode=0o700)
+        with PinnedTrainingArtifacts.create(self.root / "owned-root") as broker:
+            root_fd = broker._root._directory_fd
+            outside_fd = os.open(foreign, os.O_RDONLY | os.O_DIRECTORY)
+            try:
+                # A stale integer fd must never become a write authority if
+                # an in-process consumer closes/rebinds it before use.
+                os.dup2(outside_fd, root_fd)
+                with self.assertRaisesRegex(PrivateOutputError, "identity"):
+                    broker.write_receipt(b"never outside\n")
+            finally:
+                os.close(outside_fd)
+        self.assertFalse((foreign / "training_receipt.json").exists())
+
+    def test_rebound_adapter_descriptor_cannot_redirect_adapter_bytes(self):
+        foreign = self.root / "foreign-adapter"
+        foreign.mkdir(mode=0o700)
+        with PinnedTrainingArtifacts.create(self.root / "owned-adapter") as broker:
+            adapter_fd = broker._children["adapter"]
+            outside_fd = os.open(foreign, os.O_RDONLY | os.O_DIRECTORY)
+            try:
+                os.dup2(outside_fd, adapter_fd)
+                with self.assertRaisesRegex(PrivateOutputError, "identity"):
+                    broker.write_adapter_bytes("adapter_config.json", b"never outside")
+            finally:
+                os.close(outside_fd)
+        self.assertFalse((foreign / "adapter_config.json").exists())
+
+    def test_rebind_between_initial_verification_and_dup_is_rejected(self):
+        foreign = self.root / "racy-foreign"
+        foreign.mkdir(mode=0o700)
+        real_dup = os.dup
+        with PinnedTrainingArtifacts.create(self.root / "racy-root") as broker:
+            root_fd = broker._root._directory_fd
+            outside_fd = os.open(foreign, os.O_RDONLY | os.O_DIRECTORY)
+
+            def swap_then_duplicate(fd):
+                if fd == root_fd:
+                    os.dup2(outside_fd, fd)
+                return real_dup(fd)
+
+            try:
+                with patch("training.private_artifact_broker.os.dup",
+                           side_effect=swap_then_duplicate):
+                    with self.assertRaisesRegex(PrivateOutputError, "identity"):
+                        broker.write_receipt(b"not for the foreign directory")
+            finally:
+                os.close(outside_fd)
+        self.assertFalse((foreign / "training_receipt.json").exists())
+
+    def test_child_handoff_never_recaptures_reassigned_descriptor_identity(self):
+        foreign = self.root / "handoff-foreign"
+        foreign.mkdir(mode=0o700)
+        with PinnedTrainingArtifacts.create(self.root / "handoff-owned") as broker:
+            old_identity = broker._identities["runtime"]
+            # A hostile from_fd() hook previously replaced the runtime fd
+            # after verify_live, and the newly built handoff self-verified
+            # that foreign target. Handoff must use cached origin identities.
+            with patch.object(_ChildDirectoryIdentity, "from_fd",
+                              side_effect=AssertionError("must not recapture")):
+                handoff = broker.child_handoff()
+            self.assertEqual(handoff.runtime, old_identity)
+            foreign_fd = os.open(foreign, os.O_RDONLY | os.O_DIRECTORY)
+            try:
+                os.dup2(foreign_fd, handoff.runtime.fd)
+                with self.assertRaisesRegex(PrivateOutputError, "identity"):
+                    handoff.verify_current_process()
+            finally:
+                os.close(foreign_fd)
+
+    def test_child_handoff_fd_swap_during_dup_fails_before_return(self):
+        foreign = self.root / "handoff-race-foreign"
+        foreign.mkdir(mode=0o700)
+        real_dup = os.dup
+        with PinnedTrainingArtifacts.create(self.root / "handoff-race-owned") as broker:
+            runtime_fd = broker._children["runtime"]
+            foreign_fd = os.open(foreign, os.O_RDONLY | os.O_DIRECTORY)
+
+            def swap_then_duplicate(fd):
+                if fd == runtime_fd:
+                    os.dup2(foreign_fd, fd)
+                return real_dup(fd)
+
+            try:
+                with patch("training.private_artifact_broker.os.dup",
+                           side_effect=swap_then_duplicate):
+                    with self.assertRaisesRegex(PrivateOutputError, "identity"):
+                        broker.child_handoff()
+            finally:
+                os.close(foreign_fd)
 
 
 if __name__ == "__main__":
