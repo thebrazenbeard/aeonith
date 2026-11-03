@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import os
+import json
 from pathlib import Path
 import stat
 import subprocess
@@ -12,7 +13,7 @@ import unittest
 from unittest.mock import patch
 
 from aeonith.private_output import PrivateOutputError
-from training.private_artifact_broker import PinnedTrainingArtifacts
+from training.private_artifact_broker import PinnedTrainingArtifacts, TrainingChildHandoff
 
 
 @unittest.skipUnless(sys.platform == "linux", "Linux procfs fd paths are required")
@@ -77,6 +78,117 @@ class LinuxPrivateTrainingBrokerTests(unittest.TestCase):
                 capture_output=True, text=True, check=True,
             )
             self.assertEqual(child.stdout.strip(), "False")
+
+    def _run_handoff_child(self, handoff, *, pass_fds=(), payload=None):
+        # Separate CPython interpreter. No ML dependencies or expensive work.
+        code = (
+            "import os,sys; "
+            "from training.private_artifact_broker import TrainingChildHandoff; "
+            "h=TrainingChildHandoff.from_json(sys.argv[1]); "
+            "fds=h.verify_current_process(); "
+            "fd=os.open('child.fixture',os.O_WRONLY|os.O_CREAT|os.O_EXCL|os.O_NOFOLLOW,0o600,dir_fd=fds['adapter']); "
+            "os.write(fd,b'inherited and pinned'); os.close(fd)"
+        )
+        return subprocess.run(
+            [sys.executable, "-c", code, payload if payload is not None else handoff.to_json()],
+            cwd=Path(__file__).resolve().parents[1],
+            capture_output=True, text=True, pass_fds=pass_fds,
+        )
+
+    def test_explicit_pass_fds_child_survives_ancestor_swap(self):
+        original = self.root / "original"
+        original.mkdir(mode=0o700)
+        attacker = self.root / "attacker"
+        attacker.mkdir(mode=0o700)
+        with PinnedTrainingArtifacts.create(original / "run") as broker:
+            handoff = broker.child_handoff()
+            self.assertEqual(tuple(sorted(handoff.pass_fds)), handoff.pass_fds)
+            original.rename(self.root / "moved")
+            original.symlink_to(attacker, target_is_directory=True)
+            child = self._run_handoff_child(handoff, pass_fds=handoff.pass_fds)
+            self.assertEqual(child.returncode, 0, child.stderr)
+        self.assertEqual(
+            (self.root / "moved" / "run" / "adapter" / "child.fixture").read_bytes(),
+            b"inherited and pinned",
+        )
+        self.assertFalse((attacker / "run").exists())
+
+    def test_uninherited_child_fails_before_writing(self):
+        with PinnedTrainingArtifacts.create(self.root / "no-inherit") as broker:
+            handoff = broker.child_handoff()
+            child = self._run_handoff_child(handoff)
+            self.assertNotEqual(child.returncode, 0)
+        self.assertFalse((self.root / "no-inherit" / "adapter" / "child.fixture").exists())
+
+    def test_tampered_handoff_identity_fails_before_writing(self):
+        with PinnedTrainingArtifacts.create(self.root / "tampered") as broker:
+            handoff = broker.child_handoff()
+            payload = json.loads(handoff.to_json())
+            payload["adapter"]["inode"] += 1
+            child = self._run_handoff_child(handoff, pass_fds=handoff.pass_fds,
+                                            payload=json.dumps(payload))
+            self.assertNotEqual(child.returncode, 0)
+        self.assertFalse((self.root / "tampered" / "adapter" / "child.fixture").exists())
+
+    def test_inherited_descriptor_reassigned_to_other_directory_fails(self):
+        other = self.root / "other"
+        other.mkdir(mode=0o700)
+        with PinnedTrainingArtifacts.create(self.root / "reassigned") as broker:
+            handoff = broker.child_handoff()
+            code = (
+                "import os,sys; "
+                "from training.private_artifact_broker import TrainingChildHandoff; "
+                "h=TrainingChildHandoff.from_json(sys.argv[1]); "
+                "foreign=os.open(sys.argv[2],os.O_RDONLY|os.O_DIRECTORY); "
+                "os.dup2(foreign,h.adapter.fd); "
+                "h.verify_current_process(); "
+                "fd=os.open('escaped.fixture',os.O_WRONLY|os.O_CREAT|os.O_EXCL,0o600,dir_fd=h.adapter.fd); "
+                "os.close(fd)"
+            )
+            child = subprocess.run(
+                [sys.executable, "-c", code, handoff.to_json(), str(other)],
+                cwd=Path(__file__).resolve().parents[1], capture_output=True,
+                text=True, pass_fds=handoff.pass_fds,
+            )
+            self.assertNotEqual(child.returncode, 0)
+        self.assertFalse((other / "escaped.fixture").exists())
+        self.assertFalse((self.root / "reassigned" / "adapter" / "escaped.fixture").exists())
+
+    def test_child_rechecks_private_directory_access_mode(self):
+        with PinnedTrainingArtifacts.create(self.root / "mode-changed") as broker:
+            handoff = broker.child_handoff()
+            adapter = broker.adapter_path
+            adapter.chmod(0o755)
+            try:
+                child = self._run_handoff_child(handoff, pass_fds=handoff.pass_fds)
+                self.assertNotEqual(child.returncode, 0)
+                self.assertFalse((self.root / "mode-changed" / "adapter" / "child.fixture").exists())
+            finally:
+                adapter.chmod(0o700)
+
+    def test_bad_or_ambiguous_transport_records_are_rejected(self):
+        with PinnedTrainingArtifacts.create(self.root / "bad-records") as broker:
+            payload = json.loads(broker.child_handoff().to_json())
+            payload["runtime"]["fd"] = True
+            with self.assertRaises(PrivateOutputError):
+                TrainingChildHandoff.from_json(json.dumps(payload))
+            payload = json.loads(broker.child_handoff().to_json())
+            payload["runtime"]["fd"] = payload["adapter"]["fd"]
+            with self.assertRaises(PrivateOutputError):
+                TrainingChildHandoff.from_json(json.dumps(payload))
+            with self.assertRaises(PrivateOutputError):
+                TrainingChildHandoff.from_json("{}")
+            valid = broker.child_handoff().to_json()
+            with self.assertRaises(PrivateOutputError):
+                TrainingChildHandoff.from_json(valid.replace('"schema":1', '"schema":1,"schema":1'))
+
+    def test_child_handoff_requires_open_broker(self):
+        broker = PinnedTrainingArtifacts.create(self.root / "closed-handoff")
+        handoff = broker.child_handoff()
+        self.assertIsInstance(TrainingChildHandoff.from_json(handoff.to_json()), TrainingChildHandoff)
+        broker.close()
+        with self.assertRaisesRegex(PrivateOutputError, "closed"):
+            broker.child_handoff()
 
     def test_cached_procfd_path_can_alias_reused_descriptor_after_close(self):
         # A returned Path is not revocable. Closing the broker invalidates its

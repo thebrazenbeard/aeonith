@@ -1,7 +1,7 @@
 # Local training output broker — Linux feasibility probe (SOURCE ONLY)
 
-**Disposition: PARTIAL for individual same-process file operations; UNKNOWN for
-real Transformers/TRL/PEFT training.** This prototype deliberately does not
+**Disposition: PARTIAL for direct same-process and explicit trusted-child
+fd-relative operations; UNKNOWN for real Transformers/TRL/PEFT training.** This prototype deliberately does not
 enable `training.train_lora train --execute` or turn a test into a host lease.
 
 `training.private_artifact_broker.PinnedTrainingArtifacts` is a small Linux-only
@@ -29,6 +29,18 @@ pinned root handle. The broker refuses Windows and non-Linux hosts.
 - **FAILS (scope):** A normal subprocess does not inherit the broker's
   file-descriptor table; its `/proc/self/fd/N` lookup is not the parent
   process's directory. A trainer may fork or launch helpers.
+- **SURVIVES (bounded trusted child):** A separate CPython interpreter launched
+  with `subprocess.run(..., pass_fds=handoff.pass_fds)` can parse the versioned
+  `TrainingChildHandoff` record, `fstat` both inherited descriptors, check
+  procfs identity, owner and mode `0700`, then create a synthetic file using
+  `os.open(name, ..., dir_fd=verified_fd)` under the original private output
+  directory after its ancestor was renamed and replaced by a symlink.
+- **FAILS CLOSED (tested child falsifiers):** No explicit fd inheritance,
+  altered expected inode, a child swapping an inherited descriptor for a
+  foreign directory via `dup2`, and a changed directory mode all stop before
+  synthetic writes. Malformed, duplicate-key, boolean-fd and alias-fd JSON
+  transport records are rejected. Child verification is an explicit required
+  call; it does **not** happen automatically for arbitrary executables.
 - **FAILS (lifetime):** A consumer can cache a `/proc/self/fd/N` `Path` before
   broker closure. After that descriptor closes and its integer is reused,
   the *cached* path can name a different directory. The broker refuses new
@@ -39,6 +51,36 @@ pinned root handle. The broker refuses Windows and non-Linux hosts.
   optional worker. None of these optional ML libraries is installed in the
   scratch test environment. No optimizer, artifact save, or adapter reload
   was run.
+
+### Exact handoff boundary and limitations
+
+While the parent `PinnedTrainingArtifacts` context is open, it may call
+`handoff = broker.child_handoff()`, then pass `handoff.to_json()` to a **trusted,
+specifically reviewed** subprocess and set
+`pass_fds=handoff.pass_fds` on Linux. The child must call
+`TrainingChildHandoff.from_json(record).verify_current_process()` *before*
+using the returned descriptors, and keep those descriptors open and unchanged
+while doing fd-relative output. `pass_fds` is explicit: an ordinary process
+creation intentionally inherits no broker directories.
+
+This record consists only of descriptor numbers and observed `(device, inode,
+uid)` metadata. **It is not signed, a capability grant, an executable approval,
+or cross-process attestation.** A malicious child can ignore validation,
+alter descriptor state after checking, forge records and write through any
+permissions it already has. `pass_fds` conveys directory handles to the child,
+which increases the child's access to those directories by design. Do not
+pass it to an untrusted program. A parent may close/reassign its descriptors
+before spawn, a child may close/reassign them after validation, and cached
+`/proc/self/fd/N` strings can alias recycled numbers. The root's final
+human-readable path can also change via ancestor rename; descriptor identity
+alone does not prove durable publishing location or correct post-run readback.
+
+**No proof of SFTTrainer/PEFT integration follows:** they may resolve paths,
+spawn workers without inherited fds, create outputs outside supplied paths,
+or cache path strings after descriptors close. These real writers remain
+unobserved. The new tests execute only synthetic child-file creation, not a
+training checkpoint, adapter reload, restart recovery, external executable
+authorization, trainer source audit or hardware lease.
 
 ### Required before lifting the real optimizer gate
 

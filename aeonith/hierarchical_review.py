@@ -14,7 +14,7 @@ import hashlib
 from typing import Any
 
 from .book_review import SCHEMA as BATCH_SCHEMA
-from .longform import MAX_SEGMENTS, MAX_SOURCE_CHARS
+from .longform import MAX_SEGMENTS, MAX_SOURCE_CHARS, LongformPlanError, plan_longform
 
 SCHEMA = "aeonith.hierarchical_motif_candidates.v1"
 MAX_PHRASES = 16
@@ -180,10 +180,58 @@ def _evidence_from_report(source: str, report: Mapping[str, Any]) -> tuple[list[
     return verified, completed_sections, planned_count
 
 
+def _verify_canonical_eligible_plan(
+    source: str, report: Mapping[str, Any], submitted_plan: Mapping[str, Any],
+) -> None:
+    """Reconstruct exact segment boundaries from the eligible source, never from a report.
+
+    This authenticates *source partition consistency*, not provider execution,
+    review correctness, full-source authorship or checkpoint marker placement.
+    """
+    _require(isinstance(submitted_plan, Mapping))
+    try:
+        canonical = plan_longform(
+            source, title=submitted_plan.get("title"),
+            max_chunk_chars=submitted_plan.get("max_chunk_chars"),
+            max_request_bytes=submitted_plan.get("max_request_bytes"),
+        )
+    except (LongformPlanError, TypeError, ValueError, UnicodeError) as exc:
+        raise HierarchicalReviewError("invalid canonical eligible-source plan") from exc
+    _require(dict(submitted_plan) == canonical)
+
+    index = report["cross_segment_evidence_index"]
+    actual_sections = index["sections"]
+    _require(len(actual_sections) == len(canonical["sections"]))
+    expected_segments = {segment["segment_id"]: segment for segment in canonical["segments"]}
+    for actual_section, planned_section in zip(actual_sections, canonical["sections"]):
+        _require(all(actual_section.get(key) == planned_section[key] for key in (
+            "section_index", "start", "end", "label",
+        )))
+        section_segments = [s for s in canonical["segments"]
+                            if s["section_index"] == planned_section["section_index"]]
+        _require(len(actual_section["segments"]) == len(section_segments))
+        for observed, planned in zip(actual_section["segments"], section_segments):
+            _require(observed.get("segment_id") == planned["segment_id"])
+            _require(observed.get("source_sha256") == planned["source_sha256"])
+    for review in report["reviews"]:
+        planned = expected_segments.get(review["segment_id"])
+        _require(planned is not None)
+        _require(review.get("start") == planned["start"])
+        _require(review.get("end") == planned["end"])
+        _require(review.get("source_sha256") == planned["source_sha256"])
+    expected_offset_scope = (
+        "eligible_post_checkpoint_source" if report["scope"] == "after_checkpoint_exclusive"
+        else "full_submitted_source"
+    )
+    _require(index.get("offset_scope") == expected_offset_scope)
+
+
 def derive_cross_section_motif_candidates(
     source_text: str,
     completed_batch_report: Mapping[str, Any],
     literal_phrases: list[str] | tuple[str, ...],
+    *,
+    canonical_eligible_plan: Mapping[str, Any] | None = None,
 ) -> dict[str, Any]:
     """Report grounded *lexical* candidate recurrence across reviewed sections.
 
@@ -202,6 +250,9 @@ def derive_cross_section_motif_candidates(
     verified, completed_sections, planned_segments = _evidence_from_report(
         source_text, completed_batch_report
     )
+    partition_verified = canonical_eligible_plan is not None
+    if partition_verified:
+        _verify_canonical_eligible_plan(source_text, completed_batch_report, canonical_eligible_plan)
     completed_segments = completed_batch_report["completed_segments"]
     # A self-consistent report does not authenticate its original segment
     # boundaries. In particular, an attacker can shorten a reviewed excerpt
@@ -209,8 +260,11 @@ def derive_cross_section_motif_candidates(
     # quote itself is grounded, but any claimed whole-source coverage is not.
     reported_coverage = ("none" if completed_segments == 0 else
                          "complete" if completed_segments == planned_segments else "partial")
-    coverage = ("none" if completed_segments == 0 else
-                "report_declared_coverage_unverified")
+    coverage = (
+        "canonical_partition_verified_report_declared_" + reported_coverage
+        if partition_verified else
+        "none" if completed_segments == 0 else "report_declared_coverage_unverified"
+    )
     candidates: list[dict[str, Any]] = []
     for number, phrase in enumerate(phrases, start=1):
         anchors: list[dict[str, Any]] = []
@@ -244,6 +298,9 @@ def derive_cross_section_motif_candidates(
             "status": coverage, "reported_segment_status": reported_coverage,
             "counts_source": "untrusted_batch_report",
             "report_partition_authenticated": False,
+            "canonical_partition_verified": partition_verified,
+            "report_provider_authenticated": False,
+            "checkpoint_marker_authenticated": False,
             "planned_segments": planned_segments,
             "completed_segments": completed_segments,
             "sections_with_completed_segments": sorted(completed_sections),
@@ -254,6 +311,7 @@ def derive_cross_section_motif_candidates(
             "Only reviewed excerpts and validated literal work-quote anchors were considered.",
             "Repeated wording is not proof of theme, narrative causality or intent.",
             "Section boundaries and segment coverage are report-declared, not independently authenticated.",
+            "Optional source-plan replay verifies partition only, not that any critique was truly performed.",
             "No cross-section model analysis or provider calls were performed.",
         ],
     }

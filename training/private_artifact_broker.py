@@ -11,7 +11,9 @@ ancestors. The descriptors remain open for the whole broker context.
 
 from __future__ import annotations
 
+import json
 import os
+from dataclasses import dataclass
 from pathlib import Path
 import stat
 import sys
@@ -20,6 +22,107 @@ from typing import Self
 from aeonith.private_output import (
     PrivateOutputDirectory, PrivateOutputError, create_private_directory,
 )
+
+
+@dataclass(frozen=True)
+class _ChildDirectoryIdentity:
+    """One inherited descriptor and the observed filesystem object identity."""
+
+    fd: int
+    device: int
+    inode: int
+    uid: int
+
+    @classmethod
+    def from_fd(cls, fd: int) -> Self:
+        PinnedTrainingArtifacts._verify_fd(fd)
+        attrs = os.fstat(fd)
+        return cls(fd, attrs.st_dev, attrs.st_ino, attrs.st_uid)
+
+    def verify(self) -> None:
+        if sys.platform != "linux" or not Path("/proc/self/fd").is_dir():
+            raise PrivateOutputError("child output descriptor verification requires Linux procfs")
+        try:
+            PinnedTrainingArtifacts._verify_fd(self.fd)
+            attrs = os.fstat(self.fd)
+        except (OSError, ValueError) as exc:
+            raise PrivateOutputError("child output descriptor is missing or invalid") from exc
+        if (attrs.st_dev, attrs.st_ino, attrs.st_uid) != (self.device, self.inode, self.uid):
+            raise PrivateOutputError("child output descriptor identity changed")
+
+
+@dataclass(frozen=True)
+class TrainingChildHandoff:
+    """Explicit, *untrusted-until-verified* Linux descriptor handoff record.
+
+    The parent must hold the broker open while spawning a *trusted* child with
+    subprocess pass_fds=handoff.pass_fds. The child parses the exact record and
+    calls verify_current_process() before using fd-relative operations. This
+    record has no authentication or revocation; it does not qualify external
+    ML frameworks or authorize arbitrary child executables.
+    """
+
+    runtime: _ChildDirectoryIdentity
+    adapter: _ChildDirectoryIdentity
+
+    @property
+    def pass_fds(self) -> tuple[int, int]:
+        return tuple(sorted((self.runtime.fd, self.adapter.fd)))
+
+    def to_json(self) -> str:
+        return json.dumps({
+            "schema": 1,
+            "runtime": vars(self.runtime),
+            "adapter": vars(self.adapter),
+        }, sort_keys=True, separators=(",", ":"))
+
+    @classmethod
+    def from_json(cls, data: str) -> Self:
+        """Parse a bounded, exact-shape transport record; not an authorization."""
+        if not isinstance(data, str) or len(data) > 2048:
+            raise PrivateOutputError("invalid child output handoff transport")
+
+        def no_duplicate_keys(pairs: list[tuple[str, object]]) -> dict[str, object]:
+            result: dict[str, object] = {}
+            for key, value in pairs:
+                if key in result:
+                    raise PrivateOutputError("duplicate child output handoff field")
+                result[key] = value
+            return result
+
+        try:
+            payload = json.loads(data, object_pairs_hook=no_duplicate_keys)
+        except (ValueError, TypeError) as exc:
+            raise PrivateOutputError("invalid child output handoff JSON") from exc
+        if (not isinstance(payload, dict)
+                or set(payload) != {"schema", "runtime", "adapter"}
+                or type(payload["schema"]) is not int
+                or payload["schema"] != 1):
+            raise PrivateOutputError("unexpected child output handoff schema")
+        parsed = {}
+        for name in ("runtime", "adapter"):
+            item = payload[name]
+            if not isinstance(item, dict) or set(item) != {"fd", "device", "inode", "uid"}:
+                raise PrivateOutputError("unexpected child output descriptor schema")
+            if any(type(value) is not int or value < 0 for value in item.values()) or item["fd"] < 3:
+                raise PrivateOutputError("invalid child output descriptor identity")
+            parsed[name] = _ChildDirectoryIdentity(**item)
+        if parsed["runtime"].fd == parsed["adapter"].fd:
+            raise PrivateOutputError("runtime and adapter output descriptors must differ")
+        return cls(**parsed)
+
+    def verify_current_process(self) -> dict[str, int]:
+        """Return inherited fds *only after* checking both exact identities.
+
+        Use os.open(name, flags, mode, dir_fd=fd), not Path.resolve() or
+        absolute paths. Verification is time-of-check only: the caller must
+        avoid closing/reassigning these descriptors throughout subsequent work.
+        """
+        if self.runtime.fd == self.adapter.fd:
+            raise PrivateOutputError("runtime and adapter output descriptors must differ")
+        self.runtime.verify()
+        self.adapter.verify()
+        return {"runtime": self.runtime.fd, "adapter": self.adapter.fd}
 
 
 class PinnedTrainingArtifacts:
@@ -109,6 +212,14 @@ class PinnedTrainingArtifacts:
             raise PrivateOutputError("private training broker is closed")
         for fd in self._children.values():
             self._verify_fd(fd)
+
+    def child_handoff(self) -> TrainingChildHandoff:
+        """Describe currently pinned fds for explicit trusted-child inheritance."""
+        self.verify_live()
+        return TrainingChildHandoff(
+            _ChildDirectoryIdentity.from_fd(self._children["runtime"]),
+            _ChildDirectoryIdentity.from_fd(self._children["adapter"]),
+        )
 
     def close(self) -> None:
         children, self._children = self._children, {}

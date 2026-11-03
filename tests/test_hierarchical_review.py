@@ -144,6 +144,41 @@ class HierarchicalReviewTests(unittest.TestCase):
         self.assertEqual(result["coverage"]["status"], "report_declared_coverage_unverified")
         self.assertFalse(result["coverage"]["report_partition_authenticated"])
         self.assertEqual(result["candidates"][0]["status"], "recurring_literal_candidate")
+        with self.assertRaises(HierarchicalReviewError):
+            derive_cross_section_motif_candidates(
+                self.source, forged, ["silver bell"], canonical_eligible_plan=self.plan
+            )
+
+    def test_opt_in_canonical_plan_replay_binds_complete_segment_partition(self):
+        result = derive_cross_section_motif_candidates(
+            self.source, self.report(), ["silver bell"], canonical_eligible_plan=self.plan
+        )
+        self.assertEqual(
+            result["coverage"]["status"],
+            "canonical_partition_verified_report_declared_complete",
+        )
+        self.assertTrue(result["coverage"]["canonical_partition_verified"])
+        self.assertFalse(result["coverage"]["report_provider_authenticated"])
+        altered = copy.deepcopy(self.plan)
+        altered["segments"][0]["end"] -= 1
+        with self.assertRaises(HierarchicalReviewError):
+            derive_cross_section_motif_candidates(
+                self.source, self.report(), ["silver bell"], canonical_eligible_plan=altered
+            )
+
+    def test_checkpoint_can_bind_eligible_plan_only_not_excluded_prefix(self):
+        full_source = "TOP_SECRET_PREFIX[ps]" + self.source
+        checkpoint = plan_after_checkpoint(full_source, max_chunk_chars=200)
+        report = review_checkpoint_plan(
+            full_source, checkpoint, provider=QuoteProvider(), lenses=["symbolic"]
+        )
+        result = derive_cross_section_motif_candidates(
+            self.source, report, ["silver bell"],
+            canonical_eligible_plan=checkpoint["excerpt_plan"],
+        )
+        self.assertTrue(result["coverage"]["canonical_partition_verified"])
+        self.assertFalse(result["coverage"]["checkpoint_marker_authenticated"])
+        self.assertNotIn("TOP_SECRET_PREFIX", str(result))
 
     def test_bounded_invalid_or_ambiguous_inputs_rejected(self):
         report = self.report()
