@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import hashlib
 from http.client import HTTPConnection
 import os
 import tempfile
@@ -128,6 +129,48 @@ class LocalServerTests(unittest.TestCase):
             status, _, body = self._request("/index.html")
         self.assertEqual(status, 200)
         self.assertIn(b"review-form", body)
+
+    def test_optional_pinned_release_asset_digest_refuses_mutation(self):
+        with tempfile.TemporaryDirectory() as root:
+            index = Path(root) / "index.html"
+            original = b"<html>trusted release asset</html>"
+            index.write_bytes(original)
+            names = {name for name, _mime in local_server._ASSETS.values()}
+            policy = {name: hashlib.sha256(original if name == "index.html" else
+                                           name.encode("ascii")).hexdigest()
+                      for name in names}
+            with patch.object(local_server, "_asset_root", return_value=Path(root)), \
+                 patch.object(self.server, "asset_digests", policy):
+                status, _, body = self._request("/index.html")
+                self.assertEqual(status, 200)
+                self.assertEqual(body, original)
+                index.write_bytes(b"<html>attacker changed the bytes</html>")
+                status, _, body = self._request("/index.html")
+                self.assertEqual(status, 503)
+                self.assertNotIn(b"attacker changed", body)
+
+    def test_asset_release_policy_validates_coverage_and_refuses_bad_config(self):
+        original = {name: "a" * 64 for name, _mime in local_server._ASSETS.values()}
+        self.assertIsNone(local_server._asset_digest_policy(None))
+        self.assertEqual(local_server._asset_digest_policy(json.dumps(original)), original)
+        for raw in (
+            "", "{}", "[]", "invalid-json", " " * 2049,
+            json.dumps({"index.html": "a" * 64}),
+            json.dumps({**original, "unmapped.txt": "a" * 64}),
+            json.dumps({**original, "app.js": "A" * 64}),
+            '{"index.html":"' + "a" * 64 + '","index.html":"' + "b" * 64 + '"}',
+        ):
+            with self.subTest(raw=raw[:32]), self.assertRaises(ValueError):
+                local_server._asset_digest_policy(raw)
+        with patch.dict(os.environ, {"AEONITH_STATIC_ASSET_SHA256_JSON": json.dumps(original)}):
+            server = create_server(port=0)
+            try:
+                self.assertEqual(server.asset_digests, original)
+            finally:
+                server.server_close()
+        with patch.dict(os.environ, {"AEONITH_STATIC_ASSET_SHA256_JSON": "{}"}):
+            with self.assertRaises(ValueError):
+                create_server(port=0)
 
     @unittest.skipIf(os.name == "nt", "symbolic-link fixture requires POSIX permission semantics")
     def test_static_asset_symlink_outside_asset_root_is_refused(self):

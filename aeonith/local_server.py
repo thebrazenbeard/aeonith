@@ -59,6 +59,40 @@ _MAX_ASSET_BYTES = 2_000_000
 _MAX_CONNECTIONS = 16
 _IDLE_SOCKET_TIMEOUT_SECONDS = 15
 _DNS_LABEL = re.compile(r"[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?\Z")
+_ASSET_DIGEST_ENV = "AEONITH_STATIC_ASSET_SHA256_JSON"
+
+
+def _asset_digest_policy(raw: str | None) -> dict[str, str] | None:
+    """Parse an opt-in release digest policy, never self-attest live bytes.
+
+    The policy is useful only when its values come from an independently
+    verified release and an attacker cannot replace the policy/process code.
+    Unset permits normal editing in a source checkout; malformed/empty values
+    refuse server creation rather than silently disabling a chosen policy.
+    """
+    if raw is None:
+        return None
+    if not isinstance(raw, str) or not 0 < len(raw) <= 2048:
+        raise ValueError("static asset digest policy must be a bounded JSON object")
+    def unique_pairs(items: list[tuple[str, object]]) -> dict[str, object]:
+        output: dict[str, object] = {}
+        for key, value in items:
+            if key in output:
+                raise ValueError("duplicate static asset digest entry")
+            output[key] = value
+        return output
+
+    try:
+        result = json.loads(raw, object_pairs_hook=unique_pairs)
+    except (TypeError, ValueError) as exc:
+        raise ValueError("static asset digest policy is malformed") from exc
+    names = {name for name, _type in _ASSETS.values()}
+    if (not isinstance(result, dict) or set(result) != names
+            or any(not isinstance(value, str)
+                   or re.fullmatch(r"[0-9a-f]{64}", value) is None
+                   for value in result.values())):
+        raise ValueError("static asset digest policy must pin every shipped asset")
+    return result
 
 
 def _funnel_host(value: str | None) -> str | None:
@@ -464,6 +498,11 @@ class _LocalHandler(ReviewHandler):
                             or (after.st_size, after.st_mtime_ns) !=
                                (observed.st_size, observed.st_mtime_ns)):
                         raise ValueError("asset size or metadata changed during read")
+                    release_digests = self.server.asset_digests
+                    if (release_digests is not None
+                            and not hmac.compare_digest(
+                                hashlib.sha256(body).hexdigest(), release_digests[filename])):
+                        raise ValueError("asset bytes differ from operator-pinned release")
                 finally:
                     os.close(fd)
                 if _asset_directory_identity(root) != root_identity:
@@ -608,6 +647,7 @@ def create_server(host: str = "127.0.0.1", port: int = 8765,
         raise ValueError("critic profile is not Funnel-qualified")
     if configured_funnel_host and bind_host != "127.0.0.1":
         raise ValueError("Funnel mode requires the local server bound to 127.0.0.1")
+    asset_digests = _asset_digest_policy(os.environ.get(_ASSET_DIGEST_ENV))
 
     class BoundServer(ThreadingHTTPServer):
         daemon_threads = True
@@ -619,6 +659,7 @@ def create_server(host: str = "127.0.0.1", port: int = 8765,
             self.private_review_slot = threading.BoundedSemaphore(1)
             self.funnel_host = configured_funnel_host
             self.public_limiter = LocalAdmission() if configured_funnel_host else None
+            self.asset_digests = asset_digests
             super().__init__(*args, **kwargs)
 
         def process_request(self, request, client_address):
