@@ -24,7 +24,8 @@ from .verify_base import BaseVerificationError, verify_checkpoint
 
 
 def _require_chat_context(tokenizer: Any, messages: list[dict[str, str]], *,
-                          max_length: int, split: str) -> list[int]:
+                          max_length: int, split: str,
+                          add_generation_prompt: bool = False) -> list[int]:
     """Count actual token IDs, never BatchEncoding mapping keys, before training.
 
     Transformers 5.20 defaults ``apply_chat_template`` to return_dict=True,
@@ -33,7 +34,7 @@ def _require_chat_context(tokenizer: Any, messages: list[dict[str, str]], *,
     """
     try:
         tokens = tokenizer.apply_chat_template(
-            messages, tokenize=True, add_generation_prompt=False,
+            messages, tokenize=True, add_generation_prompt=add_generation_prompt,
             return_dict=False,
         )
     except (AttributeError, TypeError, ValueError) as exc:
@@ -44,6 +45,81 @@ def _require_chat_context(tokenizer: Any, messages: list[dict[str, str]], *,
     if len(tokens) > max_length:
         raise CorpusError(f"{split} record exceeds max_length; no silent truncation")
     return tokens
+
+
+def verify_sft_trainer_supervision(trainer: Any, corpus: dict[str, list[dict[str, str]]],
+                                   tokenizer: Any, *, max_length: int) -> dict[str, Any]:
+    """Fail closed on actual post-TRL label masking before optimizer execution.
+
+    This checks the prepared SFTTrainer datasets, not a separately simulated
+    collator or a requested ``completion_only_loss`` flag. It requires every
+    complete user+assistant chat to match the trainer's token IDs exactly and
+    every target token to be supervised while the entire prompt is masked.
+    The configured trainer collator must also preserve those labels and make
+    every genuine token visible through its attention mask. The current
+    non-packing CPU recipe needs padded attention_mask, not padding-free
+    position_ids; missing masks are a fail-closed incompatibility.
+    This is an optimizer precondition, not proof that gradient updates work.
+    """
+    result: dict[str, Any] = {"status": "sft_labels_verified_not_trained"}
+    for split, prepared in (("train", getattr(trainer, "train_dataset", None)),
+                            ("validation", getattr(trainer, "eval_dataset", None))):
+        expected = corpus.get(split)
+        if prepared is None or not isinstance(expected, list) or not expected:
+            raise CorpusError("prepared SFT supervision dataset is unavailable")
+        try:
+            count = len(prepared)
+        except (TypeError, ValueError) as exc:
+            raise CorpusError("prepared SFT supervision count cannot be verified") from exc
+        if count != len(expected):
+            raise CorpusError("TRL dropped or added supervised examples")
+        supervised_tokens = 0
+        for index, example in enumerate(expected):
+            messages = [{"role": "user", "content": example["prompt"]},
+                        {"role": "assistant", "content": example["completion"]}]
+            full = _require_chat_context(tokenizer, messages, max_length=max_length, split=split)
+            prompt = _require_chat_context(tokenizer, messages[:1], max_length=max_length,
+                                           split=split, add_generation_prompt=True)
+            if not prompt or len(prompt) >= len(full) or full[:len(prompt)] != prompt:
+                raise CorpusError("chat template prompt is not an exact model-context prefix")
+            try:
+                record = prepared[index]
+                token_ids, labels = record["input_ids"], record["labels"]
+            except (KeyError, IndexError, TypeError, ValueError) as exc:
+                raise CorpusError("prepared SFT record has no inspectable labels") from exc
+            if (not isinstance(token_ids, list) or not isinstance(labels, list)
+                    or any(type(v) is not int for v in token_ids + labels)
+                    or token_ids != full or len(labels) != len(full)):
+                raise CorpusError("TRL supervised context differs from exact corpus chat tokens")
+            if labels[:len(prompt)] != [-100] * len(prompt):
+                raise CorpusError("SFT prompt tokens contribute to the loss")
+            if labels[len(prompt):] != full[len(prompt):]:
+                raise CorpusError("SFT completion labels are missing or modified")
+            try:
+                batch = trainer.data_collator([record])
+                batched_ids = batch["input_ids"].tolist()
+                batched_labels = batch["labels"].tolist()
+                attention = batch["attention_mask"].tolist()
+            except (AttributeError, KeyError, IndexError, TypeError, ValueError) as exc:
+                raise CorpusError("actual SFT collator output is not inspectable") from exc
+            if (not isinstance(batched_ids, list) or len(batched_ids) != 1
+                    or not isinstance(batched_labels, list) or len(batched_labels) != 1
+                    or not isinstance(batched_ids[0], list) or not isinstance(batched_labels[0], list)
+                    or len(batched_ids[0]) != len(batched_labels[0])
+                    or batched_ids[0][:len(full)] != full
+                    or batched_labels[0][:len(full)] != labels
+                    or batched_labels[0][len(full):] != [-100] * (len(batched_labels[0]) - len(full))):
+                raise CorpusError("SFT collator altered effective supervised loss labels")
+            if (not isinstance(attention, list) or len(attention) != 1
+                    or not isinstance(attention[0], list)
+                    or len(attention[0]) != len(batched_ids[0])
+                    or any(type(value) is not int for value in attention[0])
+                    or attention[0][:len(full)] != [1] * len(full)
+                    or attention[0][len(full):] != [0] * (len(attention[0]) - len(full))):
+                raise CorpusError("SFT collator attention mask hides genuine supervised tokens or exposes padding")
+            supervised_tokens += len(full) - len(prompt)
+        result[split] = {"examples": count, "supervised_tokens": supervised_tokens}
+    return result
 
 
 def _digest(path: Path) -> str:
@@ -334,6 +410,10 @@ def _train(plan_path: Path, output: Path, *, device: str = "cpu",
         processing_class=tokenizer,
         peft_config=lora_config,
     )
+    # The TRL 1.17.1 implementation builds "labels" during dataset preparation;
+    # verify the *actual* prepared datasets before optimizer/model updates.
+    sft_supervision = verify_sft_trainer_supervision(
+        trainer, dataset, tokenizer, max_length=config["max_length"])
 
     def parameter_fingerprint(parameter: Any) -> str:
         tensor = parameter.detach().to(device="cpu", dtype=torch.float32).contiguous()
@@ -362,6 +442,7 @@ def _train(plan_path: Path, output: Path, *, device: str = "cpu",
         "preflight": preflight,
         "operator_attested_admission": admitted,
         "local_base_file_verification": base_verification,
+        "sft_supervision_pre_optimizer": sft_supervision,
         "adapter_files": files,
         "gradient_update_observed": True,
         "changed_trainable_tensor_count": len(changed),
