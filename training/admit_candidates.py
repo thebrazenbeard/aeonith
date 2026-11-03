@@ -129,7 +129,7 @@ def _attestation(value: Any, role: str, decision: str, digest: str) -> str:
 
 
 def _candidate_rows(candidate: dict) -> list[dict]:
-    _exact(candidate, {"schema_version", "status", "examples"}, set(), "candidate corpus")
+    _exact(candidate, {"schema_version", "status", "examples"}, {"generator_provenance"}, "candidate corpus")
     if candidate["schema_version"] != "aeonith.candidate_corpus.v1" or candidate["status"] != "REVIEW_PENDING_NOT_TRAINABLE":
         raise AdmissionError("input must be a review-pending candidate proposal")
     rows = candidate["examples"]
@@ -165,6 +165,26 @@ def _candidate_rows(candidate: dict) -> list[dict]:
     return rows
 
 
+def _synthetic_provenance(candidate: dict) -> None:
+    """Require exact model-generated origin claims, not invented authorship.
+
+    This remains a self-reported claim: source code cannot prove a passage
+    was generated without third-party copying. The separate post-generation
+    operator approval is required for its exact bytes.
+    """
+    item = _exact(candidate.get("generator_provenance"),
+                  {"origin", "generator", "third_party_text_used",
+                   "human_authorship_claimed", "publication_authorized"}, set(),
+                  "synthetic generator provenance")
+    if (item["origin"] != "model_generated_synthetic"
+            or not isinstance(item["generator"], str)
+            or not 2 <= len(item["generator"].strip()) <= 160
+            or item["third_party_text_used"] is not False
+            or item["human_authorship_claimed"] is not False
+            or item["publication_authorized"] is not False):
+        raise AdmissionError("synthetic pilot must declare model-only generation without human authorship or publication")
+
+
 def _validated_splits(candidate: dict, approval: dict, digest: str) -> tuple[dict[str, list[dict]], str]:
     schema = approval.get("schema_version")
     if schema == "aeonith.candidate_admission.v1":
@@ -178,6 +198,11 @@ def _validated_splits(candidate: dict, approval: dict, digest: str) -> tuple[dic
                           "sole_owner_decision", "records"}, set(), "sole original owner approval manifest")
         expected_status = "APPROVED_SELF_AUTHORED_PRIVATE_LOCAL_TRAINING"
         mode = "sole_original_owner_self_authored"
+    elif schema == "aeonith.candidate_synthetic_admission.v1":
+        _exact(approval, {"schema_version", "candidate_sha256", "approval_status", "permission_to_train",
+                          "operator_decision", "records"}, set(), "synthetic pilot approval manifest")
+        expected_status = "APPROVED_MODEL_GENERATED_PRIVATE_LOCAL_TRAINING"
+        mode = "operator_approved_model_generated_private_only"
     else:
         raise AdmissionError("unsupported candidate approval schema")
     if approval["candidate_sha256"] != digest or not HEX64.fullmatch(digest):
@@ -185,6 +210,12 @@ def _validated_splits(candidate: dict, approval: dict, digest: str) -> tuple[dic
     if (approval["approval_status"] != expected_status
             or approval["permission_to_train"] is not True):
         raise AdmissionError("approval manifest does not authorize private local training")
+    if mode == "operator_approved_model_generated_private_only":
+        _synthetic_provenance(candidate)
+        _attestation(approval["operator_decision"], "synthetic pilot operator",
+                     "approve_exact_model_generated_private_training", digest)
+    elif "generator_provenance" in candidate:
+        raise AdmissionError("model-generated candidates cannot use human-authored or third-party approvals")
     owner_identity: str | None = None
     if mode == "multi_party_private":
         identities = [
@@ -194,7 +225,7 @@ def _validated_splits(candidate: dict, approval: dict, digest: str) -> tuple[dic
         ]
         if len(set(identities)) != len(identities):
             raise AdmissionError("rights-holder, steward and editor identities must be distinct")
-    else:
+    elif mode == "sole_original_owner_self_authored":
         owner_identity = _attestation(
             approval["sole_owner_decision"], "sole original owner",
             "approve_sole_owner_original_private_training", digest,
@@ -214,8 +245,16 @@ def _validated_splits(candidate: dict, approval: dict, digest: str) -> tuple[dic
         identifier = entry["id"]
         if not isinstance(identifier, str) or identifier in by_id:
             raise AdmissionError("duplicate or invalid approval record")
-        if entry["permission_to_train"] is not True or entry["editorial_accepted"] is not True:
-            raise AdmissionError("every record requires training consent and editorial acceptance")
+        if entry["permission_to_train"] is not True:
+            raise AdmissionError("every record requires training consent")
+        if mode == "operator_approved_model_generated_private_only":
+            if (entry["editorial_accepted"] is not False
+                    or entry["rights_basis"] != "synthetic_generated"
+                    or entry.get("permission_to_publish_adapter", False) is not False
+                    or "license_id" in entry):
+                raise AdmissionError("synthetic pilot requires no fabricated editor, self-authorship or publication")
+        elif entry["editorial_accepted"] is not True:
+            raise AdmissionError("every human-sourced record requires editorial acceptance")
         if type(entry.get("permission_to_publish_adapter", False)) is not bool:
             raise AdmissionError("publication permission must be an explicit JSON boolean")
         if owner_identity is not None:
@@ -246,6 +285,8 @@ def _validated_splits(candidate: dict, approval: dict, digest: str) -> tuple[dic
             "permission_to_train": True,
             "permission_to_publish_adapter": approved.get("permission_to_publish_adapter", False),
         }
+        if mode == "operator_approved_model_generated_private_only":
+            train_row["source_origin"] = "model_generated_synthetic"
         if "license_id" in approved:
             train_row["license_id"] = approved["license_id"]
         try:
@@ -302,6 +343,7 @@ def admit(candidate_path: str | Path, approval_path: str | Path, output_path: st
         "attestation_verification": "operator_attested_not_cryptographically_verified",
         "attestation_issuer_identities_independently_authenticated": False,
         "independent_editorial_review_claimed": mode == "multi_party_private",
+        "synthetic_generation_claim_operator_attested_only": mode == "operator_approved_model_generated_private_only",
         "editorial_semantic_quality_independently_verified_by_program": False,
         "blind_holdout_qualified": False,
         "model_trained": False,

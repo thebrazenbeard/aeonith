@@ -205,19 +205,33 @@ def _excluded(obj: dict) -> tuple[set[str], set[str], set[str]]:
     return result[0], result[1], result[2]
 
 
-def _source_metadata(sources: Any, observed: dict[str, list[dict]]) -> dict[str, str]:
+def _source_metadata(sources: Any, observed: dict[str, list[dict]],
+                     candidate_sha256: str | None) -> dict[str, str]:
     if not isinstance(sources, list) or len(sources) > MAX_TOTAL_ROWS:
         raise AdmissionError("invalid source provenance list")
     mapping: dict[str, dict] = {}
     source_text: dict[str, str] = {}
     for source in sources:
-        item = _exact(source, {"source_id", "source_text", "rights_basis", "provenance_reference",
-                               "rights_claimant", "permission_to_train",
-                               "editorial_accepted"}, {"license_id"})
+        synthetic = isinstance(source, dict) and source.get("rights_basis") == "synthetic_generated"
+        if synthetic:
+            item = _exact(source, {"source_id", "source_text", "rights_basis", "provenance_reference",
+                                   "source_origin", "source_generator", "source_candidate_sha256",
+                                   "permission_to_train", "editorial_accepted"})
+            if (candidate_sha256 is None or item["source_candidate_sha256"] != candidate_sha256
+                    or item["source_origin"] != "model_generated_synthetic"
+                    or not isinstance(item["source_generator"], str)
+                    or not 2 <= len(item["source_generator"].strip()) <= 160
+                    or item["editorial_accepted"] is not False):
+                raise AdmissionError("synthetic source lacks exact origin or candidate fingerprint")
+        else:
+            item = _exact(source, {"source_id", "source_text", "rights_basis", "provenance_reference",
+                                   "rights_claimant", "permission_to_train",
+                                   "editorial_accepted"}, {"license_id"})
         sid = item["source_id"]
         if not isinstance(sid, str) or sid in mapping or sid not in observed:
             raise AdmissionError("unknown or duplicate source provenance")
-        for key in ("provenance_reference", "rights_claimant"):
+        for key in (("provenance_reference",) if synthetic
+                    else ("provenance_reference", "rights_claimant")):
             value = item[key]
             if not isinstance(value, str) or not 2 <= len(value.strip()) <= 512 or value.strip().casefold() in BAD_IDENTITIES:
                 raise AdmissionError("unknown source provenance or claimant")
@@ -225,8 +239,13 @@ def _source_metadata(sources: Any, observed: dict[str, list[dict]]) -> dict[str,
                 item["rights_basis"] not in RIGHTS_BASIS or
                 item["rights_basis"] != observed[sid][0]["rights_basis"] or
                 item["permission_to_train"] is not True or
-                item["editorial_accepted"] is not True):
+                (item["editorial_accepted"] is not False if synthetic
+                 else item["editorial_accepted"] is not True)):
             raise AdmissionError("source has unresolved rights or editorial consent")
+        if synthetic and any(row.get("source_origin") != "model_generated_synthetic"
+                             or row["permission_to_publish_adapter"] is not False
+                             for row in observed[sid]):
+            raise AdmissionError("synthetic corpus cannot omit source origin or authorize publication")
         if item["rights_basis"] == "licensed":
             if not isinstance(item.get("license_id"), str) or not item["license_id"].strip():
                 raise AdmissionError("licensed source requires license reference")
@@ -249,9 +268,13 @@ def inspect(manifest_path: str | Path) -> dict[str, Any]:
     """Check private bytes, row contracts, duplicates and excluded fingerprints."""
     manifest_file = _private_file(str(manifest_path), Path.cwd())
     manifest, manifest_sha = _read_metadata(manifest_file)
-    _exact(manifest, {"schema_version", "splits", "exclusions", "sources"})
+    _exact(manifest, {"schema_version", "splits", "exclusions", "sources"}, {"candidate_sha256"})
     if manifest["schema_version"] != "aeonith.corpus_audit_manifest.v1":
         raise AdmissionError("unsupported corpus audit manifest")
+    candidate_sha256 = manifest.get("candidate_sha256")
+    if candidate_sha256 is not None and (not isinstance(candidate_sha256, str)
+                                          or not HEX64.fullmatch(candidate_sha256)):
+        raise AdmissionError("synthetic candidate fingerprint must be an exact SHA-256")
     split_desc = _exact(manifest["splits"], set(SPLITS))
     excluded_desc = _exact(manifest["exclusions"], {"path", "sha256"})
     digests: dict[str, str] = {}
@@ -319,7 +342,13 @@ def inspect(manifest_path: str | Path) -> dict[str, Any]:
                 signatures.append((split, grams))
                 for gram in grams:
                     shingle_index.setdefault(gram, []).append(index)
-    source_text = _source_metadata(manifest["sources"], observed)
+    source_text = _source_metadata(manifest["sources"], observed, candidate_sha256)
+    synthetic_count = sum(row["rights_basis"] == "synthetic_generated"
+                          for rows in dataset.values() for row in rows)
+    total_rows = sum(len(rows) for rows in dataset.values())
+    if (synthetic_count not in (0, total_rows)
+            or (candidate_sha256 is not None) != (synthetic_count == total_rows)):
+        raise AdmissionError("synthetic pilot and human-owned corpus sources cannot be mixed")
     prior_sources: list[tuple[str, str, set[str], list[str]]] = []
     for source_id, passage in sorted(source_text.items()):
         split = source_split[source_id]
@@ -349,7 +378,7 @@ def inspect(manifest_path: str | Path) -> dict[str, Any]:
         "manifest_sha256": manifest_sha, "split_sha256": digests,
         "exclusions_sha256": exclusions_sha,
     }, sort_keys=True, separators=(",", ":")).encode("utf-8")).hexdigest()
-    return {
+    receipt = {
         "schema_version": "aeonith.corpus_audit_receipt.v1",
         "status": "mechanically_checked_not_approved_or_trained",
         "manifest_sha256": manifest_sha,
@@ -366,6 +395,14 @@ def inspect(manifest_path: str | Path) -> dict[str, Any]:
         "semantic_leakage_absent_proven": False,
         "model_trained": False,
     }
+    # Keep legacy approval/receipt shape unchanged: a previously accepted
+    # human-only receipt must remain byte-equal under verify_admission().
+    if synthetic_count:
+        receipt.update({
+            "synthetic_candidate_sha256": candidate_sha256,
+            "all_sources_model_generated_synthetic": True,
+        })
+    return receipt
 
 
 def _attestation(obj: Any, role: str, fingerprint: str, *, decision: str | None = None) -> str:
@@ -396,6 +433,32 @@ def check_approvals(manifest_path: str | Path, approval_path: str | Path) -> dic
     receipt = inspect(manifest_path)
     approvals, approval_sha = _read_metadata(_private_file(str(approval_path), Path.cwd()))
     schema = approvals.get("schema_version")
+    if schema == "aeonith.corpus_audit_synthetic_approval.v1":
+        _exact(approvals, {"schema_version", "corpus_fingerprint_sha256", "candidate_sha256",
+                           "status", "permission_to_train", "operator_decision"})
+        if (approvals["corpus_fingerprint_sha256"] != receipt["corpus_fingerprint_sha256"]
+                or approvals["candidate_sha256"] != receipt.get("synthetic_candidate_sha256")
+                or receipt.get("all_sources_model_generated_synthetic") is not True
+                or approvals["status"] != "APPROVED_MODEL_GENERATED_PRIVATE_TRAINING"
+                or approvals["permission_to_train"] is not True
+                or receipt["any_adapter_publication_permission_declared"]):
+            raise AdmissionError("synthetic corpus is not explicitly approved for private training")
+        _attestation(approvals["operator_decision"], "synthetic_operator",
+                     receipt["corpus_fingerprint_sha256"],
+                     decision="approve_exact_model_generated_private_training")
+        return {
+            **receipt,
+            "status": "operator_attested_model_generated_private_only_not_trained",
+            "approval_mode": "operator_approved_model_generated_private_only",
+            "approval_sha256": approval_sha,
+            "attestation_identities_independently_authenticated": False,
+            "rights_and_editorial_claims_operator_attested_only": True,
+            "synthetic_generation_claim_not_independently_verified": True,
+            "independent_editorial_review_claimed": False,
+            "adapter_publication_authorized": False,
+        }
+    if "synthetic_candidate_sha256" in receipt:
+        raise AdmissionError("model-generated sources require explicit synthetic-only operator approval")
     if schema == "aeonith.corpus_audit_approval.v1":
         _exact(approvals, {"schema_version", "corpus_fingerprint_sha256", "status",
                            "permission_to_train", *ROLES})

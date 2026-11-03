@@ -1,5 +1,10 @@
 # Supplemental private corpus audit
 
+For model-generated synthetic literary training examples, a separate
+[private-only synthetic mode](SYNTHETIC_PILOT_ADMISSION.md) requires a
+post-generation, fingerprint-bound operator decision. It does not claim
+personal human authorship or editorial qualification.
+
 This optional, offline tool verifies source-level passage separation,
 near-duplicate leakage and exact-hash human-attestation records for local
 Aeonith training JSONL. It does **not** supersede the existing

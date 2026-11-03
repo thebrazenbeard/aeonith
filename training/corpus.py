@@ -20,7 +20,7 @@ class CorpusError(ValueError):
 
 
 ALLOWED_MODELS = frozenset({"Qwen/Qwen3.5-0.8B", "Qwen/Qwen3.5-2B", "Qwen/Qwen3.5-4B"})
-RIGHTS_BASIS = frozenset({"self_authored", "public_domain", "cc0", "licensed"})
+RIGHTS_BASIS = frozenset({"self_authored", "public_domain", "cc0", "licensed", "synthetic_generated"})
 SPLITS = ("train", "validation", "holdout")
 HEX40 = re.compile(r"^[0-9a-f]{40}$")
 NAME = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$")
@@ -71,7 +71,7 @@ def _sha256(path: Path) -> str:
 
 def _check_row(raw: Any, split: str, number: int) -> dict[str, str]:
     fields = {"id", "prompt", "completion", "source_id", "rights_basis", "permission_to_train", "permission_to_publish_adapter"}
-    obj = _exact_keys(raw, fields, {"license_id"}, f"{split} row {number}")
+    obj = _exact_keys(raw, fields, {"license_id", "source_origin"}, f"{split} row {number}")
     for name in ("id", "source_id"):
         if not isinstance(obj[name], str) or not NAME.fullmatch(obj[name]):
             raise CorpusError(f"invalid {name} at {split} row {number}")
@@ -87,6 +87,12 @@ def _check_row(raw: Any, split: str, number: int) -> dict[str, str]:
     # numbers/strings as consent, but do not force publication consent to train.
     if type(obj["permission_to_publish_adapter"]) is not bool:
         raise CorpusError(f"invalid adapter publication permission at {split} row {number}")
+    if obj["rights_basis"] == "synthetic_generated":
+        if (obj.get("source_origin") != "model_generated_synthetic"
+                or obj["permission_to_publish_adapter"] is not False):
+            raise CorpusError("synthetic-generated rows require explicit origin and private-only permission")
+    elif "source_origin" in obj:
+        raise CorpusError("source_origin cannot reclassify non-synthetic rights claims")
     if obj["rights_basis"] == "licensed" and not (isinstance(obj.get("license_id"), str) and obj["license_id"].strip()):
         raise CorpusError(f"licensed data requires license_id at {split} row {number}")
     return obj

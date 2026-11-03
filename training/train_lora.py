@@ -109,6 +109,32 @@ def _require_cpu_training(device: str) -> None:
         )
 
 
+def require_actual_cpu_float32_model(model: Any, torch: Any) -> dict[str, int]:
+    """Verify observed loaded parameters, not a requested ``dtype`` argument.
+
+    Certain Transformers/Qwen3.5 releases ignored the caller's requested
+    float32 dtype while unwrapping a multimodal checkpoint to the text tower.
+    A version threshold alone cannot establish the real loaded CPU dtype.
+    This check must precede LoRA wrapping and any optimizer construction.
+    """
+    try:
+        parameters = iter(model.named_parameters())
+        count = 0
+        for name, parameter in parameters:
+            if not isinstance(name, str) or not name:
+                raise CorpusError("loaded model contains an unnamed parameter")
+            if parameter.device.type != "cpu" or parameter.dtype != torch.float32:
+                raise CorpusError("loaded model parameter is not CPU float32; optimizer refused")
+            count += 1
+        if count == 0:
+            raise CorpusError("loaded model contains no verifiable parameters")
+        return {"cpu_float32_parameter_count": count}
+    except CorpusError:
+        raise
+    except (AttributeError, TypeError, ValueError, RuntimeError) as exc:
+        raise CorpusError("loaded model dtype/device could not be verified") from exc
+
+
 def inspect_admitted_plan(plan_path: str | Path, audit_manifest: str | Path,
                           approval: str | Path,
                           admission_receipt: str | Path) -> tuple[dict[str, Any], dict[str, list[dict]], dict[str, Any]]:
@@ -224,6 +250,9 @@ def _train(plan_path: Path, output: Path, *, device: str = "cpu",
         str(base_dir), local_files_only=True, trust_remote_code=False,
         use_safetensors=True, dtype=torch.float32,
     )
+    # Real dtype readback is essential: affected Transformers releases have
+    # silently loaded Qwen3.5 text towers in BF16 despite dtype=float32.
+    require_actual_cpu_float32_model(model, torch)
     tokenizer = AutoTokenizer.from_pretrained(str(base_dir), local_files_only=True, trust_remote_code=False)
     if tokenizer.pad_token is None:
         tokenizer.pad_token = tokenizer.eos_token

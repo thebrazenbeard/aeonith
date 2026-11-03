@@ -1,5 +1,9 @@
 # Private candidate admission (optional)
 
+For *model-generated* original synthetic pilot examples, use the separate
+[synthetic pilot contract](SYNTHETIC_PILOT_ADMISSION.md); do not label those
+examples `self_authored` by Patrick or invent independent rights reviewers.
+
 `python -m training.admit_candidates` converts a *reviewed and separately
 approved* `aeonith.candidate_corpus.v1` proposal into private JSONL files for
 the offline trainer. It **does not** approve the current 14 review-pending
