@@ -507,6 +507,11 @@ def create_server(host: str = "127.0.0.1", port: int = 8765,
     bind_host, address_family = _bind_address(host)
     selected_origin = funnel_origin if funnel_origin is not None else os.environ.get("AEONITH_FUNNEL_ORIGIN")
     configured_funnel_host = _funnel_host(selected_origin)
+    # The service validates environment configuration, but this explicit
+    # argument can override AEONITH_FUNNEL_ORIGIN. Enforce the private critic
+    # restriction against the *effective* listener mode as well.
+    if configured_funnel_host and os.environ.get("AEONITH_MODEL_PROFILE") == "aeonith-critic":
+        raise ValueError("critic profile is not Funnel-qualified")
     if configured_funnel_host and bind_host != "127.0.0.1":
         raise ValueError("Funnel mode requires the local server bound to 127.0.0.1")
 

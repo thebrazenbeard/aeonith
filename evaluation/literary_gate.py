@@ -22,6 +22,7 @@ if __package__ in (None, ""):
     sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from aeonith.core import critique
+from aeonith.private_output import reserve_private_file
 from aeonith.providers import LocalOpenAICompatibleProvider
 from evaluation.quality_eval import (
     _read_json, _write_json_exclusive, audit_review, build_blind_pair, digest,
@@ -174,7 +175,11 @@ def run_candidate(plan: dict[str, Any], candidate: str, *, provider: Any, model:
     if not isinstance(model, str) or not model.strip() or len(model) > 300:
         raise ValueError("model identity is required")
     artifact_sha256 = _local_artifact_digest(artifact_file)
-    fd = os.open(_private_output_path(journal_path), os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
+    # Preserve the friendly Git-checkout error while enforcing the real
+    # handle-pinned boundary against bare repositories, symlinked parents,
+    # and unqualified Windows ACLs. Never run a provider before this succeeds.
+    _private_output_path(journal_path)
+    fd = reserve_private_file(journal_path)
     with os.fdopen(fd, "w", encoding="utf-8") as journal:
         _append_line(journal, {
             "schema_version": JOURNAL_SCHEMA, "plan_sha256": digest(plan),

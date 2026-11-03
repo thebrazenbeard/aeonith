@@ -10,6 +10,7 @@ import subprocess
 import sys
 import tempfile
 import unittest
+from unittest.mock import patch
 
 from aeonith.core import critique
 from evaluation.literary_gate import (
@@ -156,6 +157,34 @@ class LiteraryGateTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "outside Git checkouts"):
             _private_output_path(str(unrelated_checkout / "private-journal.jsonl"))
         self.assertFalse((unrelated_checkout / "private-journal.jsonl").exists())
+
+    @unittest.skipUnless(os.name == "posix", "POSIX private-output handle test")
+    def test_raw_journal_refuses_bare_git_and_symlinked_non_git_parent_before_inference(self):
+        bare = self.root / "other-bare.git"
+        subprocess.run(["git", "init", "--bare", str(bare)], check=True,
+                       capture_output=True, text=True)
+        parent = self.root / "private-parent"
+        parent.mkdir()
+        alias = self.root / "private-parent-alias"
+        alias.symlink_to(parent, target_is_directory=True)
+        for target in (bare / "secret-critique.jsonl", alias / "secret-critique.jsonl"):
+            provider = FakeProvider()
+            with self.subTest(target=target), self.assertRaises((OSError, ValueError)):
+                run_candidate(self.plan, "candidate-A", provider=provider,
+                              model="fake", lane="production", journal_path=str(target))
+            self.assertEqual(provider.calls, 0)
+            self.assertFalse(target.exists())
+
+    @unittest.skipUnless(os.name == "posix", "Windows simulation from POSIX")
+    def test_raw_journal_fails_closed_on_unqualified_windows_acl_before_inference(self):
+        target = self.root / "windows-unqualified.jsonl"
+        provider = FakeProvider()
+        with patch("aeonith.private_output._is_windows", return_value=True):
+            with self.assertRaisesRegex(ValueError, "Windows private output ACL"):
+                run_candidate(self.plan, "candidate-A", provider=provider,
+                              model="fake", lane="production", journal_path=str(target))
+        self.assertFalse(target.exists())
+        self.assertEqual(provider.calls, 0)
 
     def test_identity_preflight_refuses_same_label_or_same_local_bytes(self):
         a, _ = self.journal("candidate-A", model="same-model-label")

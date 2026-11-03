@@ -6,10 +6,13 @@ import os
 from pathlib import Path
 import stat
 import tempfile
+from types import SimpleNamespace
 import unittest
 from unittest.mock import patch
 
-from aeonith.private_output import PrivateOutputError, create_private_directory
+from aeonith.private_output import (
+    PrivateOutputError, create_private_directory, reserve_private_file,
+)
 
 
 @unittest.skipUnless(os.name == "posix", "POSIX descriptor-pinning tests")
@@ -74,6 +77,41 @@ class PrivateOutputDirectoryTests(unittest.TestCase):
         unsafe.chmod(0o777)
         with self.assertRaisesRegex(PrivateOutputError, "unsafe replacement"):
             create_private_directory(unsafe / "run")
+
+    def test_attacker_owned_sticky_parent_cannot_host_private_outputs(self):
+        """Sticky alone cannot protect a child from the parent directory owner.
+
+        CI may run as root; simulate the parent owner's UID without requiring
+        root-owned test setup or making real changes to system accounts.
+        """
+        sticky = self.root / "attacker-owned-sticky"
+        sticky.mkdir(mode=0o700)
+        sticky.chmod(0o1777)
+        real_fstat = os.fstat
+        parent = sticky.stat()
+        foreign_uid = 4242 if os.geteuid() != 4242 else 4243
+
+        def alternate_owner(fd):
+            attrs = real_fstat(fd)
+            if (attrs.st_dev, attrs.st_ino) == (parent.st_dev, parent.st_ino):
+                return SimpleNamespace(st_mode=attrs.st_mode, st_uid=foreign_uid)
+            return attrs
+
+        with patch("aeonith.private_output.os.fstat", side_effect=alternate_owner):
+            with self.assertRaisesRegex(PrivateOutputError, "unsafe replacement"):
+                create_private_directory(sticky / "run")
+            with self.assertRaisesRegex(PrivateOutputError, "unsafe replacement"):
+                reserve_private_file(sticky / "private.json")
+        self.assertFalse((sticky / "run").exists())
+        self.assertFalse((sticky / "private.json").exists())
+
+    def test_owner_controlled_sticky_parent_remains_allowed(self):
+        sticky = self.root / "owner-sticky"
+        sticky.mkdir(mode=0o700)
+        sticky.chmod(0o1777)
+        with create_private_directory(sticky / "run") as output:
+            output.write_bytes("receipt", b"allowed")
+        self.assertEqual((sticky / "run" / "receipt").read_bytes(), b"allowed")
 
     def test_descriptor_pinning_survives_pathname_replacement(self):
         destination = self.root / "run"

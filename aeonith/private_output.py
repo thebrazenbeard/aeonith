@@ -40,9 +40,13 @@ def _open_parent_fd(path: Path) -> int:
             attrs = os.fstat(fd)
             if not stat.S_ISDIR(attrs.st_mode):
                 raise PrivateOutputError("private output parent is not a directory")
-            # Writable ancestors without the sticky bit can be replaced by
-            # other users. A sticky shared temp root (e.g. /tmp) is allowed.
-            if attrs.st_mode & 0o022 and not attrs.st_mode & stat.S_ISVTX:
+            # A sticky bit prevents peers from replacing another user's
+            # entries, but *the directory owner* may still rename or remove
+            # any child. Only a root-owned or self-owned sticky writable
+            # ancestor is an acceptable shared-temp boundary (e.g. /tmp).
+            if (attrs.st_mode & 0o022 and
+                    (not attrs.st_mode & stat.S_ISVTX or
+                     attrs.st_uid not in (0, os.geteuid()))):
                 raise PrivateOutputError("private output parent permits unsafe replacement")
             try:
                 marker = os.stat(".git", dir_fd=fd, follow_symlinks=False)

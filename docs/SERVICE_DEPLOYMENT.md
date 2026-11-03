@@ -57,7 +57,8 @@ If the model is not ready, leave `AEONITH_ENABLE_LIVE_REVIEWS` unset or set it t
 | `AEONITH_PROVIDER_MODEL` | Identifier accepted by the already-running local model server |
 | `AEONITH_MAX_LENSES` | Optional selected-lens ceiling, 1–14 (default 14); not a billing budget |
 | `AEONITH_MAX_OUTPUT_TOKENS` | Optional per-call response limit, 256–8192 (default 4096) |
-| `AEONITH_PROVIDER_TIMEOUT_SECONDS` | Optional model response timeout, 1–50 seconds (default 45) |
+| `AEONITH_PROVIDER_TIMEOUT_SECONDS` | Optional local model response timeout: legacy 1–50 seconds (default 45); explicitly opted-in private `aeonith-critic` profile 1–110 seconds |
+| `AEONITH_MODEL_PROFILE` | Optional `legacy` (default) or `aeonith-critic`. Critic requires the exact `aeonith-critic:0.1` model, one lens, at most 2,048 output tokens, structured outputs, disabled JSON-object mode, and no Funnel origin. This only changes bounded source settings, not model availability or public-service qualification. |
 | `AEONITH_LOCAL_JSON_MODE` | `true` (default) requests JSON-mode Chat Completions; set literal `false` if your existing local runner does not support `response_format` |
 | `AEONITH_STRUCTURED_OUTPUTS` | Literal `false` (default) or `true`; strict schema mode requires a compatible local runner and model |
 | `AEONITH_FUNNEL_ORIGIN` | Optional exact HTTPS origin `https://machine.tailnet.ts.net` for the user's own Tailscale Funnel. Unset by default; never a wildcard or arbitrary domain |

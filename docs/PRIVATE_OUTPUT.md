@@ -15,7 +15,9 @@ On POSIX/Linux, this helper:
 - Refuses directories inside any discoverable Git checkout, including
   worktree `.git` files, and refuses ancestors that other users can replace
   via non-sticky group/world-write permissions. Shared sticky directories
-  such as `/tmp` are permitted.
+  such as `/tmp` are permitted only when their owner is root or the current
+  effective user; another account owning a sticky parent could still remove
+  or rename the new child directory.
 - Creates a **new** per-run directory with mode `0700` and checks owner and
   permissions. Writes new regular files with `O_EXCL|O_NOFOLLOW`, mode `0600`,
   checks owner/permissions and `fsync`s the bytes. It never overwrites an

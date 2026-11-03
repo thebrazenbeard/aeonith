@@ -38,6 +38,9 @@ if ($ModelProfile -eq 'aeonith-critic') {
 if ($FunnelOrigin -and $Port -ne 8765) {
     throw 'Nondefault port with FunnelOrigin is not qualified.'
 }
+if ($FunnelOrigin -and $ModelProfile -eq 'aeonith-critic') {
+    throw 'The CPU critic profile is private-only; its longer inference timeout is not Funnel-qualified.'
+}
 
 function Resolve-LocalPythonExecutable([string]$candidate) {
     if (-not [IO.Path]::IsPathRooted($candidate) -or
@@ -184,7 +187,7 @@ $occupied = @(Get-NetTCPConnection -State Listen -LocalPort $Port -ErrorAction S
 if ($occupied.Count -gt 0) { throw ('Port ' + $Port + ' is in use; refusing to interrupt another service.') }
 
 # Ollama unloads idle models after five minutes by default, which can make a
-# cold CPU inference exceed the app's bounded 50-second timeout. Preload only
+# cold CPU inference exceed the legacy 50-second timeout. Preload only
 # the already-installed model, with no user content or generated text, and
 # keep legacy models resident for 24 hours; the opt-in critic profile uses
 # five minutes to reduce long GPU contention. This remains a local operation.
@@ -202,6 +205,7 @@ $settings = @{
     AEONITH_PROVIDER_KIND = 'local-openai-compatible'
     AEONITH_PROVIDER_URL = 'http://127.0.0.1:11434/v1/chat/completions'
     AEONITH_PROVIDER_MODEL = $Model
+    AEONITH_MODEL_PROFILE = 'legacy'
     AEONITH_ENABLE_LIVE_REVIEWS = 'true'
     AEONITH_FUNNEL_ORIGIN = $FunnelOrigin
     AEONITH_MAX_LENSES = '1'
@@ -212,6 +216,10 @@ $settings = @{
 }
 if ($ModelProfile -eq 'aeonith-critic') {
     # Observed single-lens structural pilot: schema-constrained 2,048 tokens.
+    # 110s allows the observed ~80s CPU pilot; no Funnel exposure until
+    # separately qualified. Never change the legacy default 50s budget.
+    $settings['AEONITH_MODEL_PROFILE'] = 'aeonith-critic'
+    $settings['AEONITH_PROVIDER_TIMEOUT_SECONDS'] = '110'
     $settings['AEONITH_MAX_OUTPUT_TOKENS'] = '2048'
     $settings['AEONITH_STRUCTURED_OUTPUTS'] = 'true'
     $settings['AEONITH_LOCAL_JSON_MODE'] = 'false'

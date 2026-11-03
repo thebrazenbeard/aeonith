@@ -86,6 +86,29 @@ class FunnelOriginValidationTests(unittest.TestCase):
             with self.assertRaises(ValueError):
                 create_server(port=0)
 
+    def test_explicit_public_origin_cannot_bypass_private_critic_timeout(self):
+        # create_server's argument overrides AEONITH_FUNNEL_ORIGIN; the longer
+        # critic timeout must still be private at the effective server boundary.
+        with patch.dict(os.environ, {
+            "AEONITH_FUNNEL_ORIGIN": "",
+            "AEONITH_MODEL_PROFILE": "aeonith-critic",
+            "AEONITH_PROVIDER_TIMEOUT_SECONDS": "110",
+        }, clear=True):
+            with self.assertRaisesRegex(ValueError, "critic.*Funnel"):
+                create_server(port=0, funnel_origin=_ORIGIN)
+            private = create_server(port=0, funnel_origin="")
+            try:
+                self.assertIsNone(private.funnel_host)
+            finally:
+                private.server_close()
+        # Public legacy operation is unaffected by a separate private pilot.
+        with patch.dict(os.environ, {"AEONITH_MODEL_PROFILE": "legacy"}, clear=True):
+            public = create_server(port=0, funnel_origin=_ORIGIN)
+            try:
+                self.assertEqual(public.funnel_host, _HOST)
+            finally:
+                public.server_close()
+
 
 class FunnelHTTPTests(unittest.TestCase):
     @classmethod

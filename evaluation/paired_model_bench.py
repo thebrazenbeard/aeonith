@@ -16,9 +16,13 @@ import math
 import os
 from pathlib import Path
 import re
+import stat
 import sys
 from typing import Any
 
+from aeonith.private_output import (
+    PrivateOutputDirectory, PrivateOutputError, create_private_directory,
+)
 from .quality_eval import audit_review, build_blind_pair, digest, make_manifest
 
 
@@ -68,7 +72,9 @@ def _private_path(value: str | Path, *, must_exist: bool, label: str) -> Path:
     raw = Path(value).expanduser()
     if raw.is_symlink():
         raise BenchError(f"{label} symlinks are not allowed")
-    path = raw.resolve()
+    # Keep the raw output's components intact: .resolve() follows a linked
+    # ancestor, hiding it from the descriptor-pinned private-output boundary.
+    path = raw.resolve() if must_exist else Path(os.path.abspath(raw))
     if path == REPO_ROOT or REPO_ROOT in path.parents:
         raise BenchError(f"{label} must be outside Git checkout")
     if must_exist and not path.is_file():
@@ -244,11 +250,31 @@ def _validated_runs(bundle: dict) -> tuple[list[dict], dict[str, Any]]:
                        "adapter_not_evaluable": status_counts["adapter_not_evaluable"]}
 
 
-def _write_new_json(path: Path, data: dict) -> None:
-    fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
-    with os.fdopen(fd, "w", encoding="utf-8", newline="\n") as stream:
-        json.dump(data, stream, ensure_ascii=False, sort_keys=True, indent=2, allow_nan=False)
-        stream.write("\n")
+def _new_private_subdir(parent: PrivateOutputDirectory, name: str) -> PrivateOutputDirectory:
+    """Create/pin one private child under the already-pinned output root."""
+    if name not in {"pairs", "keys"}:
+        raise BenchError("unexpected private study subdirectory")
+    # The boundary object owns a pinned parent descriptor; using its current
+    # handle prevents re-resolving a renameable path after creation.
+    parent_fd = parent._directory_fd
+    if parent_fd is None:
+        raise BenchError("private study output root is closed")
+    os.mkdir(name, 0o700, dir_fd=parent_fd)
+    child_fd = os.open(name, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW, dir_fd=parent_fd)
+    try:
+        attrs = os.fstat(child_fd)
+        if (not stat.S_ISDIR(attrs.st_mode) or attrs.st_uid != os.geteuid()
+                or attrs.st_mode & 0o077):
+            raise BenchError("private study subdirectory ownership is not verified")
+        return PrivateOutputDirectory(parent.path / name, child_fd)
+    except BaseException:
+        os.close(child_fd)
+        raise
+
+
+def _private_json(value: dict) -> str:
+    return json.dumps(value, ensure_ascii=False, sort_keys=True, indent=2,
+                      allow_nan=False) + "\n"
 
 
 def prepare(input_path: str | Path, output_dir: str | Path) -> dict[str, Any]:
@@ -326,18 +352,17 @@ def prepare(input_path: str | Path, output_dir: str | Path) -> dict[str, Any]:
             "the A/B display contains private manuscript text and must stay with an authorized reviewer",
         ],
     }
-    # Complete admission occurs in memory before any effect. Exclusive mkdir
-    # and O_EXCL files prevent overwrite; crash leaves an incomplete directory
-    # that the operator must inspect rather than silently reusing.
-    output.mkdir(mode=0o700)
-    pair_dir = output / "pairs"
-    key_dir = output / "keys"
-    pair_dir.mkdir(mode=0o700)
-    key_dir.mkdir(mode=0o700)
-    for run_id, pair, key in pairs:
-        _write_new_json(pair_dir / f"{run_id}.json", pair)
-        _write_new_json(key_dir / f"{run_id}.json", key)
-    _write_new_json(output / "bench_receipt.json", receipt)
+    # Complete admission occurs in memory before any effect. The root and
+    # child directories are pinned and every file is exclusively created via
+    # their descriptor handles; unqualified Windows ACLs fail closed.
+    # Crash leftovers remain visible for owner inspection, never overwritten.
+    with create_private_directory(output) as private_root:
+        with _new_private_subdir(private_root, "pairs") as pair_dir:
+            with _new_private_subdir(private_root, "keys") as key_dir:
+                for run_id, pair, key in pairs:
+                    pair_dir.write_text(f"{run_id}.json", _private_json(pair))
+                    key_dir.write_text(f"{run_id}.json", _private_json(key))
+        private_root.write_text("bench_receipt.json", _private_json(receipt))
     return receipt
 
 
@@ -352,7 +377,7 @@ def main(argv: list[str] | None = None) -> int:
         report = prepare(args.bundle, args.output)
         print(json.dumps(report, sort_keys=True))
         return 0
-    except (BenchError, OSError, UnicodeError) as exc:
+    except (BenchError, PrivateOutputError, OSError, UnicodeError) as exc:
         print(f"Paired evaluation unavailable: {exc}", file=sys.stderr)
         return 2
 
