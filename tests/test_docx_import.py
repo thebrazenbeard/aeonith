@@ -75,6 +75,7 @@ const begin = script.indexOf('function extractDocxText(xml) {');
 const end = script.indexOf('\nfileInput.addEventListener("change"', begin);
 if (begin < 0 || end < 0) throw new Error('DOCX extractor not found');
 const WORD_NS = 'http://schemas.openxmlformats.org/wordprocessingml/2006/main';
+const MC_NS = 'http://schemas.openxmlformats.org/markup-compatibility/2006';
 function node(localName, childNodes = [], namespaceURI = WORD_NS) {
   return {
     localName, namespaceURI, childNodes,
@@ -135,6 +136,39 @@ if (scenario === 'normal') {
   elements.push(node('p'));
   elements.push(node('webHidden'));
   pushText('hidden online');
+} else if (scenario === 'styled_run') {
+  elements.push(node('p'));
+  elements.push(node('rPr'));
+  elements.push(node('rStyle'));
+  pushText('Potentially hidden by a named Word style');
+} else if (scenario === 'styled_paragraph') {
+  elements.push(node('p'));
+  elements.push(node('pPr'));
+  elements.push(node('pStyle'));
+  pushText('Potentially hidden by a paragraph style');
+} else if (scenario === 'mc_alternate') {
+  const alternate = node('AlternateContent', [], MC_NS);
+  const choice = node('Choice', [], MC_NS);
+  const chosenParagraph = node('p');
+  const chosenText = node('t', [textNode('Visible choice')]);
+  const fallback = node('Fallback', [], MC_NS);
+  const fallbackParagraph = node('p');
+  const fallbackText = node('t', [textNode('Invisible fallback')]);
+  choice.parentNode = alternate;
+  chosenParagraph.parentNode = choice;
+  chosenText.parentNode = chosenParagraph;
+  fallback.parentNode = alternate;
+  fallbackParagraph.parentNode = fallback;
+  fallbackText.parentNode = fallbackParagraph;
+  elements.push(alternate, choice, chosenParagraph, chosenText,
+                fallback, fallbackParagraph, fallbackText);
+} else if (scenario === 'foreign_wrapper') {
+  const ignored = node('ignored', [], 'urn:ignored-by-word');
+  const paragraph = node('p');
+  const text = node('t', [textNode('Private ignored text')]);
+  paragraph.parentNode = ignored;
+  text.parentNode = paragraph;
+  elements.push(ignored, paragraph, text);
 } else if (scenario === 'wrong_namespace') {
   elements.push(node('p'));
   elements.push(node('t', [textNode('spoof')], 'urn:wrong-namespace'));
@@ -167,7 +201,8 @@ try {
 
 
 def make_docx(text: str, *, duplicate_document: bool = False,
-              raw_body: str | None = None) -> bytes:
+              raw_body: str | None = None,
+              extra_parts: dict[str, bytes | str] | None = None) -> bytes:
     contents = (
         '<?xml version="1.0" encoding="UTF-8" standalone="yes"?>'
         '<Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types">'
@@ -194,6 +229,8 @@ def make_docx(text: str, *, duplicate_document: bool = False,
         archive.writestr("[Content_Types].xml", contents)
         archive.writestr("_rels/.rels", relationships)
         archive.writestr("word/document.xml", doc)
+        for name, content in (extra_parts or {}).items():
+            archive.writestr(name, content)
         if duplicate_document:
             with warnings.catch_warnings():
                 warnings.simplefilter("ignore", UserWarning)
@@ -272,6 +309,22 @@ class BrowserDocxWorkerTests(unittest.TestCase):
         self.assertFalse(result["ok"], result)
         self.assertIn("duplicate ZIP entry", result["error"])
 
+    def test_unrepresented_word_parts_are_rejected_before_document_extraction(self):
+        # The original document XML can be valid while a footnote, header,
+        # comment, picture, or embedded object carries meaningful content not
+        # reflected in the extracted main-body prose. Never imply fidelity.
+        for name in (
+            "word/comments.xml", "word/footnotes.xml", "word/endnotes.xml",
+            "word/header1.xml", "word/footer2.xml", "word/media/image1.png",
+            "word/embeddings/oleObject1.bin", "word/activeX/activeX1.bin",
+            "word/vbaProject.bin", "word/charts/chart1.xml",
+        ):
+            with self.subTest(name=name):
+                archive = make_docx("Visible main-body paragraph.", extra_parts={name: b"other content"})
+                result = self._inspect_directory(archive)
+                self.assertFalse(result["ok"], result)
+                self.assertIn("unsupported rich content", result["error"])
+
     def test_forged_zip_size_is_stopped_by_stream_byte_counter(self):
         binary = bytearray(make_docx("A" * 30000))
         central = binary.rfind(b"PK\x01\x02")
@@ -329,13 +382,32 @@ class BrowserDocxWorkerTests(unittest.TestCase):
                 self.assertFalse(result['ok'], result)
                 self.assertIn('tracked changes or hidden text', result['error'])
 
+    def test_window_extractor_rejects_word_ignored_alternates_and_wrappers(self):
+        # Word's markup compatibility namespace can include multiple candidate
+        # readings, only one of which is visible. The browser must never send
+        # both alternatives or content under an ignored foreign wrapper.
+        for scenario in ('mc_alternate', 'foreign_wrapper'):
+            with self.subTest(scenario=scenario):
+                result = self._run_browser_xml(scenario)
+                self.assertFalse(result['ok'], result)
+                self.assertIn('unrecognized markup around text', result['error'])
+
+    def test_window_extractor_refuses_unresolved_named_text_styles(self):
+        # The browser parser does not evaluate word/styles.xml, so it cannot
+        # tell if an rStyle/pStyle reference makes content invisible in Word.
+        for scenario in ('styled_run', 'styled_paragraph'):
+            with self.subTest(scenario=scenario):
+                result = self._run_browser_xml(scenario)
+                self.assertFalse(result['ok'], result)
+                self.assertIn('tracked changes or hidden text', result['error'])
+
     def test_window_xml_extractor_rejects_oversize_and_complex_documents(self):
         for scenario, expected in (
             ("oversized_text", "12,000 characters"),
             ("too_many_nodes", "too many XML elements"),
             ("entity", "cannot safely parse"),
             ("embedded_body", "unsupported embedded body"),
-            ("wrong_namespace", "no usable body text"),
+            ("wrong_namespace", "unrecognized markup around text"),
         ):
             with self.subTest(scenario=scenario):
                 result = self._run_browser_xml(scenario)

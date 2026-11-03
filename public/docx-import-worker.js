@@ -11,6 +11,10 @@ const MAX_ZIP_ENTRY_UNCOMPRESSED = 4 * 1024 * 1024;
 const MAX_ZIP_TOTAL_UNCOMPRESSED = 8 * 1024 * 1024;
 const MAX_DOCX_XML_BYTES = 2 * 1024 * 1024;
 const MAX_ZIP_RATIO = 200;
+// The browser only presents word/document.xml. Refuse companion parts that
+// can contain author-visible material absent from that extracted body. This
+// deliberately matches the supported subset of the offline DOCX importer.
+const UNSUPPORTED_RICH_WORD_PART = /^word\/(?:media\/|embeddings\/|activeX\/|charts\/|diagrams\/|footnotes\.xml$|endnotes\.xml$|comments[^/]*\.xml$|header[^/]*\.xml$|footer[^/]*\.xml$|vbaProject[^/]*$)/i;
 
 function inspectDocxZip(buffer) {
   if (!(buffer instanceof ArrayBuffer) || buffer.byteLength < 22 ||
@@ -78,6 +82,9 @@ function inspectDocxZip(buffer) {
       throw new Error("DOCX archive contains duplicate ZIP entry names.");
     }
     seenNames.add(name);
+    if (UNSUPPORTED_RICH_WORD_PART.test(name)) {
+      throw new Error("DOCX contains unsupported rich content outside the extracted main body. Export reviewed visible text first.");
+    }
     total += uncompressed;
     if (total > MAX_ZIP_TOTAL_UNCOMPRESSED) {
       throw new Error("DOCX archive would expand beyond safe limits.");

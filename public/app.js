@@ -416,6 +416,7 @@ function extractDocxText(xml) {
   // Keep this as a literal namespace match while retaining the established
   // no-absolute-URL invariant for the browser script.
   const wordNamespace = "http:" + "//schemas.openxmlformats.org/wordprocessingml/2006/main";
+  const compatibilityNamespace = "http:" + "//schemas.openxmlformats.org/markup-compatibility/2006";
   const root = documentXml.documentElement;
   if (!root || root.namespaceURI !== wordNamespace || root.localName !== "document") {
     throw new Error("The Word document XML has an unexpected root element.");
@@ -436,12 +437,20 @@ function extractDocxText(xml) {
     "del", "delText", "ins", "moveFrom", "moveTo", "moveFromRangeStart",
     "moveFromRangeEnd", "moveToRangeStart", "moveToRangeEnd",
     "customXmlDelRangeStart", "customXmlInsRangeStart", "customXmlMoveFromRangeStart",
-    "customXmlMoveToRangeStart", "vanish", "webHidden"
+    "customXmlMoveToRangeStart", "vanish", "webHidden",
+    // No named-style visibility resolver is available in this browser path.
+    "rStyle", "pStyle"
   ]);
   const lines = [];
   let pieces = [];
   let characters = 0;
   let visited = 0;
+  // TreeWalker visits elements in pre-order. Keep a bounded ancestry stack
+  // rather than repeatedly searching descendants: markup-compatibility
+  // fallbacks or ignored foreign wrappers can contain w:t that Word would
+  // never render, so copying those strings would disclose unintended prose.
+  const ancestry = [{ node: body, foreign: false }];
+  const semanticTextElements = new Set(["p", "t", "tab", "br", "cr"]);
   const add = (value) => {
     characters += value.length;
     if (characters > MAX_MANUSCRIPT_CHARS) {
@@ -458,7 +467,27 @@ function extractDocxText(xml) {
     if (++visited > 50000) {
       throw new Error("This Word document contains too many XML elements to import safely.");
     }
-    if (element.namespaceURI !== wordNamespace) continue;
+    while (ancestry.length && ancestry[ancestry.length - 1].node !== element.parentNode) {
+      ancestry.pop();
+    }
+    const parentForeign = ancestry.length && ancestry[ancestry.length - 1].foreign;
+    const isForeign = element.namespaceURI !== wordNamespace;
+    ancestry.push({ node: element, foreign: isForeign || parentForeign });
+    if (element.namespaceURI === compatibilityNamespace && element.localName === "AlternateContent") {
+      throw new Error("This Word document contains unrecognized markup around text; export reviewed visible text first.");
+    }
+    if (parentForeign && element.namespaceURI === wordNamespace &&
+        semanticTextElements.has(element.localName)) {
+      throw new Error("This Word document contains unrecognized markup around text; export reviewed visible text first.");
+    }
+    if (isForeign) {
+      for (const child of element.childNodes) {
+        if ((child.nodeType === 3 || child.nodeType === 4) && (child.nodeValue || "").trim()) {
+          throw new Error("This Word document contains unrecognized markup around text; export reviewed visible text first.");
+        }
+      }
+      continue;
+    }
     if (ambiguousWordMarkup.has(element.localName)) {
       throw new Error("This Word document contains tracked changes or hidden text that cannot be imported faithfully. Finalize changes in Word and export the visible excerpt as plain text first.");
     }
