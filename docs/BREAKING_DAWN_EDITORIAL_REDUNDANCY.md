@@ -10,7 +10,7 @@
 
 Do **not** copy the manuscript, private outline, trauma source records, private character histories, unpublished excerpts, identities, or source hashes into Aeonith's public repo, GitHub issues, CI artifacts, or examples. This document contains no private source text.
 
-## Author-specified criteria, abstracted into a reusable protocol
+> **Epic-scope guard (Author correction, 2026-11-04):** The intended work is a three-book-scale, approximately 200,000-word heroic introspective odyssey with a working ~100-canto structure. An earlier outline with eighteen headings is a **macro-movement map, not a final chapter count**. Editorial reviews and writing agents must reject 18-chapter compression as a stale assumption. This is public, spoiler-light structural guidance only; no private manuscript or biographical source belongs here.\n\n## Author-specified criteria, abstracted into a reusable protocol
 
 | Gate | What the reviewer should test | What would falsify it |
 |---|---|---|
@@ -18,7 +18,7 @@ Do **not** copy the manuscript, private outline, trauma source records, private 
 | Invisible anonymity | The narrator's given name is never necessary or signaled as withheld; most unprimed readers should not notice omission | Conspicuous refusals to give a name, redactions, clues, identity-reveal setups |
 | Modern lived voice | A distinctive, fallible voice appropriate to a person living in the present, not decorative pseudo-medieval prose | Antique phrasing unrelated to character; time-period clichés without observation |
 | Identification without blandness | Specific contradictions, anger, empathy, fallibility, humor and unflattering choices invite recognition | Generic blank-slate narrator; uniform moral correctness; exposition substituting for action |
-| Three-act progression | Descent, behavioral reckoning, perceptual expansion each change external circumstances and the narrator's decisions | Relabeling the same didactic encounter as a new realm |
+| Three-book epic scale | Approximately 100 substantial cantos and ~200,000 words across descent, behavioral reckoning, perceptual expansion; each encounter earns its consequences | Mistaking eighteen macro-movements for eighteen final chapters, or padding a weak episode solely to hit a canto count |
 | Scene causality | Every major scene has an aim, resistance, costly choice and lasting consequence | Interchangeable episodes; logistics and paperwork endlessly postponing conflict |
 | Independent characters | Recurring companions, adversaries and loved ones have goals outside the narrator's lesson | Others exist only to pardon, punish, explain, or die for the protagonist |
 | Grief and moral complexity | Boundaries, justified protective anger and accountability survive growth; forgiveness is not compelled | Victim blame; moralizing reconciliation; effortless cure or instant sainthood |
