@@ -1,0 +1,111 @@
+{
+  "schema_version": "aeonith.local_model_observation.v1",
+  "evidence_class": "RUNTIME_PROBE",
+  "observation_date": "2026-11-02",
+  "provenance": {
+    "source_commit": "82d3120fb13c9fa9762b83a8038b6dbdf7c2f7a9",
+    "runner": "Ollama",
+    "runner_version": "0.40.9",
+    "host_class": "Windows CPU, Intel Core i7-6770HQ, 16 GB RAM",
+    "model": "aeonith-critic:0.1",
+    "model_digest": "8a4c4ea98949db4ad97dd83f5a24e45bf547f174e49890fcd71ac264a43feb99",
+    "base": "qwen3:1.7b",
+    "base_digest": "8f68893c685c3ddff2aa3fffce2aa60a30bb2da65ca488b61fff134a4d1730e7",
+    "base_license_status": "unverified_local_variant",
+    "modelfile_sha256": "58eedcb20ee0febd6bb34421d4b1249e0502452a5b156b202a3ba65c1f7dea08",
+    "recipe_manifest_sha256": "ed5fe045a0409c400bda7e86a6372583c3ddc7ae58e32dd15a26bb3f7a605ac9",
+    "recipe_sha256_scope": "Windows checked-out recipe bytes; line endings differ from the Git blob",
+    "fine_tuned": false,
+    "model_receipt_status": "created_and_read_back"
+  },
+  "pilot": {
+    "schema_version": "aeonith.local_model_pilot.v1",
+    "model_identifier_sha256": "b4be66e0729ba5f774bc4cea373129a05100fb7c642f094a66b074e8802cf388",
+    "transport": "explicit_uncredentialed_loopback_chat",
+    "selected_lenses": ["symbolic"],
+    "generation": {
+      "structured_outputs": true,
+      "max_tokens": 2048,
+      "timeout_seconds": 110,
+      "repeats": 1
+    },
+    "semantic_quality": "UNASSESSED",
+    "human_evaluation": "NOT_PERFORMED",
+    "summary": {
+      "attempts": 1,
+      "completed": 1,
+      "structural_pass": 1,
+      "structural_fail": 0,
+      "provider_or_model_failures": 0
+    },
+    "attempts": [
+      {
+        "case_id": "mirror-at-dusk",
+        "case_sha256": "3fb4b73452472c3b00ce41854a903ec9f542b8bf8465f54a5e067f1a78fbef5a",
+        "repeat": 1,
+        "elapsed_seconds": 81.502,
+        "status": "completed",
+        "structural_status": "pass",
+        "quote_supported_lenses": 1,
+        "lens_outcomes": [
+          {
+            "lens": "symbolic",
+            "basis": "textual",
+            "work_quote_count": 1,
+            "limitation_count": 1
+          }
+        ],
+        "audit_violations": [],
+        "audit_warnings": []
+      }
+    ]
+  },
+  "additional_pilot": {
+    "schema_version": "aeonith.local_model_pilot.v1",
+    "model_identifier_sha256": "b4be66e0729ba5f774bc4cea373129a05100fb7c642f094a66b074e8802cf388",
+    "transport": "explicit_uncredentialed_loopback_chat",
+    "selected_lenses": ["symbolic"],
+    "generation": {
+      "structured_outputs": true,
+      "max_tokens": 2048,
+      "timeout_seconds": 110,
+      "repeats": 1
+    },
+    "semantic_quality": "UNASSESSED",
+    "human_evaluation": "NOT_PERFORMED",
+    "summary": {
+      "attempts": 1,
+      "completed": 1,
+      "structural_pass": 1,
+      "structural_fail": 0,
+      "provider_or_model_failures": 0
+    },
+    "attempts": [
+      {
+        "case_id": "unanswered-bell",
+        "case_sha256": "78099ee906ad1cf811107f05f0f0683dba7faf946094fdbb12a80ae6347f25a4",
+        "repeat": 1,
+        "elapsed_seconds": 78.602,
+        "status": "completed",
+        "structural_status": "pass",
+        "quote_supported_lenses": 1,
+        "lens_outcomes": [
+          {
+            "lens": "symbolic",
+            "basis": "textual",
+            "work_quote_count": 1,
+            "limitation_count": 1
+          }
+        ],
+        "audit_violations": [],
+        "audit_warnings": []
+      }
+    ]
+  },
+  "claim_limits": [
+    "Two published synthetic passages with one generation each do not establish repeatability or generalization.",
+    "Structure and quote presence do not establish interpretive quality.",
+    "The local recipe reuses installed weights; no training or adapter update occurred.",
+    "Observed model digests came from local runner readback, not independent signed artifact attestation."
+  ]
+}

@@ -137,6 +137,40 @@ class LocalLimitTests(unittest.TestCase):
         self.assertLessEqual(_construct_provider(ENV).max_tokens, 8192)
         self.assertLessEqual(_construct_provider(ENV).timeout, 50)
 
+    def test_private_critic_profile_can_use_bounded_cpu_timeout(self):
+        critic = {
+            **ENV,
+            "AEONITH_MODEL_PROFILE": "aeonith-critic",
+            "AEONITH_PROVIDER_MODEL": "aeonith-critic:0.1",
+            "AEONITH_MAX_LENSES": "1",
+            "AEONITH_MAX_OUTPUT_TOKENS": "2048",
+            "AEONITH_STRUCTURED_OUTPUTS": "true",
+            "AEONITH_LOCAL_JSON_MODE": "false",
+            "AEONITH_PROVIDER_TIMEOUT_SECONDS": "110",
+        }
+        self.assertTrue(is_ready(critic))
+        self.assertEqual(_construct_provider(critic).timeout, 110.0)
+        for changes in (
+            {"AEONITH_PROVIDER_TIMEOUT_SECONDS": "110.01"},
+            {"AEONITH_FUNNEL_ORIGIN": "https://vn1.tail.example.ts.net"},
+            {"AEONITH_MAX_LENSES": "2"},
+            {"AEONITH_MAX_OUTPUT_TOKENS": "4096"},
+            {"AEONITH_PROVIDER_MODEL": "other:tag"},
+            {"AEONITH_STRUCTURED_OUTPUTS": "false"},
+            {"AEONITH_LOCAL_JSON_MODE": "true"},
+            {"AEONITH_MODEL_PROFILE": "legacy"},
+            {"AEONITH_MODEL_PROFILE": "unrecognized"},
+        ):
+            with self.subTest(changes=changes):
+                bad = {**critic, **changes}
+                self.assertFalse(is_ready(bad))
+                fake = CountingProvider()
+                status, _ = run({"schema_version": "aeonith.review.v1", "work": "A"},
+                                env=bad, provider=fake)
+                self.assertEqual(status, 503)
+                self.assertEqual(fake.calls, 0)
+        self.assertFalse(is_ready({**ENV, "AEONITH_PROVIDER_TIMEOUT_SECONDS": "110"}))
+
     def test_local_json_mode_can_be_disabled_for_older_runners(self):
         self.assertTrue(_construct_provider(ENV).json_mode)
         no_json_mode = {**ENV, "AEONITH_LOCAL_JSON_MODE": "false"}

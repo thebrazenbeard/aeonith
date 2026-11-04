@@ -1,0 +1,62 @@
+{
+  "schema_version": "aeonith.experimental_windows_custody_observation.v1",
+  "observed_date_utc": "2026-11-03",
+  "evidence_class": "REAL_SYSTEM_PROBE_SYNTHETIC_DISPOSABLE_ONLY",
+  "host": {
+    "verified_hostname": "VERA-NODE-1",
+    "os": "Microsoft Windows 10 IoT Enterprise LTSC",
+    "python": "3.13.15",
+    "installed_aeonith_pid_observed": 2224,
+    "installed_ollama_pid_observed": 5300
+  },
+  "temporary_checkout": {
+    "source_commit": "1f661dd0adad37a759757785135d11b4092df12b",
+    "source_kind": "published_draft_PR20_not_installed_service",
+    "execution": "OPT_IN_NATIVE_PROBES",
+    "installed_service_restarted": false,
+    "model_loaded": false,
+    "optimizer_steps": 0
+  },
+  "rooted_handle": {
+    "junction": {
+      "execution": "EXECUTED",
+      "original_directory_handle_identity_preserved": true,
+      "rooted_create_landed_in_pinned_directory": true,
+      "decoy_marker_created": false
+    },
+    "symlink": {
+      "execution": "EXECUTED",
+      "original_directory_handle_identity_preserved": true,
+      "rooted_create_landed_in_pinned_directory": true,
+      "decoy_marker_created": false
+    }
+  },
+  "ordinary_path_open_after_ancestor_swap": {
+    "junction": {
+      "execution": "EXECUTED",
+      "redirected_to_decoy": true,
+      "owner_matches_token_user": false,
+      "dacl_present": true,
+      "dacl_is_null": false,
+      "dacl_protected": false,
+      "ace_rights_qualified": false
+    },
+    "symlink": {
+      "execution": "EXECUTED",
+      "redirected_to_decoy": true,
+      "owner_matches_token_user": false,
+      "dacl_present": true,
+      "dacl_is_null": false,
+      "dacl_protected": false,
+      "ace_rights_qualified": false
+    }
+  },
+  "new_matrix_interruption_on_windows": "NOT_EXECUTED_NO_STAGED_MODULE",
+  "equivalent_interruption_mechanics_on_linux": "TESTED_BY_UNIT_SUITE_NOT_WINDOWS_EVIDENCE",
+  "qualification_status": "NOT_QUALIFIED",
+  "real_private_output_qualified": false,
+  "effective_acl_isolation_qualified": false,
+  "trainer_peft_output_qualified": false,
+  "training_lease_established": false,
+  "interpretation": "Pinned root-directory name resolution survived disposable ancestor swaps; ordinary pathname opens redirected and synthetic temporary directories did not have owner-matched protected DACLs. This is not a Windows private writer or durability qualification."
+}

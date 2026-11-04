@@ -31,7 +31,7 @@ unset AEONITH_PROVIDER_API_KEY
 
 python -m aeonith.workflow --input draft.md --title "Draft" \
   --provider local-openai-compatible \
-  --output critique.md
+  --output ~/aeonith-private-critique.md
 ```
 
 This is an **example, not a verified local model qualification**. It fails

@@ -16,7 +16,9 @@ Aeonith has two separate capabilities:
 - Typed review results with a synthesis, lens-by-lens interpretation, challenges, uncertainties, evidence pointers and candid insufficient-evidence outcomes.
 - Source-exact quoted-passage checks and caller-supplied evidence-reference checks. A quote's presence **does not establish that the interpretation is true**.
 - Optional exact-quote offset and fingerprint sidecar; deterministic planning for long manuscripts using bounded excerpts, **not** automatic whole-book comprehension.
-- Local evaluation fixtures, a blinded human-evaluation workflow, and an advisory lexical check for possible invented recurrence or unseen-story claims. Its warnings are **not** semantic verification or measurements of literary quality.
+- Source-fingerprinted checkpoint and segmented book-review APIs, plus an opt-in local-only `aeonith-book` CLI. Numbered Canto headings are recognized; each segment is reviewed independently, with no invented whole-book synthesis.
+- Local evaluation fixtures, an opt-in loopback-only blinded comparison runner with failure accounting, and an advisory lexical check for possible invented recurrence or unseen-story claims. Structural acceptance and lexical warnings are **not** semantic verification or measurements of literary quality; the comparison protocol has not yet been run on real model candidates.
+- A versioned `aeonith-critic:0.1` Ollama **recipe**, a guarded local-model creator, and a sanitized real-model pilot. The recipe uses an already-installed base and does not contain newly trained weights.
 - Opt-in model adapters, including a constrained local OpenAI-style Chat Completions route. No invented critiques on missing-provider, rejected-input, failed-model, or invalid-output paths.
 - A same-origin browser interface with manuscript editor, lens selection, and a token-protected local review endpoint. The default is provider-disabled and loopback-only. Optional Funnel browser sessions let a trusted operator enter the bearer token once per browser instead of on every review; no external identity or billing service is involved. The browser can import local UTF-8 text/Markdown and Word `.docx` files without uploading the original file to a conversion endpoint. A dependency-free ZIP extractor runs inside a time-bounded Web Worker, using browser-native `DecompressionStream` and a bounded XML parser.
 - An optional, explicit `AEONITH_FUNNEL_ORIGIN` allowlist for one Tailscale `.ts.net` HTTPS hostname. The listener and GGUF model remain bound to localhost, and review authentication still applies. This code path must be separately verified on the actual host before calling it a live public service.
@@ -25,13 +27,13 @@ Aeonith has two separate capabilities:
 
 ### Browser manuscript import boundaries
 
-The browser-only file chooser accepts UTF-8 `.txt`/`.md`/`.markdown`/`.text` files up to 64 KiB and Word `.docx` files up to 2 MiB. DOCX extraction reads the `word/document.xml` entry with browser-native streaming ZIP decompression in an isolated, time-limited worker. It validates ZIP structure, checks declared and actual decompressed byte counts, and rejects unsupported archive features. It requires a browser with Web Workers, `DecompressionStream("deflate-raw")` and XML `DOMParser` support. Extracted text must be no longer than **12,000 characters**; an oversized file or passage is rejected rather than silently truncated. Formatting, embedded images, footnotes and comments are not preserved in plain-text extraction. This is **excerpt review, not whole-book analysis**. Legacy Word `.doc` and PDF files are not currently parsed; convert them locally to DOCX or UTF-8 text first. The original file is never transmitted to a separate conversion service or persisted by the browser interface.
+The browser-only file chooser accepts UTF-8 `.txt`/`.md`/`.markdown`/`.text` files up to 64 KiB and Word `.docx` files up to 2 MiB. DOCX extraction verifies and streams `word/document.xml` and optional `word/styles.xml` in an isolated, time-limited worker, with ZIP size and CRC limits on both XML parts. Browser-native XML parsing rejects documents containing hidden-text stylesheet declarations rather than importing potentially invisible prose; this conservatively rejects even unused hidden styles. It also rejects named styles, revisions, unsupported rich content, and incompatible markup. It requires a browser with Web Workers, `DecompressionStream("deflate-raw")` and XML `DOMParser` support. Extracted text must be no longer than **12,000 characters**; oversized text is rejected rather than silently truncated. Complete Word style inheritance, layout, embedded media, footnotes and comments are **not** rendered. This is **excerpt review, not whole-book analysis**. Legacy Word `.doc` and PDF files are not parsed; convert them locally to DOCX or UTF-8 text first. The original file is never sent to a separate conversion service or persisted by the browser interface.
 
 ## Run locally at no additional service cost
 
 Use an existing local model runner such as [KoboldCpp](https://github.com/LostRuins/koboldcpp) with a GGUF text model you already possess or have permission to use. KoboldCpp documents an OpenAI-compatible API at its local `/v1` route, normally port `5001`. Use a model you are licensed to run; Aeonith does not ship or acquire model weights.
 
-1. Launch your own KoboldCpp model **locally** and verify its API is listening on `127.0.0.1:5001`. Its Chat Completions endpoint is ordinarily `http://127.0.0.1:5001/v1/chat/completions` ([upstream endpoint reference](https://github.com/LostRuins/koboldcpp.net/blob/main/src/content/docs/docs/api/endpoints.mdoc)). Keep its listener off public networks.
+1. Launch your own KoboldCpp model **locally**, explicitly setting Network **Host** to `127.0.0.1` (CLI `--host 127.0.0.1`). **KoboldCpp listens on all interfaces by default**; a successful request to `127.0.0.1:5001` alone does *not* prove that LAN clients cannot connect. Check the actual bound listening address before supplying any manuscript. Its Chat Completions endpoint is ordinarily `http://127.0.0.1:5001/v1/chat/completions` ([upstream endpoint reference](https://github.com/LostRuins/koboldcpp.net/blob/main/src/content/docs/docs/api/endpoints.mdoc), [upstream binding guidance](https://koboldcpp.net/docs/api/remote-access/)). See the [read-only qualification checklist](docs/KOBOLDCPP_RUNTIME_QUALIFICATION.md).
 2. From this repository, configure only the local endpoint and generate a fresh service token. No paid API key is needed:
 
    ```bash
@@ -67,8 +69,30 @@ the Windows user's profile, outside Git. It does not install software,
 enable Funnel, or configure auto-start. A small local model has only been
 qualified for a synthetic **single-lens** review; the browser defaults to
 one lens and more demanding reviews require independent model validation.
+To retrieve that existing token without restarting Aeonith or remembering
+launcher settings, run `.\scripts\copy-aeonith-token-windows.ps1` in PowerShell
+as the same Windows user. This intentionally uses that user's local clipboard;
+it does not transfer the secret to another device.
 
 `AEONITH_PROVIDER_MODEL=local` is a model label for a simple single-model KoboldCpp instance, not a model download instruction. If your runner requires a particular model ID, use the ID it exposes. Local model interoperability and output quality must be checked with a harmless test passage; not all compatible APIs support JSON mode or structured output equally. The service deliberately does **not** fall back to a remote model if local inference fails.
+
+### Reproducible local critic model
+
+For an already-installed Ollama base, [`models/aeonith-critic/`](models/aeonith-critic/) contains a checked Modelfile recipe. Its creator issues no model-pull command and does not redistribute base weights; the independently running Ollama daemon's network behavior must still be checked:
+
+```bash
+python scripts/create-aeonith-model.py --check --base EXISTING_LOCAL_OLLAMA_TAG
+python scripts/create-aeonith-model.py --create --base EXISTING_LOCAL_OLLAMA_TAG
+python -m evaluation.model_pilot --model aeonith-critic:0.1 \
+  --url http://127.0.0.1:11434/v1/chat/completions \
+  --lens symbolic --repeats 1 --max-tokens 2048 --structured-outputs
+```
+
+The creator refuses to overwrite an existing model tag. The pilot runs only against a numeric loopback endpoint, reports real completion/failure and quote-structure observations without retaining manuscript or critique prose, and explicitly leaves literary quality **unassessed**. See the [model recipe](docs/LOCAL_MODEL.md) and [model pilot](docs/MODEL_PILOT.md). Neither a successful build nor valid JSON means Aeonith has learned new literary ability.
+
+The [Windows launcher](scripts/README.md) has an opt-in `-Profile aeonith-critic` using the sole structurally passing local pilot settings, plus explicit loopback `-Port` and `-PythonExe` overrides. This source profile has **not** passed a fresh Windows host startup or literary-quality trial; legacy defaults remain unchanged.
+
+An optional [offline LoRA/SFT training lane](training/README.md) validates explicitly authorized private data and locally present official Qwen3.5 0.8B/2B/4B Transformers weights. A separate [receipt and adapter reload verifier](docs/ADAPTER_RELOAD.md) checks local fingerprints and can run an explicit, offline fresh-process smoke test. These paths require additional locally installed ML dependencies and **have not** produced or reloaded an Aeonith adapter in a real host trial. Base/adapter provenance, actual weight changes, held-out comparisons and human assessment remain required before a trained-model release.
 
 If a local model is not already running, you can still run the library, tests, source planner, and offline evaluation without any network calls. To inspect the browser shell with reviews disabled, leave `AEONITH_ENABLE_LIVE_REVIEWS` unset and run `python3 -m aeonith.local_server` after configuring a strong service token.
 
@@ -84,6 +108,17 @@ python3 -m aeonith.workflow --input draft.md --title "A draft"
 ```
 
 With no provider chosen, review status is `provider_unavailable` and the command exits `3`. This is intentional: prompt preparation and structural validation without a language model do not constitute literary criticism. Replace `draft.md` with an existing UTF-8 `.txt` or `.md` manuscript file for the workflow command.
+
+For a bounded review of a long manuscript or Canto collection, explicitly select a **local** provider and a new private output path. The command defaults to one `symbolic` lens and stops at its segment/time budget:
+
+```bash
+python -m aeonith.book_cli --input manuscript.md --output ../private-segment-reviews.json \
+  --provider local-openai-compatible --url http://127.0.0.1:11434/v1/chat/completions \
+  --model aeonith-critic:0.1 --lens symbolic --max-segments 8 \
+  --max-output-tokens 2048 --structured-outputs
+```
+
+The output contains individual excerpts' critiques and may contain private manuscript quotations; keep it outside Git repositories. `--after-marker '[ps]'` restricts model inputs to material strictly after a unique checkpoint marker. The [book-review runbook](docs/BOOK_REVIEW_BATCH.md) specifies exact boundaries and failure codes.
 
 To use an explicitly selected **local** Chat Completions endpoint from the JSON CLI:
 
@@ -102,9 +137,13 @@ Or from a real manuscript into a new Markdown file (Aeonith will never overwrite
 python3 -m aeonith.workflow --input draft.md --title "Draft" \
   --provider local-openai-compatible \
   --url http://127.0.0.1:5001/v1/chat/completions \
-  --model local --output critique.md
+  --model local --output ~/aeonith-private-critique.md
 ```
 
+Keep private review output **outside all Git repositories**. The workflow CLI
+rejects checkout, linked-worktree, bare-repository and symlinked output paths;
+its private-file writer is currently POSIX-only until a Windows ACL boundary is
+qualified. On Windows use stdout or the protected browser service for now.
 Only run these model-backed commands when the local runner is actually available. The selected local adapter rejects remote endpoints and keeps network protections (including no HTTP redirects or inherited proxy forwarding). The legacy generic remote adapters are **not** an approved route to paid inference.
 
 For programmatic integration:

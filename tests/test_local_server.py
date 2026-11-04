@@ -3,8 +3,10 @@
 from __future__ import annotations
 
 import json
+import hashlib
 from http.client import HTTPConnection
 import os
+import tempfile
 import threading
 import unittest
 from pathlib import Path
@@ -128,6 +130,110 @@ class LocalServerTests(unittest.TestCase):
         self.assertEqual(status, 200)
         self.assertIn(b"review-form", body)
 
+    def test_optional_pinned_release_asset_digest_refuses_mutation(self):
+        with tempfile.TemporaryDirectory() as root:
+            index = Path(root) / "index.html"
+            original = b"<html>trusted release asset</html>"
+            index.write_bytes(original)
+            names = {name for name, _mime in local_server._ASSETS.values()}
+            policy = {name: hashlib.sha256(original if name == "index.html" else
+                                           name.encode("ascii")).hexdigest()
+                      for name in names}
+            with patch.object(local_server, "_asset_root", return_value=Path(root)), \
+                 patch.object(self.server, "asset_digests", policy):
+                status, _, body = self._request("/index.html")
+                self.assertEqual(status, 200)
+                self.assertEqual(body, original)
+                index.write_bytes(b"<html>attacker changed the bytes</html>")
+                status, _, body = self._request("/index.html")
+                self.assertEqual(status, 503)
+                self.assertNotIn(b"attacker changed", body)
+
+    def test_asset_release_policy_validates_coverage_and_refuses_bad_config(self):
+        original = {name: "a" * 64 for name, _mime in local_server._ASSETS.values()}
+        self.assertIsNone(local_server._asset_digest_policy(None))
+        self.assertEqual(local_server._asset_digest_policy(json.dumps(original)), original)
+        for raw in (
+            "", "{}", "[]", "invalid-json", " " * 2049,
+            json.dumps({"index.html": "a" * 64}),
+            json.dumps({**original, "unmapped.txt": "a" * 64}),
+            json.dumps({**original, "app.js": "A" * 64}),
+            '{"index.html":"' + "a" * 64 + '","index.html":"' + "b" * 64 + '"}',
+        ):
+            with self.subTest(raw=raw[:32]), self.assertRaises(ValueError):
+                local_server._asset_digest_policy(raw)
+        with patch.dict(os.environ, {"AEONITH_STATIC_ASSET_SHA256_JSON": json.dumps(original)}):
+            server = create_server(port=0)
+            try:
+                self.assertEqual(server.asset_digests, original)
+            finally:
+                server.server_close()
+        with patch.dict(os.environ, {"AEONITH_STATIC_ASSET_SHA256_JSON": "{}"}):
+            with self.assertRaises(ValueError):
+                create_server(port=0)
+
+    @unittest.skipIf(os.name == "nt", "symbolic-link fixture requires POSIX permission semantics")
+    def test_static_asset_symlink_outside_asset_root_is_refused(self):
+        with tempfile.TemporaryDirectory() as root, tempfile.TemporaryDirectory() as outside:
+            secret = Path(outside) / "private.txt"
+            secret.write_bytes(b"secret must never become a public asset")
+            (Path(root) / "index.html").symlink_to(secret)
+            with patch.object(local_server, "_asset_root", return_value=Path(root)):
+                status, _headers, body = self._request("/index.html")
+        self.assertEqual(status, 503)
+        self.assertNotIn(b"secret", body)
+
+    @unittest.skipIf(os.name == "nt", "hard-link fixture uses POSIX inode semantics")
+    def test_static_asset_hardlink_outside_asset_root_is_refused(self):
+        with tempfile.TemporaryDirectory() as root, tempfile.TemporaryDirectory() as outside:
+            secret = Path(outside) / "private.txt"
+            secret.write_bytes(b"private hardlinked bytes must not become public")
+            os.link(secret, Path(root) / "index.html")
+            with patch.object(local_server, "_asset_root", return_value=Path(root)):
+                status, _headers, body = self._request("/index.html")
+        self.assertEqual(status, 503)
+        self.assertNotIn(b"private hardlinked", body)
+
+    @unittest.skipIf(os.name == "nt", "directory symlink fixture uses POSIX semantics")
+    def test_static_asset_symlinked_parent_directory_is_refused(self):
+        with tempfile.TemporaryDirectory() as base, tempfile.TemporaryDirectory() as outside:
+            (Path(outside) / "index.html").write_bytes(b"private parent directory bytes")
+            public = Path(base) / "public"
+            public.symlink_to(outside, target_is_directory=True)
+            with patch.object(local_server, "_asset_root", return_value=public):
+                status, _headers, body = self._request("/index.html")
+        self.assertEqual(status, 503)
+        self.assertNotIn(b"private parent directory", body)
+
+    @unittest.skipIf(os.name == "nt", "descriptor-relative directory walk requires POSIX")
+    def test_static_asset_root_swap_before_dirfd_open_is_refused(self):
+        with tempfile.TemporaryDirectory() as base, tempfile.TemporaryDirectory() as outside:
+            public = Path(base) / "public"
+            public.mkdir()
+            (public / "index.html").write_bytes(b"expected public asset")
+            (Path(outside) / "index.html").write_bytes(b"private swapped root bytes")
+            genuine_open = local_server._open_posix_asset_directory
+
+            def substitute_parent(path):
+                public.rename(Path(base) / "old-public")
+                public.symlink_to(outside, target_is_directory=True)
+                return genuine_open(path)
+
+            with patch.object(local_server, "_asset_root", return_value=public), \
+                 patch.object(local_server, "_open_posix_asset_directory", side_effect=substitute_parent):
+                status, _headers, body = self._request("/index.html")
+        self.assertEqual(status, 503)
+        self.assertNotIn(b"private swapped root", body)
+
+    @unittest.skipIf(os.name == "nt" or not hasattr(os, "mkfifo"), "FIFO fixture requires POSIX")
+    def test_static_asset_fifo_refused_without_blocking(self):
+        with tempfile.TemporaryDirectory() as root:
+            os.mkfifo(Path(root) / "index.html", 0o600)
+            with patch.object(local_server, "_asset_root", return_value=Path(root)):
+                status, _headers, body = self._request("/index.html")
+        self.assertEqual(status, 503)
+        self.assertNotIn(b"secret", body)
+
     def test_public_health_is_liveness_only(self):
         with patch.dict(os.environ, {}, clear=True):
             for path in ("/healthz", "/api/health"):
@@ -137,6 +243,25 @@ class LocalServerTests(unittest.TestCase):
                 payload = json.loads(body)
                 self.assertEqual(payload["service"], "aeonith")
                 self.assertFalse(payload["review_configured"])
+                self.assertIsNone(payload["max_lenses"])
+
+    def test_public_health_exposes_bounded_lens_ceiling_only_when_configured(self):
+        for limit, expected_ready, expected_ceiling in (
+            ("1", True, 1), ("14", True, 14),
+            ("0", False, None), ("15", False, None),
+            ("not-a-number", False, None),
+        ):
+            with self.subTest(limit=limit), patch.dict(
+                os.environ, {**_CONFIG, "AEONITH_MAX_LENSES": limit}, clear=True
+            ):
+                status, headers, body = self._request("/healthz")
+                self.assertEqual(status, 200)
+                self.assertEqual(headers["Cache-Control"], "no-store")
+                payload = json.loads(body)
+                self.assertEqual(payload["review_configured"], expected_ready)
+                self.assertEqual(payload["max_lenses"], expected_ceiling)
+                self.assertNotIn("AEONITH_SERVICE_TOKEN", payload)
+                self.assertNotIn(_TOKEN, body.decode("utf-8"))
 
     def test_rejects_unknown_methods_and_path_traversal(self):
         for path in ("/aeonith/service.py", "/%2e%2e/README.md", "/.env",
@@ -186,6 +311,67 @@ class LocalServerTests(unittest.TestCase):
         payload = json.loads(data)
         self.assertEqual(payload["status"], "completed")
         self.assertEqual(payload["provenance"]["provider_name"], "fixture_local_model")
+
+    def test_private_model_review_has_single_inflight_slot(self):
+        """A busy local model denies excess work before parsing its body."""
+        entered = threading.Event()
+        release = threading.Event()
+
+        class BlockingModel(_FakeLocalModel):
+            def review(self, payload):
+                entered.set()
+                if not release.wait(3):
+                    raise RuntimeError("test provider was not released")
+                return super().review(payload)
+
+        headers = {
+            "Content-Type": "application/json",
+            "Authorization": "Bearer " + _TOKEN,
+        }
+        first = {}
+
+        def first_review():
+            first["response"] = self._request(
+                "/api/review", method="POST", body=json.dumps(_WORK).encode("utf-8"),
+                headers=headers,
+            )
+
+        with patch.dict(os.environ, _CONFIG, clear=True), \
+             patch("aeonith.service._construct_provider", return_value=BlockingModel()):
+            thread = threading.Thread(target=first_review)
+            thread.start()
+            try:
+                self.assertTrue(entered.wait(2), "first local review did not reach model")
+                # A second valid bearer must be rejected before model input
+                # framing/JSON is inspected, even if the body is invalid.
+                status, response_headers, data = self._request(
+                    "/api/review", method="POST", body=b"{not valid JSON",
+                    headers=headers,
+                )
+                self.assertEqual(status, 429)
+                self.assertEqual(response_headers["Retry-After"], "1")
+                self.assertEqual(json.loads(data)["error"]["code"], "review_rate_limited")
+
+                # Bad credentials still receive 401, not a clue about whether
+                # the model is currently busy.
+                status, _, _ = self._request(
+                    "/api/review", method="POST", body=b"secret body",
+                    headers={"Authorization": "Bearer invalid"},
+                )
+                self.assertEqual(status, 401)
+                # Static assets and health remain available while inference runs.
+                self.assertEqual(self._request("/healthz")[0], 200)
+            finally:
+                release.set()
+                thread.join(timeout=5)
+
+            self.assertFalse(thread.is_alive())
+            self.assertEqual(first["response"][0], 200)
+            # Successful completion frees the slot for another review.
+            self.assertEqual(self._request(
+                "/api/review", method="POST", body=json.dumps(_WORK).encode("utf-8"),
+                headers=headers,
+            )[0], 200)
 
 
 class PublicSessionTests(unittest.TestCase):
@@ -298,9 +484,50 @@ class PublicSessionTests(unittest.TestCase):
                 ("POST", "/api/review", {"Cookie": cookie, "Host": "evil.example"}),
             ):
                 with self.subTest(path=path, headers=headers):
-                    status, _, raw = self._request(path, method=method, body=b"private", headers=headers)
+                    # A rejected Host with an unread POST body can cause a
+                    # Windows TCP abort before the peer receives the 403.
+                    # Check the exact HTTP status without a pending body here;
+                    # the separate test below covers the malicious-body case.
+                    request_body = None if headers.get("Host") == "evil.example" else b"private"
+                    status, _, raw = self._request(path, method=method, body=request_body, headers=headers)
                     self.assertEqual(status, 403)
                     self.assertEqual(json.loads(raw)["error"]["code"], "forbidden_origin")
+
+    def test_bad_host_post_with_unread_body_still_fails_closed(self):
+        with patch.dict(os.environ, _CONFIG, clear=True):
+            cookie = self._login()
+            fake_provider = _FakeLocalModel()
+            with patch("aeonith.service._construct_provider", return_value=fake_provider) as provider_factory, \
+                 patch.object(fake_provider, "review", wraps=fake_provider.review) as model_review:
+                try:
+                    status, headers, raw = self._request(
+                        "/api/review", method="POST", body=b"private",
+                        headers={"Cookie": cookie, "Host": "evil.example"},
+                    )
+                except ConnectionAbortedError as exc:
+                    # Winsock may abort a rejected connection when its inbound
+                    # POST body is intentionally left unread. This is only an
+                    # allowed denial if the server stays alive and no provider
+                    # work follows; those assertions run below in both cases.
+                    if os.name != "nt" or getattr(exc, "winerror", None) != 10053:
+                        raise
+                else:
+                    self.assertEqual(status, 403)
+                    self.assertEqual(json.loads(raw)["error"]["code"], "forbidden_origin")
+                    self.assertNotIn("Set-Cookie", headers)
+
+                provider_factory.assert_not_called()
+                health_status, _, health_body = self._request("/healthz")
+                self.assertEqual(health_status, 200)
+                self.assertEqual(json.loads(health_body)["status"], "ok")
+                session_status, session_headers, session_body = self._request("/api/session")
+                self.assertEqual(session_status, 200)
+                self.assertFalse(json.loads(session_body)["authenticated"])
+                self.assertNotIn("Set-Cookie", session_headers)
+                # /healthz checks provider configuration and constructs one;
+                # the rejected POST must not construct or call another model.
+                provider_factory.assert_called_once()
+                model_review.assert_not_called()
 
     def test_login_failures_never_issue_cookies_or_read_bodies(self):
         with patch.dict(os.environ, _CONFIG, clear=True):

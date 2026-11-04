@@ -1,0 +1,8 @@
+# Aeonith local inference recipe v1. This reuses an installed model; it is
+# NOT a fine-tuned checkpoint or proof of literary-criticism quality.
+# Aeonith's core sends its authoritative system instructions with each review.
+# A second SYSTEM here could conflict with that request-time contract.
+FROM qwen2.5-coder:1.5b-instruct-q3_K_M
+PARAMETER num_ctx 4096
+PARAMETER temperature 0.2
+PARAMETER num_predict 800

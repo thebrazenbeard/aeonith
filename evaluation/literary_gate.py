@@ -22,6 +22,7 @@ if __package__ in (None, ""):
     sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from aeonith.core import critique
+from aeonith.private_output import reserve_private_file
 from aeonith.providers import LocalOpenAICompatibleProvider
 from evaluation.quality_eval import (
     _read_json, _write_json_exclusive, audit_review, build_blind_pair, digest,
@@ -47,15 +48,25 @@ MAX_JOURNAL_BYTES = 64_000_000
 
 
 def _private_output_path(path: str) -> str:
-    """Keep raw criticism and blind assignments outside the public checkout.
+    """Keep raw criticism and blind assignments outside ANY Git checkout.
 
     ``resolve`` also follows an existing symlinked parent directory. The
     output file itself must be new; the exclusive file writer enforces that.
     """
     destination = Path(path).expanduser().resolve()
-    checkout = Path(__file__).resolve().parent.parent
-    if destination == checkout or checkout in destination.parents:
-        raise ValueError("private literary study outputs must be outside the Git checkout")
+    for directory in destination.parents:
+        marker = directory / ".git"
+        if marker.is_dir() and (marker / "HEAD").is_file():
+            raise ValueError("private literary study outputs must be outside Git checkouts")
+        if marker.is_file():
+            try:
+                is_worktree = marker.read_text(
+                    encoding="utf-8", errors="ignore"
+                ).startswith("gitdir:")
+            except OSError as error:
+                raise ValueError("cannot verify private output parent") from error
+            if is_worktree:
+                raise ValueError("private literary study outputs must be outside Git checkouts")
     if not destination.parent.is_dir():
         raise ValueError("private output parent directory must already exist")
     return str(destination)
@@ -129,8 +140,30 @@ def _append_line(handle: Any, value: dict[str, Any]) -> None:
     os.fsync(handle.fileno())
 
 
+def _local_artifact_digest(path: str | None) -> str | None:
+    """Fingerprint explicit local bytes, not the model behind an HTTP route.
+
+    The file is optional because some runners expose only an API model label.
+    Even when supplied, its hash cannot authenticate which model the runner
+    actually loaded. Never persist the operator's local filesystem path.
+    """
+    if path is None:
+        return None
+    candidate = Path(path).expanduser()
+    if candidate.is_symlink() or not candidate.is_file():
+        raise ValueError("model artifact must be an existing regular, non-symlinked local file")
+    hasher = hashlib.sha256()
+    with candidate.open("rb") as source:
+        if not source.read(1):
+            raise ValueError("model artifact must not be empty")
+        source.seek(0)
+        for block in iter(lambda: source.read(1024 * 1024), b""):
+            hasher.update(block)
+    return hasher.hexdigest()
+
+
 def run_candidate(plan: dict[str, Any], candidate: str, *, provider: Any, model: str,
-                  lane: str, journal_path: str) -> None:
+                  lane: str, journal_path: str, artifact_file: str | None = None) -> None:
     """Record every attempt, even provider failures, in a private append journal.
 
     A crash leaves missing slots; accounting explicitly marks them incomplete.
@@ -141,11 +174,18 @@ def run_candidate(plan: dict[str, Any], candidate: str, *, provider: Any, model:
         raise ValueError("unknown candidate or lane")
     if not isinstance(model, str) or not model.strip() or len(model) > 300:
         raise ValueError("model identity is required")
-    fd = os.open(_private_output_path(journal_path), os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
+    artifact_sha256 = _local_artifact_digest(artifact_file)
+    # Preserve the friendly Git-checkout error while enforcing the real
+    # handle-pinned boundary against bare repositories, symlinked parents,
+    # and unqualified Windows ACLs. Never run a provider before this succeeds.
+    _private_output_path(journal_path)
+    fd = reserve_private_file(journal_path)
     with os.fdopen(fd, "w", encoding="utf-8") as journal:
         _append_line(journal, {
             "schema_version": JOURNAL_SCHEMA, "plan_sha256": digest(plan),
             "candidate": candidate, "lane": lane, "model": model,
+            "local_artifact_sha256": artifact_sha256,
+            "model_runtime_binding": "UNVERIFIED_OPERATOR_DECLARATION",
             "host_preflight": "OPERATOR_ATTESTED_NOT_INDEPENDENTLY_VERIFIED",
             "runner": "aeonith.core.critique", "semantic_quality": "UNASSESSED",
         })
@@ -209,7 +249,13 @@ def load_journal(path: str, plan: dict[str, Any]) -> tuple[dict[str, Any], dict[
     if (not isinstance(header, dict) or header.get("schema_version") != JOURNAL_SCHEMA
             or header.get("plan_sha256") != digest(plan)
             or header.get("candidate") not in plan["candidates"]
-            or header.get("lane") not in LANES):
+            or header.get("lane") not in LANES
+            or not isinstance(header.get("model"), str) or not header["model"].strip()
+            or "local_artifact_sha256" not in header
+            or header.get("model_runtime_binding") != "UNVERIFIED_OPERATOR_DECLARATION"
+            or (header.get("local_artifact_sha256") is not None and
+                (not isinstance(header["local_artifact_sha256"], str) or
+                 not re.fullmatch(r"[0-9a-f]{64}", header["local_artifact_sha256"])))):
         raise ValueError("attempt journal does not match this plan/lane")
     valid_slots = {(a["candidate"], a["case_id"], a["repeat"]) for a in plan["attempts"]}
     records: dict[tuple[str, str, int], dict[str, Any]] = {}
@@ -251,6 +297,13 @@ def account(plan: dict[str, Any], first_path: str, second_path: str) -> tuple[di
     second, b = load_journal(second_path, plan)
     if first["candidate"] == second["candidate"] or first["lane"] != second["lane"]:
         raise ValueError("comparisons require two distinct candidates in the same lane")
+    first_fp = first["local_artifact_sha256"]
+    second_fp = second["local_artifact_sha256"]
+    if first_fp is not None and second_fp is not None and first_fp == second_fp:
+        raise ValueError("both candidates use the same local model-artifact digest")
+    if first["model"] == second["model"] and not (
+            first_fp is not None and second_fp is not None and first_fp != second_fp):
+        raise ValueError("same declared model label without distinct local artifact digests")
     records = {**a, **b}
     statuses = {}
     for candidate in plan["candidates"]:
@@ -288,11 +341,40 @@ def account(plan: dict[str, Any], first_path: str, second_path: str) -> tuple[di
         "case_units": len(plan["cases"]), "attempts_expected": len(plan["attempts"]),
         "candidates": statuses, "blinded_pairs_eligible": eligible,
         "blinded_pairs_total": total_pairs, "semantic_quality": "UNASSESSED",
+        "model_identity_status": (
+            "DISTINCT_LOCAL_FILE_HASHES_RUNTIME_UNVERIFIED"
+            if first_fp is not None and second_fp is not None
+            else "DIFFERENT_DECLARED_LABELS_ONLY_RUNTIME_UNVERIFIED"),
+        "independent_model_comparison_eligible": False,
         "journals_with_discarded_incomplete_tails": sum(
             bool(header.get("_discarded_incomplete_tail")) for header in (first, second)
         ),
         "note": "Failures and missing attempts remain in the denominator; no human preference has been measured.",
     }, records
+
+
+def _has_visible_identity_clue(display: dict[str, Any], aliases: set[str]) -> bool:
+    """Conservatively quarantine obvious label disclosures, not certify blinding.
+
+    Only scan critique prose; the source excerpt and fixed display labels are
+    not generated by either candidate. Short model tags like ``local`` cannot
+    be distinguished from ordinary English and still require human screening.
+    """
+    clues = [re.compile(r"(?<!\w)" + re.escape(alias) + r"(?!\w)", re.IGNORECASE)
+             for alias in aliases if len(alias) >= 6]
+
+    def prose(view: dict[str, Any]):
+        yield view["synthesis"]
+        for row in view["lens_reviews"]:
+            yield row["analysis"]
+            yield from row["limitations"]
+        for challenge in view["challenges"]:
+            yield challenge["text"]
+        yield from view["uncertainties"]
+
+    return any(pattern.search(value) for side in ("A", "B")
+               for value in prose(display[side]) if isinstance(value, str)
+               for pattern in clues)
 
 
 def make_packets(plan: dict[str, Any], first_path: str, second_path: str,
@@ -304,6 +386,16 @@ def make_packets(plan: dict[str, Any], first_path: str, second_path: str,
         raise ValueError("blinding seed is required")
     by_id = {case["id"]: case for case in plan["cases"]}
     displays, keys = [], []
+    # Deliberately read only candidate labels and self-declared runtime names.
+    # This does not verify that a runner used those weights or remove subtler
+    # model identity clues from generated prose.
+    first_header, _ = load_journal(first_path, plan)
+    second_header, _ = load_journal(second_path, plan)
+    identity_aliases = {
+        first_header["candidate"], second_header["candidate"],
+        first_header["model"], second_header["model"],
+    }
+    quarantined = 0
     for case in plan["cases"]:
         for repeat in range(1, plan["repeats_per_case"] + 1):
             slots = [(candidate, case["id"], repeat) for candidate in plan["candidates"]]
@@ -316,6 +408,12 @@ def make_packets(plan: dict[str, Any], first_path: str, second_path: str,
                 records[slots[0]]["review"], records[slots[1]]["review"],
                 slots[0][0], slots[1][0], seed=f"{seed}:{case['id']}:{repeat}",
             )
+            if _has_visible_identity_clue(display, identity_aliases):
+                # Do not silently drop the attempts from accounting. The
+                # quarantined prose/assignment remains in the private journal
+                # for explicitly authorized human integrity review.
+                quarantined += 1
+                continue
             # Identical model output on repeated trials otherwise produces
             # identical content-derived pair IDs. The human-study aggregator
             # correctly refuses duplicate IDs: bind each observed *attempt
@@ -330,8 +428,11 @@ def make_packets(plan: dict[str, Any], first_path: str, second_path: str,
             key["pair_id"] = instance_id
             displays.append({"case_id": case["id"], "repeat": repeat, "pair": display})
             keys.append({"case_id": case["id"], "repeat": repeat, "key": key})
-    if len(displays) != accounting["blinded_pairs_eligible"]:
+    if len(displays) + quarantined != accounting["blinded_pairs_eligible"]:
         raise ValueError("blind packets and accounting diverged")
+    accounting["blinded_pairs_displayed"] = len(displays)
+    accounting["blinded_pairs_identity_quarantined"] = quarantined
+    accounting["identity_clue_screen"] = "HEURISTIC_ONLY_HUMAN_SCREEN_REQUIRED"
     return (
         {"schema_version": PACKETS_SCHEMA, "plan_sha256": digest(plan), "pairs": displays},
         {"schema_version": KEYS_SCHEMA, "plan_sha256": digest(plan), "keys": keys},
@@ -350,6 +451,7 @@ def main(argv: list[str] | None = None) -> int:
     run.add_argument("--plan", required=True)
     run.add_argument("--candidate", required=True)
     run.add_argument("--model", required=True)
+    run.add_argument("--artifact-file", help="optional local model-file SHA-256 evidence; does NOT bind the file to the live runner")
     run.add_argument("--url", required=True)
     run.add_argument("--lane", choices=tuple(LANES), required=True)
     run.add_argument("--host-qualified", action="store_true", required=True,
@@ -382,13 +484,15 @@ def main(argv: list[str] | None = None) -> int:
                 json_mode=not lane["structured_outputs"],
             )
             run_candidate(plan, args.candidate, provider=provider, model=args.model,
-                          lane=args.lane, journal_path=args.out)
+                          lane=args.lane, journal_path=args.out,
+                          artifact_file=args.artifact_file)
             print(json.dumps({"journal_written": args.out, "candidate": args.candidate}))
         elif args.command == "account":
             accounting, _ = account(_read_json(args.plan), args.first, args.second)
             _write_json_exclusive(args.out, accounting)
             print(json.dumps({"accounting_written": args.out,
-                              "attempts_expected": accounting["attempts_expected"]}))
+                              "attempts_expected": accounting["attempts_expected"],
+                              "independent_model_comparison_eligible": False}))
         elif args.command == "blind":
             display_path = _private_output_path(args.out)
             key_path = _private_output_path(args.key_out)
@@ -407,7 +511,10 @@ def main(argv: list[str] | None = None) -> int:
                 raise
             print(json.dumps({"display_written": args.out, "key_written": args.key_out,
                               "pairs_eligible": accounting["blinded_pairs_eligible"],
-                              "pairs_total": accounting["blinded_pairs_total"]}))
+                              "pairs_displayed": accounting["blinded_pairs_displayed"],
+                              "pairs_identity_quarantined": accounting["blinded_pairs_identity_quarantined"],
+                              "pairs_total": accounting["blinded_pairs_total"],
+                              "independent_model_comparison_eligible": False}))
         return 0
     except (OSError, ValueError, TypeError, KeyError, json.JSONDecodeError) as error:
         parser.exit(2, f"literary gate error: {error}\n")

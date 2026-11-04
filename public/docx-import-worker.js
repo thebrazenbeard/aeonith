@@ -1,16 +1,22 @@
 "use strict";
 
 // Dependency-free, browser-local DOCX import. This worker never contacts a
-// server or parses XML. It verifies a bounded ZIP directory, extracts only
-// word/document.xml, and streams its decompression with a hard byte counter.
-// The main thread parses the bounded XML with the browser's native DOMParser.
+// server or parses XML. It verifies a bounded ZIP directory, extracts
+// word/document.xml and optional word/styles.xml, and streams decompression
+// with hard byte counters. The main thread checks stylesheet visibility with
+// the browser's native DOMParser before importing any manuscript text.
 
 const MAX_DOCX_BYTES = 2 * 1024 * 1024;
 const MAX_ZIP_ENTRIES = 1000;
 const MAX_ZIP_ENTRY_UNCOMPRESSED = 4 * 1024 * 1024;
 const MAX_ZIP_TOTAL_UNCOMPRESSED = 8 * 1024 * 1024;
 const MAX_DOCX_XML_BYTES = 2 * 1024 * 1024;
+const MAX_STYLES_XML_BYTES = 2 * 1024 * 1024;
 const MAX_ZIP_RATIO = 200;
+// The browser only presents word/document.xml. Refuse companion parts that
+// can contain author-visible material absent from that extracted body. This
+// deliberately matches the supported subset of the offline DOCX importer.
+const UNSUPPORTED_RICH_WORD_PART = /^word\/(?:media\/|embeddings\/|activeX\/|charts\/|diagrams\/|footnotes\.xml$|endnotes\.xml$|comments[^/]*\.xml$|header[^/]*\.xml$|footer[^/]*\.xml$|vbaProject[^/]*$)/i;
 
 function inspectDocxZip(buffer) {
   if (!(buffer instanceof ArrayBuffer) || buffer.byteLength < 22 ||
@@ -45,6 +51,7 @@ function inspectDocxZip(buffer) {
   const end = directoryStart + directorySize;
   let total = 0;
   let documentEntry = null;
+  let stylesEntry = null;
   let contentTypesFound = false;
   const seenNames = new Set();
   const decoder = new TextDecoder("utf-8", { fatal: true });
@@ -78,6 +85,9 @@ function inspectDocxZip(buffer) {
       throw new Error("DOCX archive contains duplicate ZIP entry names.");
     }
     seenNames.add(name);
+    if (UNSUPPORTED_RICH_WORD_PART.test(name)) {
+      throw new Error("DOCX contains unsupported rich content outside the extracted main body. Export reviewed visible text first.");
+    }
     total += uncompressed;
     if (total > MAX_ZIP_TOTAL_UNCOMPRESSED) {
       throw new Error("DOCX archive would expand beyond safe limits.");
@@ -89,6 +99,13 @@ function inspectDocxZip(buffer) {
       documentEntry = { compression, crc, compressed, uncompressed, localOffset, nameSize,
                         nameBytes: bytes.slice(offset + 46, offset + 46 + nameSize), flags };
     }
+    if (name === "word/styles.xml") {
+      if (!uncompressed || uncompressed > MAX_STYLES_XML_BYTES) {
+        throw new Error("DOCX styles XML exceeds safe limits.");
+      }
+      stylesEntry = { compression, crc, compressed, uncompressed, localOffset, nameSize,
+                      nameBytes: bytes.slice(offset + 46, offset + 46 + nameSize), flags };
+    }
     if (name === "[Content_Types].xml") contentTypesFound = true;
     offset = next;
   }
@@ -97,26 +114,29 @@ function inspectDocxZip(buffer) {
   }
   // Verify the local file header corresponds to the selected central entry;
   // a parser discrepancy must not lead us to another compressed member.
-  const entry = documentEntry;
-  const local = entry.localOffset;
-  if (local + 30 > directoryStart || view.getUint32(local, true) !== 0x04034b50 ||
-      view.getUint16(local + 6, true) !== entry.flags ||
-      view.getUint16(local + 8, true) !== entry.compression ||
-      view.getUint16(local + 26, true) !== entry.nameSize) {
-    throw new Error("DOCX archive has conflicting ZIP headers.");
-  }
-  const dataStart = local + 30 + view.getUint16(local + 26, true) +
-                    view.getUint16(local + 28, true);
-  if (dataStart + entry.compressed > directoryStart) {
-    throw new Error("DOCX compressed document is outside its ZIP member bounds.");
-  }
-  const localName = bytes.subarray(local + 30, local + 30 + entry.nameSize);
-  for (let i = 0; i < localName.length; i++) {
-    if (localName[i] !== entry.nameBytes[i]) {
-      throw new Error("DOCX ZIP member names disagree.");
+  const locate = (entry) => {
+    if (!entry) return null;
+    const local = entry.localOffset;
+    if (local + 30 > directoryStart || view.getUint32(local, true) !== 0x04034b50 ||
+        view.getUint16(local + 6, true) !== entry.flags ||
+        view.getUint16(local + 8, true) !== entry.compression ||
+        view.getUint16(local + 26, true) !== entry.nameSize) {
+      throw new Error("DOCX archive has conflicting ZIP headers.");
     }
-  }
-  return { ...entry, dataStart };
+    const dataStart = local + 30 + view.getUint16(local + 26, true) +
+                      view.getUint16(local + 28, true);
+    if (dataStart + entry.compressed > directoryStart) {
+      throw new Error("DOCX compressed XML is outside its ZIP member bounds.");
+    }
+    const localName = bytes.subarray(local + 30, local + 30 + entry.nameSize);
+    for (let i = 0; i < localName.length; i++) {
+      if (localName[i] !== entry.nameBytes[i]) {
+        throw new Error("DOCX ZIP member names disagree.");
+      }
+    }
+    return { ...entry, dataStart };
+  };
+  return { document: locate(documentEntry), styles: locate(stylesEntry) };
 }
 
 function crc32(bytes) {
@@ -128,8 +148,7 @@ function crc32(bytes) {
   return (crc ^ 0xffffffff) >>> 0;
 }
 
-async function extractDocumentXml(buffer) {
-  const entry = inspectDocxZip(buffer);
+async function extractZipXml(buffer, entry, limit) {
   const compressed = new Uint8Array(buffer, entry.dataStart, entry.compressed);
   let output;
   if (entry.compression === 0) {
@@ -151,7 +170,7 @@ async function extractDocumentXml(buffer) {
         const chunk = await reader.read();
         if (chunk.done) break;
         length += chunk.value.byteLength;
-        if (length > entry.uncompressed || length > MAX_DOCX_XML_BYTES) {
+        if (length > entry.uncompressed || length > limit) {
           await reader.cancel();
           throw new Error("DOCX decompression exceeded its strict byte limit.");
         }
@@ -180,10 +199,17 @@ async function extractDocumentXml(buffer) {
   return xml;
 }
 
+async function extractDocumentXml(buffer) {
+  const entries = inspectDocxZip(buffer);
+  const xml = await extractZipXml(buffer, entries.document, MAX_DOCX_XML_BYTES);
+  const stylesXml = entries.styles ? await extractZipXml(buffer, entries.styles, MAX_STYLES_XML_BYTES) : null;
+  return { xml, stylesXml };
+}
+
 self.onmessage = async (event) => {
   try {
-    const xml = await extractDocumentXml(event.data && event.data.buffer);
-    self.postMessage({ ok: true, xml });
+    const result = await extractDocumentXml(event.data && event.data.buffer);
+    self.postMessage({ ok: true, ...result });
   } catch (error) {
     self.postMessage({
       ok: false,

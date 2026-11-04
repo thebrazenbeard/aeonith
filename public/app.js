@@ -5,6 +5,7 @@ const byId = (id) => document.getElementById(id);
 const form = byId("review-form");
 const titleInput = byId("work-title");
 const manuscriptInput = byId("manuscript");
+const contextInput = byId("story-context");
 const fileInput = byId("manuscript-file");
 const importStatusNode = byId("import-status");
 const tokenInput = byId("service-token");
@@ -22,13 +23,48 @@ const errorNode = byId("error");
 const resultsNode = byId("results");
 const emptyNode = byId("reading-empty");
 const countNode = byId("character-count");
+const contextCountNode = byId("context-character-count");
 const copyButton = byId("copy-result");
 const copyStatus = byId("copy-status");
 const MAX_MANUSCRIPT_CHARS = 12000;
+const MAX_CONTEXT_CHARS = 2000;
 const MAX_IMPORT_BYTES = 65536;
 const MAX_DOCX_BYTES = 2 * 1024 * 1024;
 const DOCX_PARSE_TIMEOUT_MS = 8000;
 const MAX_LENSES = 14;
+let effectiveMaxLenses = MAX_LENSES;
+let lensLimitKnown = false;
+const lensInputs = Array.from(form.querySelectorAll('input[name="lenses"]'));
+const lensHint = form.querySelector(".lenses-control .field-note");
+const lensSummary = form.querySelector(".lenses-control .summary-aside");
+
+function configureLensCeiling(maxLenses) {
+  lensLimitKnown = Number.isInteger(maxLenses) && maxLenses >= 1 && maxLenses <= MAX_LENSES;
+  effectiveMaxLenses = lensLimitKnown ? maxLenses : MAX_LENSES;
+  const selected = lensInputs.filter((input) => input.checked).length;
+  lensInputs.forEach((input) => {
+    // Never clear the user's choice. Once at capacity, unchecked options are
+    // disabled until one selected lens is unchecked, so changing is possible.
+    input.disabled = lensLimitKnown && !input.checked && selected >= effectiveMaxLenses;
+  });
+  if (lensLimitKnown) {
+    const count = `${effectiveMaxLenses} lens${effectiveMaxLenses === 1 ? "" : "es"}`;
+    if (lensSummary) lensSummary.textContent = `Up to ${count} per review on this service`;
+    if (lensHint) lensHint.textContent = `This service allows up to ${count} per review. Uncheck a selected lens before choosing another when you reach the limit.`;
+  } else {
+    if (lensSummary) lensSummary.textContent = "One selected by default; fourteen available";
+    if (lensHint) lensHint.textContent = "Select one to fourteen perspectives. The operator may impose a lower limit based on the local model. More lenses take longer and may exceed that limit.";
+  }
+}
+
+lensInputs.forEach((input) => input.addEventListener("change", () => {
+  configureLensCeiling(lensLimitKnown ? effectiveMaxLenses : null);
+  // A different critical question is a different review configuration,
+  // even when the manuscript itself is unchanged.
+  consentInput.checked = false;
+  updateDisplayedReviewProvenance();
+}));
+configureLensCeiling(null);
 
 // Display the remote-access warning for Tailscale's HTTPS machine.tailnet.ts.net
 // hostnames only. Never construct endpoints or trust a URL supplied by a user.
@@ -54,7 +90,46 @@ const lensLabels = Object.freeze({
   comparative: "Comparative"
 });
 
+// This is a fixed-code advisory display. Provider-supplied paths, excerpts,
+// counts, limitations and labels are never copied into the browser results.
+const semanticAdvisoryLabels = Object.freeze({
+  possible_unfounded_recurrence: "Possible unsupported recurrence or motif claim; inspect the actual passage.",
+  possible_unseen_story_context: "Possible assertion about unseen story events or context; check the supplied excerpt."
+});
+
+function semanticAdvisoryMessages(triage) {
+  const caveat = "Semantic quality not assessed. Lexical heuristic warnings are not verification or literary judgment.";
+  if (triage == null) {
+    return [caveat, "This service response contains no semantic-triage report."];
+  }
+  if (!triage || typeof triage !== "object" || Array.isArray(triage) ||
+      triage.schema_version !== "aeonith.semantic_triage.v1" ||
+      triage.semantic_quality !== "UNASSESSED" ||
+      !Array.isArray(triage.warnings) || triage.warnings.length > 90) {
+    return [caveat, "Advisory metadata was unrecognized; no clean result can be inferred."];
+  }
+  if (triage.classification !== "HEURISTIC_HUMAN_REVIEW_ONLY") {
+    return [caveat, "The limited semantic heuristic did not run or could not be interpreted."];
+  }
+  const messages = [];
+  const seen = new Set();
+  let unrecognized = false;
+  for (const warning of triage.warnings) {
+    const code = warning && typeof warning === "object" && !Array.isArray(warning) ? warning.code : null;
+    if (typeof code === "string" && Object.prototype.hasOwnProperty.call(semanticAdvisoryLabels, code)) {
+      if (!seen.has(code)) messages.push(semanticAdvisoryLabels[code]);
+      seen.add(code);
+    } else {
+      unrecognized = true;
+    }
+  }
+  if (unrecognized) messages.push("Some advisory warning codes were unrecognized and were not displayed.");
+  if (!messages.length) messages.push("No lexical warnings were raised by this limited heuristic; this is not a quality pass.");
+  return [caveat, ...messages];
+}
+
 let plainTextReview = "";
+let displayedReviewSource = null;
 let requestInFlight = false;
 let manuscriptRevision = 0;
 let latestFileSelection = 0;
@@ -179,14 +254,18 @@ async function checkLocalService() {
     if (!response.ok) throw new Error("health unavailable");
     const status = await response.json();
     if (status && status.service === "aeonith" && status.review_configured === true) {
+      configureLensCeiling(status.max_lenses);
       runtimeStatusNode.textContent = "Local model configured · A successful review is not guaranteed.";
       runtimeStatusNode.classList.add("runtime-ready");
     } else if (status && status.service === "aeonith" && status.review_configured === false) {
+      configureLensCeiling(null);
       runtimeStatusNode.textContent = "Local model disabled or unconfigured · Set up a local model to enable reviews.";
     } else {
+      configureLensCeiling(null);
       runtimeStatusNode.textContent = "Local service returned an unexpected health result.";
     }
   } catch {
+    configureLensCeiling(null);
     runtimeStatusNode.textContent = "Local service readiness unavailable · Reviews may not be available.";
   }
 }
@@ -202,6 +281,7 @@ function element(tag, value, className) {
 
 function resetResults() {
   plainTextReview = "";
+  displayedReviewSource = null;
   resultsNode.hidden = true;
   emptyNode.hidden = false;
   copyStatus.textContent = "";
@@ -209,10 +289,37 @@ function resetResults() {
     .forEach((id) => byId(id).replaceChildren());
 }
 
+function reviewedSourceLabel(source) {
+  const title = source.title.trim() || "Untitled work";
+  const contextNote = source.context ? ` · context supplied (${source.context.length.toLocaleString()} characters)` : "";
+  return `${title} · ${source.manuscript.length.toLocaleString()} characters${contextNote}`;
+}
+
+function displayedReviewIsStale() {
+  const currentLenses = lensInputs.filter((input) => input.checked).map((input) => input.value);
+  return displayedReviewSource !== null &&
+    (displayedReviewSource.manuscript !== manuscriptInput.value ||
+     displayedReviewSource.title !== titleInput.value ||
+     displayedReviewSource.context !== contextInput.value ||
+     displayedReviewSource.lenses.join("\u0000") !== currentLenses.join("\u0000"));
+}
+
+function updateDisplayedReviewProvenance() {
+  if (!displayedReviewSource || resultsNode.hidden) return;
+  const stale = displayedReviewIsStale();
+  resultsNode.setAttribute("data-source-state", stale ? "earlier-version" : "current-version");
+  copyButton.textContent = stale ? "Copy prior-version critique as text" : "Copy critique as text";
+  statusNode.textContent = stale ?
+    `Earlier critique (${reviewedSourceLabel(displayedReviewSource)}). This reading does not apply to the current editor input or selected lenses.` :
+    "A critique was returned for the current editor input and selected lenses. It is model interpretation, not established literary fact.";
+}
+
 function showError(message) {
   errorNode.textContent = message;
   errorNode.hidden = false;
-  statusNode.textContent = "No critique was generated.";
+  statusNode.textContent = displayedReviewSource && !resultsNode.hidden ?
+    "No new critique was generated. The previous critique remains below; check its source-version label." :
+    "No critique was generated.";
 }
 
 function clearError() {
@@ -233,16 +340,39 @@ function renderList(target, heading, values, className) {
   return [heading, ...entries, ""];
 }
 
-function renderReview(review) {
+function renderReview(review, source) {
   if (!review || review.schema_version !== "aeonith.review.v1" ||
       review.status !== "completed" || typeof review.synthesis !== "string" ||
-      !Array.isArray(review.lens_reviews) || review.lens_reviews.length === 0) {
+      !Array.isArray(review.lens_reviews) || review.lens_reviews.length === 0 ||
+      !source || typeof source.title !== "string" || typeof source.manuscript !== "string" ||
+      typeof source.context !== "string" || !Array.isArray(source.lenses) ||
+      review.lens_reviews.some((item) => !item || typeof item.lens !== "string" ||
+        typeof item.analysis !== "string" ||
+        !Object.prototype.hasOwnProperty.call(lensLabels, item.lens))) {
     throw new Error("The service returned an incomplete critique; nothing was displayed.");
   }
 
+  // A completed HTTP response is not evidence that it answered the actual
+  // request. Reject missing, duplicated, substituted or extra critical lenses
+  // before resetResults() can erase an earlier valid critique. The backend
+  // also checks coverage, but old/malformed services must fail closed here.
+  const requestedLenses = new Set(source.lenses);
+  const returnedLenses = review.lens_reviews.map((item) => item.lens);
+  if (!source.lenses.length || requestedLenses.size !== source.lenses.length ||
+      returnedLenses.length !== requestedLenses.size ||
+      new Set(returnedLenses).size !== returnedLenses.length ||
+      returnedLenses.some((lens) => !requestedLenses.has(lens))) {
+    throw new Error("The service returned a critique with incomplete or unexpected lens coverage.");
+  }
+
   resetResults();
-  const textual = ["Aeonith — provisional literary critique", "", "Overall synthesis", review.synthesis, ""];
+  displayedReviewSource = { title: source.title, manuscript: source.manuscript,
+                            context: source.context, lenses: [...source.lenses] };
+  const sourceLabel = reviewedSourceLabel(displayedReviewSource);
+  const textual = ["Aeonith — provisional literary critique", "Source: " + sourceLabel, "", "Overall synthesis", review.synthesis, ""];
   const provenance = review.provenance;
+  byId("result-provenance").append(element("p", "Reviewed source: " + sourceLabel));
+  byId("result-provenance").append(element("p", "Semantic quality not assessed; advisory warnings are not verification."));
   if (provenance && typeof provenance.provider_name === "string" && provenance.provider_name) {
     byId("result-provenance").append(element("p", "Model provider: " + provenance.provider_name + ". Interpretations are not formal verification."));
   } else {
@@ -255,10 +385,6 @@ function renderReview(review) {
 
   const sectionTarget = byId("lens-results");
   review.lens_reviews.forEach((item, index) => {
-    if (!item || typeof item.lens !== "string" || typeof item.analysis !== "string" ||
-        !Object.prototype.hasOwnProperty.call(lensLabels, item.lens)) {
-      throw new Error("The service returned a malformed lens analysis; nothing was displayed.");
-    }
     const label = lensLabels[item.lens];
     const section = element("article", undefined, "result-section");
     section.append(element("h4", `${index + 1}. ${label}`));
@@ -291,6 +417,8 @@ function renderReview(review) {
   });
 
   textual.push(...renderList(byId("result-uncertainties"), "Uncertainties", review.uncertainties));
+  textual.push(...renderList(byId("result-uncertainties"), "Semantic triage — advisory only",
+    semanticAdvisoryMessages(review.semantic_triage)));
   if (Array.isArray(review.challenges)) {
     textual.push(...renderList(byId("result-challenges"), "Questions worth testing",
       review.challenges.map((entry) => (entry && typeof entry.text === "string" ? entry.text : ""))));
@@ -298,7 +426,7 @@ function renderReview(review) {
   plainTextReview = textual.join("\n");
   resultsNode.hidden = false;
   emptyNode.hidden = true;
-  statusNode.textContent = "A critique was returned. It reflects model interpretation, not established literary fact.";
+  updateDisplayedReviewProvenance();
   resultsNode.focus();
 }
 
@@ -326,8 +454,19 @@ manuscriptInput.addEventListener("input", () => {
   countNode.textContent = `${size.toLocaleString()} / ${MAX_MANUSCRIPT_CHARS.toLocaleString()} characters`;
   // Disclosure applies to this particular writing, not future edits.
   consentInput.checked = false;
+  updateDisplayedReviewProvenance();
 });
-titleInput.addEventListener("input", () => { consentInput.checked = false; });
+titleInput.addEventListener("input", () => {
+  manuscriptRevision += 1;
+  consentInput.checked = false;
+  updateDisplayedReviewProvenance();
+});
+contextInput.addEventListener("input", () => {
+  manuscriptRevision += 1;
+  contextCountNode.textContent = `${contextInput.value.length.toLocaleString()} / ${MAX_CONTEXT_CHARS.toLocaleString()} characters`;
+  consentInput.checked = false;
+  updateDisplayedReviewProvenance();
+});
 
 function extractDocxInWorker(buffer) {
   // An untrusted compressed document is never parsed on the UI thread or
@@ -354,10 +493,11 @@ function extractDocxInWorker(buffer) {
     const timer = setTimeout(() => complete(new Error("DOCX parsing timed out; your writing was not changed.")), DOCX_PARSE_TIMEOUT_MS);
     worker.onmessage = (event) => {
       const message = event.data;
-      if (!message || message.ok !== true || typeof message.xml !== "string") {
+      if (!message || message.ok !== true || typeof message.xml !== "string" ||
+          (message.stylesXml != null && typeof message.stylesXml !== "string")) {
         complete(new Error(message && typeof message.error === "string" ? message.error : "The DOCX parser rejected this document."));
       } else {
-        complete(null, message.xml);
+        complete(null, { xml: message.xml, stylesXml: message.stylesXml || null });
       }
     };
     worker.onerror = () => complete(new Error("The local DOCX parser failed. Your writing was not changed."));
@@ -368,7 +508,7 @@ function extractDocxInWorker(buffer) {
   });
 }
 
-function extractDocxText(xml) {
+function extractDocxText(xml, stylesXml = null) {
   // DOMParser is a Window API, not available in Web Workers. Only the
   // worker's strictly bounded document XML enters this detached XML DOM.
   // Never render, insert, or evaluate nodes from an imported document.
@@ -383,12 +523,50 @@ function extractDocxText(xml) {
   // Keep this as a literal namespace match while retaining the established
   // no-absolute-URL invariant for the browser script.
   const wordNamespace = "http:" + "//schemas.openxmlformats.org/wordprocessingml/2006/main";
+  const compatibilityNamespace = "http:" + "//schemas.openxmlformats.org/markup-compatibility/2006";
+  // The body alone cannot establish whether an *unstyled* run is actually
+  // visible: Word may inherit w:vanish/webHidden from document defaults or
+  // its default paragraph/character style. The worker also verifies the
+  // optional styles part's ZIP headers, byte limits, and CRC before returning
+  // it. Conservatively reject any stylesheet containing hidden-run markers,
+  // including markers on unused styles, rather than attempting Word's full
+  // style cascade in this dependency-free excerpt reader.
+  if (stylesXml !== null) {
+    if (typeof stylesXml !== "string" || stylesXml.length > 2 * 1024 * 1024 ||
+        /<!DOCTYPE|<!ENTITY/i.test(stylesXml)) {
+      throw new Error("The browser cannot safely parse this Word document's styles.");
+    }
+    const styleDocument = new DOMParser().parseFromString(stylesXml, "application/xml");
+    if (styleDocument.getElementsByTagName("parsererror").length !== 0 ||
+        !styleDocument.documentElement ||
+        styleDocument.documentElement.namespaceURI !== wordNamespace ||
+        styleDocument.documentElement.localName !== "styles") {
+      throw new Error("The Word document contains an unreadable stylesheet.");
+    }
+    const styleWalker = styleDocument.createTreeWalker(styleDocument.documentElement, NodeFilter.SHOW_ELEMENT);
+    let styleElement;
+    let styleCount = 0;
+    while ((styleElement = styleWalker.nextNode())) {
+      if (++styleCount > 50000) {
+        throw new Error("The Word document contains too many stylesheet elements.");
+      }
+      if (styleElement.namespaceURI === compatibilityNamespace &&
+          styleElement.localName === "AlternateContent") {
+        throw new Error("The Word document contains unresolved style compatibility markup.");
+      }
+      if (styleElement.namespaceURI === wordNamespace &&
+          ["vanish", "webHidden", "specVanish"].includes(styleElement.localName)) {
+        throw new Error("The Word document contains a potentially hidden style. Export reviewed visible text first.");
+      }
+    }
+  }
   const root = documentXml.documentElement;
   if (!root || root.namespaceURI !== wordNamespace || root.localName !== "document") {
     throw new Error("The Word document XML has an unexpected root element.");
   }
-  const body = root.getElementsByTagNameNS(wordNamespace, "body")[0];
-  if (!body) throw new Error("The Word document has no readable body.");
+  const bodies = root.getElementsByTagNameNS(wordNamespace, "body");
+  if (bodies.length !== 1) throw new Error("The Word document has no unambiguous readable body.");
+  const body = bodies[0];
   // Walk each element exactly once. Descendant searches inside every nested
   // paragraph/text node can otherwise turn attacker-controlled XML into
   // quadratic work or duplicate arbitrarily large descendant text.
@@ -403,12 +581,35 @@ function extractDocxText(xml) {
     "del", "delText", "ins", "moveFrom", "moveTo", "moveFromRangeStart",
     "moveFromRangeEnd", "moveToRangeStart", "moveToRangeEnd",
     "customXmlDelRangeStart", "customXmlInsRangeStart", "customXmlMoveFromRangeStart",
-    "customXmlMoveToRangeStart", "vanish", "webHidden"
+    "customXmlMoveToRangeStart", "vanish", "webHidden", "specVanish",
+    // No named-style visibility resolver is available in this browser path.
+    "rStyle", "pStyle"
+  ]);
+  // Word can display or suppress text through these main-body constructs,
+  // independently of separate media/notes ZIP parts. The excerpt reader has
+  // no field evaluator, textbox renderer, numbering resolver, or object layer.
+  // Refuse them rather than silently treating their w:t descendants as
+  // ordinary, author-visible prose.
+  const unsupportedWordBodyMarkup = new Set([
+    "instrText", "fldChar", "fldSimple", "footnoteReference",
+    "endnoteReference", "commentReference", "commentRangeStart",
+    "commentRangeEnd", "annotationRef", "headerReference",
+    "footerReference", "drawing", "pict", "object", "subDoc",
+    "txbxContent", "sym", "numPr"
   ]);
   const lines = [];
   let pieces = [];
   let characters = 0;
   let visited = 0;
+  // TreeWalker visits elements in pre-order. Keep a bounded ancestry stack
+  // rather than repeatedly searching descendants: markup-compatibility
+  // fallbacks or ignored foreign wrappers can contain w:t that Word would
+  // never render, so copying those strings would disclose unintended prose.
+  const ancestry = [{ node: body, foreign: false }];
+  const semanticTextElements = new Set([
+    "p", "t", "tab", "br", "cr", "noBreakHyphen", "softHyphen",
+    "lastRenderedPageBreak"
+  ]);
   const add = (value) => {
     characters += value.length;
     if (characters > MAX_MANUSCRIPT_CHARS) {
@@ -425,9 +626,32 @@ function extractDocxText(xml) {
     if (++visited > 50000) {
       throw new Error("This Word document contains too many XML elements to import safely.");
     }
-    if (element.namespaceURI !== wordNamespace) continue;
+    while (ancestry.length && ancestry[ancestry.length - 1].node !== element.parentNode) {
+      ancestry.pop();
+    }
+    const parentForeign = ancestry.length && ancestry[ancestry.length - 1].foreign;
+    const isForeign = element.namespaceURI !== wordNamespace;
+    ancestry.push({ node: element, foreign: isForeign || parentForeign });
+    if (element.namespaceURI === compatibilityNamespace && element.localName === "AlternateContent") {
+      throw new Error("This Word document contains unrecognized markup around text; export reviewed visible text first.");
+    }
+    if (parentForeign && element.namespaceURI === wordNamespace &&
+        semanticTextElements.has(element.localName)) {
+      throw new Error("This Word document contains unrecognized markup around text; export reviewed visible text first.");
+    }
+    if (isForeign) {
+      for (const child of element.childNodes) {
+        if ((child.nodeType === 3 || child.nodeType === 4) && (child.nodeValue || "").trim()) {
+          throw new Error("This Word document contains unrecognized markup around text; export reviewed visible text first.");
+        }
+      }
+      continue;
+    }
     if (ambiguousWordMarkup.has(element.localName)) {
       throw new Error("This Word document contains tracked changes or hidden text that cannot be imported faithfully. Finalize changes in Word and export the visible excerpt as plain text first.");
+    }
+    if (unsupportedWordBodyMarkup.has(element.localName)) {
+      throw new Error("This Word document has display-dependent body content that cannot be imported faithfully. Export reviewed visible text first.");
     }
     if (element.localName === "altChunk") {
       throw new Error("This Word document uses unsupported embedded body content. Export it as plain text first.");
@@ -448,7 +672,12 @@ function extractDocxText(xml) {
       add(value);
     } else if (element.localName === "tab") {
       add("\t");
-    } else if (element.localName === "br" || element.localName === "cr") {
+    } else if (element.localName === "noBreakHyphen") {
+      add("\u2011");
+    } else if (element.localName === "softHyphen") {
+      add("\u00ad");
+    } else if (element.localName === "br" || element.localName === "cr" ||
+               element.localName === "lastRenderedPageBreak") {
       add("\n");
     }
   }
@@ -490,7 +719,8 @@ fileInput.addEventListener("change", async () => {
     // isolated worker with ZIP metadata/CRC verification, streaming byte caps,
     // and timeout; only bounded XML is parsed into a detached DOM.
     const bytes = await file.arrayBuffer();
-    const text = isDocx ? extractDocxText(await extractDocxInWorker(bytes)) :
+    const text = isDocx ? await extractDocxInWorker(bytes).then((parts) =>
+      extractDocxText(parts.xml, parts.stylesXml)) :
       new TextDecoder("utf-8", { fatal: true }).decode(bytes);
     if (!text.trim() || text.includes("\u0000")) {
       importStatusNode.textContent = "The selected file does not contain usable plain text.";
@@ -512,9 +742,8 @@ fileInput.addEventListener("change", async () => {
     }
     manuscriptInput.value = text;
     manuscriptInput.dispatchEvent(new Event("input", { bubbles: true }));
-    resetResults();
     clearError();
-    statusNode.textContent = "Imported text is ready for a new critique.";
+    if (resultsNode.hidden) statusNode.textContent = "Imported text is ready for a new critique.";
     importStatusNode.textContent = `Imported ${file.name} into the editor (${text.length.toLocaleString()} characters).`;
     manuscriptInput.focus();
   } catch (error) {
@@ -531,24 +760,30 @@ form.addEventListener("submit", async (event) => {
   // another provider request while the first is still in flight.
   if (requestInFlight) return;
   clearError();
-  resetResults();
 
   const manuscript = manuscriptInput.value;
   const title = titleInput.value;
+  const context = contextInput.value;
   const lenses = Array.from(form.querySelectorAll('input[name="lenses"]:checked'), (input) => input.value);
   const token = tokenInput.value.trim();
   if (!manuscript.trim()) return showError("Paste a manuscript or excerpt before requesting criticism.");
   if (manuscript.length > MAX_MANUSCRIPT_CHARS) return showError("Submit an excerpt of 12,000 characters or fewer.");
+  if (context.length > MAX_CONTEXT_CHARS) return showError("Story context must contain 2,000 characters or fewer.");
   if (title.length > 500) return showError("The title must contain 500 characters or fewer.");
   if (!lenses.length) return showError("Select at least one critical lens.");
   if (lenses.length > MAX_LENSES) return showError("Choose no more than fourteen lenses for a review.");
+  if (lenses.length > effectiveMaxLenses) return showError(`This service allows no more than ${effectiveMaxLenses} lens${effectiveMaxLenses === 1 ? "" : "es"} per review. Uncheck some lenses before submitting.`);
   if (!token && !browserSessionActive) return showError("Enter your service token or sign in this browser to continue.");
   if (!consentInput.checked) return showError("Confirm that you have permission to submit this writing to the local model.");
   const payload = {
     schema_version: "aeonith.review.v1",
     work: { title, text: manuscript },
+    context,
     lenses
   };
+  // Bind any eventual response to the text actually sent, not a newer editor
+  // version entered while a slow local model was still generating.
+  const submittedSource = { title, manuscript, context, lenses: [...lenses] };
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), 120000);
   requestInFlight = true;
@@ -580,8 +815,7 @@ form.addEventListener("submit", async (event) => {
       return showError(requestError(response.status, data));
     }
     if (!data || data.status !== "completed") return showError(requestError(503, data));
-    try { renderReview(data); } catch {
-      resetResults();
+    try { renderReview(data, submittedSource); } catch {
       showError("The service returned an incomplete or malformed critique. Nothing was displayed.");
     }
   } catch (error) {
@@ -604,8 +838,11 @@ copyButton.addEventListener("click", async () => {
   copyStatus.textContent = "";
   if (!plainTextReview) return;
   try {
-    await navigator.clipboard.writeText(plainTextReview);
-    copyStatus.textContent = "Critique copied as plain text.";
+    const stale = displayedReviewIsStale();
+    const sourceNote = stale ? "PRIOR REVIEW VERSION — not the current editor input or selected lenses\n\n" : "";
+    await navigator.clipboard.writeText(sourceNote + plainTextReview);
+    copyStatus.textContent = stale ? "Prior-version critique copied; it does not match the current editor." :
+      "Critique copied as plain text.";
   } catch {
     copyStatus.textContent = "Copying is unavailable in this browser. Select the visible text manually.";
   }

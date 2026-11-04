@@ -42,6 +42,31 @@ python -m aeonith.local_server --host 127.0.0.1 --port 8765
 
 Open `http://127.0.0.1:8765/` on that computer. Enter the freshly generated bearer token to submit a passage. The UI is same-origin and does not persist that bearer token or manuscript text in browser storage. An operator-configured public HTTPS Funnel additionally supports an optional seven-day, signed, secure browser-session cookie issued after valid bearer sign-in; the cookie is not the underlying bearer token. Do not paste the token into a publicly visible terminal transcript, issue tracker, chat, screenshot, or repository file.
 
+### Windows: recover the existing launcher token with one click
+
+If you used `scripts/start-aeonith-windows.ps1`, the launcher saved its bearer
+in **that Windows account's DPAPI-protected profile**, not in the repository.
+In Explorer, double-click `scripts/copy-aeonith-token-windows.cmd` while signed
+into the **same Windows account that launched Aeonith**. It calls the existing
+`copy-aeonith-token-windows.ps1` helper with a process-only PowerShell execution
+policy override and copies the **existing** token to that account's clipboard.
+No administrator terminal, model download, service restart, new token, billing
+account, or public configuration is involved.
+
+Switch to the browser you use for Aeonith, locate **Service access token**, and
+press `Ctrl+V`. The field is hidden when that browser already has an active
+authenticated HTTPS session; do not sign out merely to reveal it unless you
+actually need a different session. The clipboard lives on the Windows machine
+where the helper ran: it does **not** send the secret to a different computer or
+remote browser. Clear clipboard history after use. On a different Windows
+account, an absent DPAPI token is correctly reported rather than silently
+creating or retrieving another account's credentials.
+
+This shortcut only eases token recovery. The browser must still send the
+bearer over a trusted connection or hold a valid authenticated HTTPS session;
+localhost HTTP does not receive a persistent session. The service remains
+protected by exactly the same authentication rules.
+
 The local server listens on loopback only, normally `127.0.0.1:8765`; it rejects a non-loopback host rather than offering a LAN mode. **Do not expose the local port directly.** For an optional public HTTPS endpoint, use the [separate Tailscale Funnel runbook](TAILSCALE_FUNNEL.md): it requires an exact Tailscale hostname allowlist, local resource protections, a qualifying $0 Tailscale account, and a verified external HTTPS test. A public Funnel is not equivalent to a private tailnet connection.
 
 If the model is not ready, leave `AEONITH_ENABLE_LIVE_REVIEWS` unset or set it to `false` to run only the UI and health endpoint. Review requests fail closed rather than inventing criticism. A different local model runtime may require a different local endpoint and model label; confirm exact compatibility before enabling it. In simple KoboldCpp single-model mode the model label may be arbitrary, whereas router mode may select by name. For an existing Ollama install, the corresponding local URL is `http://127.0.0.1:11434/v1/chat/completions`; use an exact name from `ollama list`. Model compatibility must be demonstrated by a complete *validated Aeonith review*, not a raw chat-completions response.
@@ -57,7 +82,8 @@ If the model is not ready, leave `AEONITH_ENABLE_LIVE_REVIEWS` unset or set it t
 | `AEONITH_PROVIDER_MODEL` | Identifier accepted by the already-running local model server |
 | `AEONITH_MAX_LENSES` | Optional selected-lens ceiling, 1–14 (default 14); not a billing budget |
 | `AEONITH_MAX_OUTPUT_TOKENS` | Optional per-call response limit, 256–8192 (default 4096) |
-| `AEONITH_PROVIDER_TIMEOUT_SECONDS` | Optional model response timeout, 1–50 seconds (default 45) |
+| `AEONITH_PROVIDER_TIMEOUT_SECONDS` | Optional local model response timeout: legacy 1–50 seconds (default 45); explicitly opted-in private `aeonith-critic` profile 1–110 seconds |
+| `AEONITH_MODEL_PROFILE` | Optional `legacy` (default) or `aeonith-critic`. Critic requires the exact `aeonith-critic:0.1` model, one lens, at most 2,048 output tokens, structured outputs, disabled JSON-object mode, and no Funnel origin. This only changes bounded source settings, not model availability or public-service qualification. |
 | `AEONITH_LOCAL_JSON_MODE` | `true` (default) requests JSON-mode Chat Completions; set literal `false` if your existing local runner does not support `response_format` |
 | `AEONITH_STRUCTURED_OUTPUTS` | Literal `false` (default) or `true`; strict schema mode requires a compatible local runner and model |
 | `AEONITH_FUNNEL_ORIGIN` | Optional exact HTTPS origin `https://machine.tailnet.ts.net` for the user's own Tailscale Funnel. Unset by default; never a wildcard or arbitrary domain |

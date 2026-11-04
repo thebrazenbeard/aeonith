@@ -45,7 +45,7 @@
           <div class="field import-field">
             <label for="manuscript-file">Import a local manuscript <span class="optional">optional</span></label>
             <input id="manuscript-file" type="file" accept=".txt,.text,.md,.markdown,.docx,text/plain,text/markdown,application/vnd.openxmlformats-officedocument.wordprocessingml.document" aria-describedby="import-hint import-status">
-            <p id="import-hint" class="field-note">Choose a UTF-8 TXT/Markdown file or Word DOCX document. Extraction happens only inside your browser; the original file is not uploaded. Imports over 12,000 characters cannot be reviewed until shortened. Legacy .doc and PDF files are not supported; export them to DOCX or plain text first. DOCX extraction loses formatting, images, and comments. Tracked changes or directly marked hidden text are rejected; style-based visibility cannot be resolved, so inspect the extracted text before consenting to a review.</p>
+            <p id="import-hint" class="field-note">Choose a UTF-8 TXT/Markdown file or Word DOCX document. Extraction happens only inside your browser; the original file is not uploaded. Imports over 12,000 characters cannot be reviewed until shortened. Legacy .doc and PDF files are not supported; export them to DOCX or plain text first. The browser refuses DOCX files with notes, comments, headers, footers, images or embeds, text boxes, generated fields, automatic numbering, tracked changes, explicitly named text styles, or hidden-text properties in the main document or stylesheet, because they cannot be represented faithfully here. This stylesheet check is conservative: even an unused hidden style causes refusal. Formatting, table layout and complete Word style inheritance remain unsupported; inspect extracted text before consenting to a review.</p>
             <p id="import-status" class="import-status" role="status" aria-live="polite"></p>
           </div>
 
@@ -56,6 +56,15 @@
             </div>
             <textarea id="manuscript" name="manuscript" rows="15" required spellcheck="false" autocomplete="off" placeholder="Paste your writing here…" aria-describedby="manuscript-hint character-count"></textarea>
             <p id="manuscript-hint" class="field-note">Submit up to 12,000 characters of writing you own or have permission to share. Longer pastes stay in the editor but cannot be submitted until shortened. For a whole manuscript, analyze bounded excerpts rather than assuming one review knows the entire book.</p>
+          </div>
+
+          <div class="field">
+            <div class="field-heading">
+              <label for="story-context">Story context / continuity notes <span class="optional">optional</span></label>
+              <span id="context-character-count" class="counter" aria-live="off">0 / 2,000 characters</span>
+            </div>
+            <textarea id="story-context" name="context" rows="4" autocomplete="off" spellcheck="false" placeholder="What should this reading know about earlier events, characters, or your intention?" aria-describedby="context-hint context-character-count"></textarea>
+            <p id="context-hint" class="field-note">Up to 2,000 characters. These notes accompany this excerpt to the local model; they are not evidence that the model has read earlier chapters. They are not saved in browser storage. Change the notes to request a new reading.</p>
           </div>
 
           <details class="lenses-control">
@@ -85,7 +94,7 @@
           <div class="access-panel">
             <label id="service-token-label" for="service-token">Service access token</label>
             <input id="service-token" name="service-token" type="password" autocomplete="off" placeholder="Enter your access token" aria-describedby="token-note auth-status">
-            <p id="token-note" class="field-note">Enter the operator-issued token to review, or sign in once on HTTPS to use a seven-day browser session. On localhost HTTP, use the token for each review. The token is never saved to browser storage. Do not use an untrusted network connection.</p>
+            <p id="token-note" class="field-note">Need your token? On the Windows computer running Aeonith, under the same Windows account that started it, double-click <code>scripts\copy-aeonith-token-windows.cmd</code> in the Aeonith checkout. This copies the existing token and does not restart Aeonith. The clipboard stays on that Windows computer; it is not automatically available in a browser on another device. Use a trusted transfer if necessary. Never put the token in a URL, chat, or screenshot. Paste the token here for each localhost HTTP review, or sign in once on HTTPS for a seven-day browser session. The token is never saved to browser storage.</p>
             <div id="session-controls">
               <button id="session-sign-in" type="button" class="secondary-action">Remember this browser for 7 days</button>
               <button id="session-sign-out" type="button" class="secondary-action" hidden>Sign out of this browser</button>
@@ -95,7 +104,7 @@
 
           <label class="disclosure-control" for="disclosure">
             <input id="disclosure" type="checkbox" name="disclosure" required>
-            <span>I have permission to submit this writing for analysis by the model running on the Aeonith server.</span>
+            <span>I have permission to submit this writing and any optional story context for analysis by the model running on the Aeonith server.</span>
           </label>
           <p id="provider-privacy-note" class="field-note">This zero-cost setup is for a model running on your own hardware, with no paid inference API. The browser sends your writing to the Aeonith server, but does not save manuscripts, tokens, or critiques to browser storage. The server and local model still process your writing, so check their logging and retention settings before using confidential material.</p>
 

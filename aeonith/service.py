@@ -145,6 +145,22 @@ def _review_settings(env: Mapping[str, str]) -> tuple[int, int, float]:
     max_output_tokens = _bounded_int_env(
         env, "AEONITH_MAX_OUTPUT_TOKENS", _DEFAULT_MAX_OUTPUT_TOKENS, 256, 8_192,
     )
+    profile = env.get("AEONITH_MODEL_PROFILE", "legacy")
+    if profile not in ("legacy", "aeonith-critic"):
+        raise ValueError("invalid model profile")
+    if profile == "aeonith-critic":
+        # CPU structural pilots need >50 s, but the longer reservation is
+        # *private*, single-lens and exact-model only. Funnel qualification
+        # must be independent before allowing publicly held long requests.
+        if (env.get("AEONITH_FUNNEL_ORIGIN")
+                or env.get("AEONITH_PROVIDER_MODEL") != "aeonith-critic:0.1"
+                or max_lenses != 1 or max_output_tokens > 2_048
+                or not _bool_setting(env, "AEONITH_STRUCTURED_OUTPUTS", False)
+                or _bool_setting(env, "AEONITH_LOCAL_JSON_MODE", True)):
+            raise ValueError("critic profile requires private single-lens structured local model")
+        max_timeout = 110
+    else:
+        max_timeout = 50
     raw_timeout = env.get("AEONITH_PROVIDER_TIMEOUT_SECONDS")
     if raw_timeout is None:
         timeout = _DEFAULT_PROVIDER_TIMEOUT_SECONDS
@@ -155,8 +171,8 @@ def _review_settings(env: Mapping[str, str]) -> tuple[int, int, float]:
             timeout = float(raw_timeout)
         except ValueError as exc:
             raise ValueError("invalid provider timeout") from exc
-    if not math.isfinite(timeout) or not 1 <= timeout <= 50:
-        raise ValueError("provider timeout must be between 1 and 50 seconds")
+    if not math.isfinite(timeout) or not 1 <= timeout <= max_timeout:
+        raise ValueError(f"provider timeout must be between 1 and {max_timeout} seconds")
     return max_lenses, max_output_tokens, timeout
 
 

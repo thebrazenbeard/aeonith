@@ -1,0 +1,37 @@
+{
+  "schema_version": "aeonith.model_recipe.v1",
+  "name": "aeonith-critic:0.1",
+  "kind": "ollama_modelfile_wrapper",
+  "modelfile": "Modelfile",
+  "base": {
+    "name": "qwen2.5-coder:1.5b-instruct-q3_K_M",
+    "allow_installed_tag_override": true,
+    "digest": null,
+    "license_status": "unverified_local_variant",
+    "provenance": "An existing local Ollama tag is required. The repository does not claim the quantized variant's origin or redistribution rights."
+  },
+  "weights_in_repository": false,
+  "fine_tuned": false,
+  "quality_qualified": false,
+  "system_prompt": "request_time_aeonith.core.PROVIDER_INSTRUCTIONS",
+  "unqualified_candidates": [
+    {
+      "name": "Granite literary writer Q4_0 GGUF",
+      "source": "https://huggingface.co/PJRM/granite-3.3-2b-instruct-literary-writer-v0.1-Q4_0-GGUF",
+      "upstream": "https://huggingface.co/agentlans/granite-3.3-2b-instruct-literary-writer-v0.1",
+      "upstream_declared_license": "Apache-2.0",
+      "upstream_declared_training_data": "agentlans/literary-synthesis (CC-BY-4.0 metadata)",
+      "role": "creative_writing_not_critic_qualified",
+      "installed": false,
+      "model_digest": null,
+      "aeonith_quality_qualified": false
+    }
+  ],
+  "local_endpoint": "http://127.0.0.1:11434",
+  "limits": {
+    "num_ctx": 4096,
+    "temperature": 0.2,
+    "num_predict": 800,
+    "qualified_max_lenses": 1
+  }
+}

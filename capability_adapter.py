@@ -43,6 +43,23 @@ _CORE_RESULT_KEYS = {
     "schema_version", "status", "assessment", "lens_reviews", "synthesis",
     "challenges", "uncertainties", "evidence_audit", "provenance", "error",
 }
+_TRIAGE_CLASSIFICATIONS = {
+    "HEURISTIC_HUMAN_REVIEW_ONLY", "NOT_RUN_OUTSIDE_EXCERPT_SCOPE",
+    "NOT_RUN_CHECKER_ERROR",
+}
+_TRIAGE_WARNING_CODES = {"possible_unfounded_recurrence", "possible_unseen_story_context"}
+_TRIAGE_WARNING_PATH = re.compile(
+    r"(?:synthesis|lens_reviews\[(?:[0-9]|1[0-3])\]\.analysis|"
+    r"challenges\[(?:[0-9]|[12][0-9])\]\.text)\Z"
+)
+_TRIAGE_LIMITATIONS = [
+    "Lexical cues cannot prove or refute literary interpretation.",
+    "Repetition cues and limited image matching can miss unrelated overclaims.",
+    "Warnings are advisory; no production review is blocked or scored.",
+]
+_TRIAGE_NOT_RUN_LIMITATIONS = [
+    "Advisory semantic triage was not performed; no quality conclusion follows.",
+]
 
 
 class DuplicateKeyError(ValueError):
@@ -140,13 +157,57 @@ def _within_output_budget(value: Any) -> bool:
         return False
 
 
+def _valid_semantic_triage(report: Any) -> bool:
+    """Accept only fixed advisory codes/counts, never arbitrary metadata prose."""
+    if not isinstance(report, dict) or set(report) != {
+        "schema_version", "semantic_quality", "classification", "counts",
+        "warnings", "limitations",
+    } or report.get("schema_version") != "aeonith.semantic_triage.v1" \
+            or report.get("semantic_quality") != "UNASSESSED":
+        return False
+    classification = report.get("classification")
+    if not isinstance(classification, str) or classification not in _TRIAGE_CLASSIFICATIONS:
+        return False
+    counts, warnings = report.get("counts"), report.get("warnings")
+    if not isinstance(counts, dict) or not isinstance(warnings, list) or len(warnings) > 90:
+        return False
+    if any(not isinstance(item, dict) or set(item) != {"code", "path"}
+           or not isinstance(item.get("code"), str)
+           or item["code"] not in _TRIAGE_WARNING_CODES
+           or not isinstance(item.get("path"), str)
+           or _TRIAGE_WARNING_PATH.fullmatch(item["path"]) is None
+           for item in warnings):
+        return False
+    if classification == "HEURISTIC_HUMAN_REVIEW_ONLY":
+        if set(counts) != {
+            "examined_prose_fields", "warning_count", "short_excerpt",
+            "source_recurrence_cue", "source_external_context_cue",
+        } or report.get("limitations") != _TRIAGE_LIMITATIONS:
+            return False
+        if any(type(counts[key]) is not bool for key in (
+            "short_excerpt", "source_recurrence_cue", "source_external_context_cue",
+        )):
+            return False
+        return (type(counts["examined_prose_fields"]) is int
+                and 1 <= counts["examined_prose_fields"] <= 45
+                and type(counts["warning_count"]) is int
+                and counts["warning_count"] == len(warnings))
+    return (set(counts) == {"examined_prose_fields", "warning_count"}
+            and all(type(counts[key]) is int and counts[key] == 0 for key in counts)
+            and warnings == [] and report.get("limitations") == _TRIAGE_NOT_RUN_LIMITATIONS)
+
+
 def _valid_completed_review(result: dict[str, Any], payload: dict[str, Any]) -> bool:
     """Reject a fake success that omits the core's structural v1 guarantees.
 
     This validates the adapter boundary, not literary truth, provider identity,
     or accuracy of claimed external evidence.
     """
-    if set(result) != _CORE_RESULT_KEYS or result["error"] is not None:
+    keys = set(result)
+    if (keys not in (_CORE_RESULT_KEYS, _CORE_RESULT_KEYS | {"semantic_triage"})
+            or result["error"] is not None
+            or ("semantic_triage" in result
+                and not _valid_semantic_triage(result["semantic_triage"]))):
         return False
     assessment = result["assessment"]
     if assessment is not None and (not isinstance(assessment, str) or assessment not in {"SURVIVES", "FAILS", "UNKNOWN"}):

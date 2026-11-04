@@ -48,7 +48,69 @@ def _completed_result():
     }
 
 
+def _triaged_completed_result():
+    return {**_completed_result(), "semantic_triage": {
+        "schema_version": "aeonith.semantic_triage.v1",
+        "semantic_quality": "UNASSESSED",
+        "classification": "HEURISTIC_HUMAN_REVIEW_ONLY",
+        "counts": {"examined_prose_fields": 2, "warning_count": 1,
+                   "short_excerpt": True, "source_recurrence_cue": False,
+                   "source_external_context_cue": False},
+        "warnings": [{"code": "possible_unfounded_recurrence", "path": "lens_reviews[0].analysis"}],
+        "limitations": [
+            "Lexical cues cannot prove or refute literary interpretation.",
+            "Repetition cues and limited image matching can miss unrelated overclaims.",
+            "Warnings are advisory; no production review is blocked or scored.",
+        ],
+    }}
+
+
 class CapabilityAdapterTests(unittest.TestCase):
+    def test_optional_sanitized_semantic_triage_is_allowed_without_changing_legacy_v1(self):
+        old = _completed_result()
+        self.assertEqual(invoke(_input(), lambda _: old)["outcome"], "ok")
+        new = _triaged_completed_result()
+        self.assertEqual(invoke(_input(), lambda _: new)["outcome"], "ok")
+        for mutation in (
+            lambda x: x["semantic_triage"]["warnings"][0].update({"quote": "secret"}),
+            lambda x: x["semantic_triage"]["counts"].update({"warning_count": 0}),
+            lambda x: x["semantic_triage"].update({"semantic_quality": "VERIFIED"}),
+            lambda x: x["semantic_triage"].update({"classification": "SAFE"}),
+            lambda x: x.update({"unplanned_extra_key": "secret"}),
+        ):
+            with self.subTest(mutation=mutation):
+                import copy
+                corrupted = copy.deepcopy(new)
+                mutation(corrupted)
+                rejected = invoke(_input(), lambda _: corrupted)
+                self.assertEqual(rejected["outcome"], "failed")
+                self.assertIsNone(rejected["result"])
+                self.assertNotIn("secret", json.dumps(rejected))
+
+    def test_semantic_triage_unhashable_list_classification_rejects_without_crash(self):
+        malformed = _triaged_completed_result()
+        malformed["semantic_triage"]["classification"] = []
+        rejected = invoke(_input(), lambda _: malformed)
+        self.assertEqual(rejected["outcome"], "failed")
+        self.assertIsNone(rejected["result"])
+        self.assertNotIn("semantic_triage", json.dumps(rejected))
+
+    def test_semantic_triage_unhashable_object_classification_rejects_without_crash(self):
+        malformed = _triaged_completed_result()
+        malformed["semantic_triage"]["classification"] = {"secret": "payload"}
+        rejected = invoke(_input(), lambda _: malformed)
+        self.assertEqual(rejected["outcome"], "failed")
+        self.assertIsNone(rejected["result"])
+        self.assertNotIn("secret", json.dumps(rejected))
+
+    def test_semantic_triage_unhashable_warning_code_rejects_without_crash(self):
+        malformed = _triaged_completed_result()
+        malformed["semantic_triage"]["warnings"][0]["code"] = ["secret"]
+        rejected = invoke(_input(), lambda _: malformed)
+        self.assertEqual(rejected["outcome"], "failed")
+        self.assertIsNone(rejected["result"])
+        self.assertNotIn("secret", json.dumps(rejected))
+
     def test_delegates_and_preserves_structured_result(self):
         expected = _completed_result()
         observed = []

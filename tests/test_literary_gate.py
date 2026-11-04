@@ -3,17 +3,21 @@
 from __future__ import annotations
 
 import json
+import hashlib
 import os
 from pathlib import Path
 import subprocess
 import sys
 import tempfile
 import unittest
+from unittest.mock import patch
 
+from aeonith.core import critique
 from evaluation.literary_gate import (
-    _private_output_path, account, load_cases, load_journal, make_packets,
+    _private_output_path, _request, account, load_cases, load_journal, make_packets,
     make_plan, run_candidate,
 )
+from evaluation.quality_eval import audit_review
 
 
 class FakeProvider:
@@ -49,11 +53,13 @@ class LiteraryGateTests(unittest.TestCase):
         self.root = Path(self.tmp.name)
         self.plan = make_plan(["candidate-B", "candidate-A"], "screen")
 
-    def journal(self, candidate: str, *, provider=None):
+    def journal(self, candidate: str, *, provider=None, model=None, artifact_file=None):
         path = self.root / f"{candidate}.jsonl"
         fake = provider or FakeProvider()
-        run_candidate(self.plan, candidate, provider=fake, model="fake-unchanged",
-                      lane="production", journal_path=str(path))
+        run_candidate(self.plan, candidate, provider=fake,
+                      model=model if model is not None else f"fake-{candidate}",
+                      lane="production", journal_path=str(path),
+                      artifact_file=str(artifact_file) if artifact_file else None)
         return path, fake
 
     def test_frozen_stimuli_match_written_literary_gate_and_full_denominators(self):
@@ -67,6 +73,7 @@ class LiteraryGateTests(unittest.TestCase):
         self.assertEqual(full["repeats_per_case"], 3)
         self.assertEqual(full["case_set_sha256"], self.plan["case_set_sha256"])
 
+    @unittest.skipIf(os.name == "nt", "Windows private journal ACL custody is not qualified")
     def test_journals_include_all_failures_not_just_successes(self):
         a, _ = self.journal("candidate-A", provider=FakeProvider(fail_on={2, 6}))
         b, _ = self.journal("candidate-B")
@@ -80,9 +87,13 @@ class LiteraryGateTests(unittest.TestCase):
         self.assertEqual(result["blinded_pairs_eligible"], 4)
         self.assertEqual(result["blinded_pairs_total"], 6)
         self.assertEqual(result["semantic_quality"], "UNASSESSED")
+        self.assertEqual(result["model_identity_status"],
+                         "DIFFERENT_DECLARED_LABELS_ONLY_RUNTIME_UNVERIFIED")
+        self.assertFalse(result["independent_model_comparison_eligible"])
         if os.name == "posix":
             self.assertEqual(a.stat().st_mode & 0o777, 0o600)
 
+    @unittest.skipIf(os.name == "nt", "Windows private journal ACL custody is not qualified")
     def test_crash_during_inference_is_interrupted_not_never_attempted(self):
         a, _ = self.journal("candidate-A")
         b, _ = self.journal("candidate-B")
@@ -100,6 +111,7 @@ class LiteraryGateTests(unittest.TestCase):
         self.assertEqual(result["candidates"]["candidate-B"]["not_attempted"], 1)
         self.assertEqual(result["candidates"]["candidate-B"]["interrupted"], 0)
 
+    @unittest.skipIf(os.name == "nt", "Windows private journal ACL custody is not qualified")
     def test_truncated_tail_is_conservatively_counted_and_duplicate_jsonl_rejected(self):
         a, _ = self.journal("candidate-A")
         b, _ = self.journal("candidate-B")
@@ -126,10 +138,10 @@ class LiteraryGateTests(unittest.TestCase):
     def test_private_outputs_cannot_land_in_git_checkout_or_symlink_to_it(self):
         repo = Path(__file__).resolve().parents[1]
         forbidden = repo / "never-create-literary-journal-test.jsonl"
-        with self.assertRaisesRegex(ValueError, "outside the Git checkout"):
+        with self.assertRaisesRegex(ValueError, "outside Git checkouts"):
             _private_output_path(str(forbidden))
         self.assertFalse(forbidden.exists())
-        with self.assertRaisesRegex(ValueError, "outside the Git checkout"):
+        with self.assertRaisesRegex(ValueError, "outside Git checkouts"):
             run_candidate(self.plan, "candidate-A", provider=FakeProvider(),
                           model="fake", lane="production", journal_path=str(forbidden))
         self.assertFalse(forbidden.exists())
@@ -139,13 +151,109 @@ class LiteraryGateTests(unittest.TestCase):
         except (OSError, NotImplementedError):
             pass  # Windows can restrict symlink creation without developer mode.
         else:
-            with self.assertRaisesRegex(ValueError, "outside the Git checkout"):
+            with self.assertRaisesRegex(ValueError, "outside Git checkouts"):
                 _private_output_path(str(alias / "never-create.jsonl"))
+
+        unrelated_checkout = self.root / "a-different-repository"
+        (unrelated_checkout / ".git").mkdir(parents=True)
+        (unrelated_checkout / ".git" / "HEAD").write_text("ref: refs/heads/main\n")
+        with self.assertRaisesRegex(ValueError, "outside Git checkouts"):
+            _private_output_path(str(unrelated_checkout / "private-journal.jsonl"))
+        self.assertFalse((unrelated_checkout / "private-journal.jsonl").exists())
+
+    @unittest.skipUnless(os.name == "posix", "POSIX private-output handle test")
+    def test_raw_journal_refuses_bare_git_and_symlinked_non_git_parent_before_inference(self):
+        bare = self.root / "other-bare.git"
+        subprocess.run(["git", "init", "--bare", str(bare)], check=True,
+                       capture_output=True, text=True)
+        parent = self.root / "private-parent"
+        parent.mkdir()
+        alias = self.root / "private-parent-alias"
+        alias.symlink_to(parent, target_is_directory=True)
+        for target in (bare / "secret-critique.jsonl", alias / "secret-critique.jsonl"):
+            provider = FakeProvider()
+            with self.subTest(target=target), self.assertRaises((OSError, ValueError)):
+                run_candidate(self.plan, "candidate-A", provider=provider,
+                              model="fake", lane="production", journal_path=str(target))
+            self.assertEqual(provider.calls, 0)
+            self.assertFalse(target.exists())
+
+    @unittest.skipUnless(os.name == "posix", "Windows simulation from POSIX")
+    def test_raw_journal_fails_closed_on_unqualified_windows_acl_before_inference(self):
+        target = self.root / "windows-unqualified.jsonl"
+        provider = FakeProvider()
+        with patch("aeonith.private_output._is_windows", return_value=True):
+            with self.assertRaisesRegex(ValueError, "Windows private output ACL"):
+                run_candidate(self.plan, "candidate-A", provider=provider,
+                              model="fake", lane="production", journal_path=str(target))
+        self.assertFalse(target.exists())
+        self.assertEqual(provider.calls, 0)
+
+    @unittest.skipUnless(os.name == "nt", "Actual Windows private-output denial")
+    def test_windows_rejects_private_journal_before_inference(self):
+        target = self.root / "unqualified-windows-private.jsonl"
+        provider = FakeProvider()
+        with self.assertRaisesRegex(ValueError, "Windows private output ACL boundary is not yet qualified"):
+            run_candidate(self.plan, "candidate-A", provider=provider,
+                          model="fake", lane="production", journal_path=str(target))
+        self.assertEqual(provider.calls, 0)
+        self.assertFalse(target.exists())
+
+    @unittest.skipIf(os.name == "nt", "Windows private journal ACL custody is not qualified")
+    def test_identity_preflight_refuses_same_label_or_same_local_bytes(self):
+        a, _ = self.journal("candidate-A", model="same-model-label")
+        b, _ = self.journal("candidate-B", model="same-model-label")
+        with self.assertRaisesRegex(ValueError, "same declared model label"):
+            account(self.plan, str(a), str(b))
+        with self.assertRaisesRegex(ValueError, "same declared model label"):
+            make_packets(self.plan, str(a), str(b), seed="test")
+
+        a.unlink()
+        b.unlink()
+        file_one = self.root / "first-weights.gguf"
+        file_two = self.root / "different-name-same-weights.gguf"
+        file_one.write_bytes(b"synthetic identical weights")
+        file_two.write_bytes(file_one.read_bytes())
+        a, _ = self.journal("candidate-A", model="different-a", artifact_file=file_one)
+        b, _ = self.journal("candidate-B", model="different-b", artifact_file=file_two)
+        header, _ = load_journal(str(a), self.plan)
+        self.assertEqual(header["local_artifact_sha256"],
+                         hashlib.sha256(file_one.read_bytes()).hexdigest())
+        self.assertNotIn(str(file_one), a.read_text(encoding="utf-8"))
+        with self.assertRaisesRegex(ValueError, "same local model-artifact digest"):
+            account(self.plan, str(a), str(b))
+
+    @unittest.skipIf(os.name == "nt", "Windows private journal ACL custody is not qualified")
+    def test_distinct_local_bytes_still_cannot_prove_provider_binding(self):
+        one = self.root / "base.gguf"
+        two = self.root / "adapter.gguf"
+        one.write_bytes(b"first synthetic artifact")
+        two.write_bytes(b"second synthetic artifact")
+        a, _ = self.journal("candidate-A", model="local", artifact_file=one)
+        b, _ = self.journal("candidate-B", model="local", artifact_file=two)
+        accounting, _ = account(self.plan, str(a), str(b))
+        self.assertEqual(accounting["model_identity_status"],
+                         "DISTINCT_LOCAL_FILE_HASHES_RUNTIME_UNVERIFIED")
+        self.assertFalse(accounting["independent_model_comparison_eligible"])
+        self.assertEqual(accounting["blinded_pairs_eligible"], 6)
+
+    def test_artifact_rejects_empty_and_symlink_without_creating_journal(self):
+        empty = self.root / "empty.gguf"
+        empty.touch()
+        target = self.root / "candidate-A.jsonl"
+        fake = FakeProvider()
+        with self.assertRaisesRegex(ValueError, "must not be empty"):
+            run_candidate(self.plan, "candidate-A", provider=fake, model="x",
+                          lane="production", journal_path=str(target),
+                          artifact_file=str(empty))
+        self.assertFalse(target.exists())
+        self.assertEqual(fake.calls, 0)
 
     def _replace_journal(self, candidate, old_path):
         old_path.unlink()
         return self.journal(candidate)
 
+    @unittest.skipIf(os.name == "nt", "Windows private journal ACL custody is not qualified")
     def test_blinded_packets_contain_no_candidate_or_provider_identity(self):
         a, _ = self.journal("candidate-A", provider=FakeProvider(spoofed=True))
         b, _ = self.journal("candidate-B")
@@ -164,6 +272,87 @@ class LiteraryGateTests(unittest.TestCase):
         self.assertEqual([row["pair"]["pair_id"] for row in displays["pairs"]],
                          [row["key"]["pair_id"] for row in keys["keys"]])
 
+    @unittest.skipIf(os.name == "nt", "Windows private journal ACL custody is not qualified")
+    def test_self_identifying_prose_is_quarantined_without_erasing_attempts(self):
+        class IdentifyingProvider(FakeProvider):
+            def review(self, payload):
+                reply = super().review(payload)
+                reply["lens_reviews"][0]["analysis"] += (
+                    " This is a judgment by candidate-A, the tested model."
+                )
+                return reply
+
+        a, _ = self.journal("candidate-A", provider=IdentifyingProvider())
+        b, _ = self.journal("candidate-B")
+        displays, keys, accounting = make_packets(
+            self.plan, str(a), str(b), seed="sealed-identity-test")
+        self.assertEqual(accounting["blinded_pairs_eligible"], 6)
+        self.assertEqual(accounting["blinded_pairs_identity_quarantined"], 6)
+        self.assertEqual(accounting["blinded_pairs_displayed"], 0)
+        self.assertEqual(displays["pairs"], [])
+        self.assertEqual(keys["keys"], [])
+        self.assertEqual(accounting["candidates"]["candidate-A"]["structural_pass"], 6)
+        self.assertEqual(accounting["semantic_quality"], "UNASSESSED")
+
+    @unittest.skipIf(os.name == "nt", "Windows private journal ACL custody is not qualified")
+    def test_declared_model_id_in_nonanalysis_prose_is_quarantined(self):
+        class LeakingSynthesis(FakeProvider):
+            def review(self, payload):
+                reply = super().review(payload)
+                reply["synthesis"] += " Model provenance: granite-critic-v2."
+                return reply
+
+        a, _ = self.journal("candidate-A", provider=LeakingSynthesis(),
+                            model="granite-critic-v2")
+        b, _ = self.journal("candidate-B", model="nonleaking-runner")
+        displays, keys, accounting = make_packets(
+            self.plan, str(a), str(b), seed="sealed-model-test")
+        self.assertEqual(accounting["blinded_pairs_identity_quarantined"], 6)
+        self.assertEqual(accounting["blinded_pairs_displayed"], 0)
+        self.assertFalse(displays["pairs"])
+        self.assertFalse(keys["keys"])
+
+    @unittest.skipIf(os.name == "nt", "Windows private journal ACL custody is not qualified")
+    def test_only_contaminated_pair_is_quarantined_and_counted(self):
+        class OneLeak(FakeProvider):
+            def review(self, payload):
+                reply = super().review(payload)
+                if self.calls == 1:
+                    reply["uncertainties"] = ["I am the candidate-B model."]
+                return reply
+
+        a, _ = self.journal("candidate-A")
+        b, _ = self.journal("candidate-B", provider=OneLeak())
+        displays, keys, accounting = make_packets(
+            self.plan, str(a), str(b), seed="sealed-single-leak")
+        self.assertEqual(accounting["blinded_pairs_eligible"], 6)
+        self.assertEqual(accounting["blinded_pairs_identity_quarantined"], 1)
+        self.assertEqual(accounting["blinded_pairs_displayed"], 5)
+        self.assertEqual(len(displays["pairs"]), 5)
+        self.assertEqual(len(keys["keys"]), 5)
+        self.assertEqual((displays["pairs"][0]["case_id"], displays["pairs"][0]["repeat"]),
+                         ("R01-N", 2))
+
+    def test_source_anchor_pass_does_not_verify_quotes_in_free_form_analysis(self):
+        class InventedProseQuote(FakeProvider):
+            def review(self, payload):
+                candidate = super().review(payload)
+                candidate["lens_reviews"][0]["analysis"] = (
+                    'The passage says "The bell rang ten times" in Chapter Twelve.'
+                )
+                return candidate
+
+        request = _request(load_cases()[0])
+        self.assertNotIn("The bell rang ten times", request["work"]["text"])
+        review = critique(request, InventedProseQuote())
+        self.assertEqual(review["status"], "completed")
+        audit = audit_review(request, review)
+        # This is deliberately a structural pass, NOT a literary/quote-integrity
+        # success: only explicit support anchors are checked for source match.
+        self.assertEqual(audit["structural_status"], "pass")
+        self.assertEqual(audit["semantic_quality"], "UNASSESSED")
+
+    @unittest.skipIf(os.name == "nt", "Windows private journal ACL custody is not qualified")
     def test_cross_candidate_and_lane_journals_refused(self):
         a, _ = self.journal("candidate-A")
         with self.assertRaisesRegex(ValueError, "distinct candidates"):
@@ -173,9 +362,14 @@ class LiteraryGateTests(unittest.TestCase):
         path = self.root / "candidate-A.jsonl"
         path.write_text("existing user data", encoding="utf-8")
         provider = FakeProvider()
-        with self.assertRaises(FileExistsError):
-            run_candidate(self.plan, "candidate-A", provider=provider,
-                          model="fake", lane="production", journal_path=str(path))
+        if os.name == "nt":
+            with self.assertRaisesRegex(ValueError, "Windows private output ACL boundary is not yet qualified"):
+                run_candidate(self.plan, "candidate-A", provider=provider,
+                              model="fake", lane="production", journal_path=str(path))
+        else:
+            with self.assertRaises(FileExistsError):
+                run_candidate(self.plan, "candidate-A", provider=provider,
+                              model="fake", lane="production", journal_path=str(path))
         self.assertEqual(provider.calls, 0)
         self.assertEqual(path.read_text(encoding="utf-8"), "existing user data")
 

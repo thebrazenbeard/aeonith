@@ -25,6 +25,7 @@ import os
 import re
 import secrets
 import socket
+import stat
 import sysconfig
 import threading
 import time
@@ -58,6 +59,40 @@ _MAX_ASSET_BYTES = 2_000_000
 _MAX_CONNECTIONS = 16
 _IDLE_SOCKET_TIMEOUT_SECONDS = 15
 _DNS_LABEL = re.compile(r"[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?\Z")
+_ASSET_DIGEST_ENV = "AEONITH_STATIC_ASSET_SHA256_JSON"
+
+
+def _asset_digest_policy(raw: str | None) -> dict[str, str] | None:
+    """Parse an opt-in release digest policy, never self-attest live bytes.
+
+    The policy is useful only when its values come from an independently
+    verified release and an attacker cannot replace the policy/process code.
+    Unset permits normal editing in a source checkout; malformed/empty values
+    refuse server creation rather than silently disabling a chosen policy.
+    """
+    if raw is None:
+        return None
+    if not isinstance(raw, str) or not 0 < len(raw) <= 2048:
+        raise ValueError("static asset digest policy must be a bounded JSON object")
+    def unique_pairs(items: list[tuple[str, object]]) -> dict[str, object]:
+        output: dict[str, object] = {}
+        for key, value in items:
+            if key in output:
+                raise ValueError("duplicate static asset digest entry")
+            output[key] = value
+        return output
+
+    try:
+        result = json.loads(raw, object_pairs_hook=unique_pairs)
+    except (TypeError, ValueError) as exc:
+        raise ValueError("static asset digest policy is malformed") from exc
+    names = {name for name, _type in _ASSETS.values()}
+    if (not isinstance(result, dict) or set(result) != names
+            or any(not isinstance(value, str)
+                   or re.fullmatch(r"[0-9a-f]{64}", value) is None
+                   for value in result.values())):
+        raise ValueError("static asset digest policy must pin every shipped asset")
+    return result
 
 
 def _funnel_host(value: str | None) -> str | None:
@@ -103,6 +138,49 @@ def _asset_root() -> Path:
     if (_SOURCE_PUBLIC / "index.html").is_file():
         return _SOURCE_PUBLIC
     return _INSTALLED_PUBLIC
+
+
+def _asset_directory_identity(root: Path) -> tuple[int, int]:
+    """Refuse symlink/reparse ancestors, including the asset directory itself.
+
+    This check is repeated after the read. A same-UID filesystem actor can
+    still mutate files between checks, particularly on Windows where Python's
+    ordinary ``os.open`` does not support descriptor-relative traversal.
+    """
+    if not root.is_absolute() or ".." in root.parts:
+        raise ValueError("asset directory must have an absolute, nontraversing path")
+    root_info = None
+    for component in (root, *root.parents):
+        info = component.lstat()
+        if root_info is None:
+            root_info = info
+        if (not stat.S_ISDIR(info.st_mode)
+                or (hasattr(component, "is_junction") and component.is_junction())
+                or (getattr(info, "st_file_attributes", 0)
+                    & getattr(stat, "FILE_ATTRIBUTE_REPARSE_POINT", 0))):
+            raise ValueError("asset directory ancestry contains an indirect component")
+        if os.name == "nt" and not hasattr(info, "st_file_attributes"):
+            raise ValueError("Windows reparse point metadata is unavailable")
+    assert root_info is not None
+    return root_info.st_dev, root_info.st_ino
+
+
+def _open_posix_asset_directory(root: Path) -> int:
+    """Pin every ancestor via O_DIRECTORY|O_NOFOLLOW, starting from /."""
+    if (os.open not in os.supports_dir_fd or not hasattr(os, "O_DIRECTORY")
+            or not hasattr(os, "O_NOFOLLOW")):
+        raise ValueError("descriptor-relative secure directory traversal unavailable")
+    flags = os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW | getattr(os, "O_CLOEXEC", 0)
+    opened = os.open(root.anchor, flags)
+    try:
+        for part in root.parts[1:]:
+            child = os.open(part, flags, dir_fd=opened)
+            os.close(opened)
+            opened = child
+        return opened
+    except BaseException:
+        os.close(opened)
+        raise
 
 
 def _session_secret() -> str | None:
@@ -370,13 +448,68 @@ class _LocalHandler(ReviewHandler):
 
     def _serve_asset(self, path: str) -> None:
         filename, content_type = _ASSETS[path]
-        resource = _asset_root() / filename
+        root = _asset_root()
+        resource = root / filename
         try:
-            if resource.stat().st_size > _MAX_ASSET_BYTES:
-                raise ValueError("oversized asset")
-            body = resource.read_bytes()
-            if len(body) > _MAX_ASSET_BYTES:
-                raise ValueError("oversized asset")
+            root_identity = _asset_directory_identity(root)
+            root_fd = None
+            try:
+                if os.name != "nt":
+                    root_fd = _open_posix_asset_directory(root)
+                    pinned = os.fstat(root_fd)
+                    if (pinned.st_dev, pinned.st_ino) != root_identity:
+                        raise ValueError("asset directory changed during secure opening")
+                # Fixed names do not make arbitrary filesystem nodes safe.
+                # Root pinning and per-file checks reject directory/leaf
+                # symlinks, hardlinks and FIFOs. They cannot stop a same-UID
+                # actor from copying bytes into a new regular file.
+                expected = resource.lstat()
+                if (not stat.S_ISREG(expected.st_mode)
+                        or expected.st_nlink != 1
+                        or expected.st_size > _MAX_ASSET_BYTES
+                        or (hasattr(resource, "is_junction") and resource.is_junction())
+                        or (getattr(expected, "st_file_attributes", 0)
+                            & getattr(stat, "FILE_ATTRIBUTE_REPARSE_POINT", 0))):
+                    raise ValueError("asset must be a bounded regular file")
+                flags = (os.O_RDONLY | getattr(os, "O_BINARY", 0)
+                         | getattr(os, "O_NONBLOCK", 0) | getattr(os, "O_NOFOLLOW", 0)
+                         | getattr(os, "O_CLOEXEC", 0))
+                fd = (os.open(filename, flags, dir_fd=root_fd) if root_fd is not None
+                      else os.open(resource, flags))
+                try:
+                    observed = os.fstat(fd)
+                    if (not stat.S_ISREG(observed.st_mode)
+                            or observed.st_nlink != 1
+                            or (expected.st_dev, expected.st_ino) != (observed.st_dev, observed.st_ino)
+                            or observed.st_size > _MAX_ASSET_BYTES):
+                        raise ValueError("asset changed or is not regular")
+                    chunks: list[bytes] = []
+                    remaining = _MAX_ASSET_BYTES + 1
+                    while remaining:
+                        chunk = os.read(fd, remaining)
+                        if not chunk:
+                            break
+                        chunks.append(chunk)
+                        remaining -= len(chunk)
+                    body = b"".join(chunks)
+                    after = os.fstat(fd)
+                    if (len(body) > _MAX_ASSET_BYTES
+                            or after.st_nlink != 1
+                            or (after.st_size, after.st_mtime_ns) !=
+                               (observed.st_size, observed.st_mtime_ns)):
+                        raise ValueError("asset size or metadata changed during read")
+                    release_digests = self.server.asset_digests
+                    if (release_digests is not None
+                            and not hmac.compare_digest(
+                                hashlib.sha256(body).hexdigest(), release_digests[filename])):
+                        raise ValueError("asset bytes differ from operator-pinned release")
+                finally:
+                    os.close(fd)
+                if _asset_directory_identity(root) != root_identity:
+                    raise ValueError("asset directory changed while reading")
+            finally:
+                if root_fd is not None:
+                    os.close(root_fd)
         except (OSError, ValueError):
             self._respond(503, _error("asset_unavailable", "Local interface is unavailable"))
             return
@@ -423,9 +556,21 @@ class _LocalHandler(ReviewHandler):
         if route == "review":
             admission = self.server.public_limiter
             if admission is None:
-                # Provider remains strictly loopback. The private-only path
-                # retains the original auth-before-manuscript behavior.
-                ReviewHandler.do_POST(self)
+                # The local model may fit in only a few GB of memory. Even on
+                # a private loopback listener, do not queue concurrent model
+                # calls that could exhaust the host. Check authorization before
+                # reserving capacity or reading any manuscript bytes.
+                status, result = authorize(self.headers)
+                if status is not None:
+                    self._respond(status, result or _error("unauthorized", "Authorization required"))
+                    return
+                if not self.server.private_review_slot.acquire(blocking=False):
+                    self._rate_limited("review_rate_limited", 1)
+                    return
+                try:
+                    ReviewHandler.do_POST(self)
+                finally:
+                    self.server.private_review_slot.release()
                 return
             # Public mode has a global local throttle, independent of Host
             # spelling. A forged Host: localhost header cannot evade quotas.
@@ -495,16 +640,26 @@ def create_server(host: str = "127.0.0.1", port: int = 8765,
     bind_host, address_family = _bind_address(host)
     selected_origin = funnel_origin if funnel_origin is not None else os.environ.get("AEONITH_FUNNEL_ORIGIN")
     configured_funnel_host = _funnel_host(selected_origin)
+    # The service validates environment configuration, but this explicit
+    # argument can override AEONITH_FUNNEL_ORIGIN. Enforce the private critic
+    # restriction against the *effective* listener mode as well.
+    if configured_funnel_host and os.environ.get("AEONITH_MODEL_PROFILE") == "aeonith-critic":
+        raise ValueError("critic profile is not Funnel-qualified")
     if configured_funnel_host and bind_host != "127.0.0.1":
         raise ValueError("Funnel mode requires the local server bound to 127.0.0.1")
+    asset_digests = _asset_digest_policy(os.environ.get(_ASSET_DIGEST_ENV))
 
     class BoundServer(ThreadingHTTPServer):
         daemon_threads = True
 
         def __init__(self, *args, **kwargs):
             self._connection_slots = threading.BoundedSemaphore(_MAX_CONNECTIONS)
+            # Per-process admission only; separately launched model clients
+            # are outside this server's resource boundary.
+            self.private_review_slot = threading.BoundedSemaphore(1)
             self.funnel_host = configured_funnel_host
             self.public_limiter = LocalAdmission() if configured_funnel_host else None
+            self.asset_digests = asset_digests
             super().__init__(*args, **kwargs)
 
         def process_request(self, request, client_address):

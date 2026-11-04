@@ -205,11 +205,17 @@ class WorkflowTests(unittest.TestCase):
     def test_report_output_is_owner_only_on_posix(self):
         output_path = self.root / "review.md"
         code, output, error = self.invoke("--output", str(output_path))
-        self.assertEqual(code, 3, error)
         self.assertEqual(output, "")
-        self.assertIn("provider_unavailable", output_path.read_text(encoding="utf-8"))
         if os.name == "posix":
+            self.assertEqual(code, 3, error)
+            self.assertIn("provider_unavailable", output_path.read_text(encoding="utf-8"))
             self.assertEqual(output_path.stat().st_mode & 0o777, 0o600)
+        else:
+            # Windows file writes fail closed until handle-owned ACL custody
+            # is implemented; the previous cross-platform expectation was stale.
+            self.assertEqual(code, 2, error)
+            self.assertFalse(output_path.exists())
+            self.assertIn("Could not reserve", error)
 
     def test_invalid_utf8_rejected_without_output_or_provider(self):
         self.manuscript.write_bytes(b"\xff\xfe")

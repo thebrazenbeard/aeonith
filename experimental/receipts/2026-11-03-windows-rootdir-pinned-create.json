@@ -1,0 +1,52 @@
+{
+  "schema_version": "aeonith.windows_rootdir_probe_receipt.v1",
+  "date_indiana": "2026-11-03",
+  "evidence_class": "RUNTIME_PROBE",
+  "source": {
+    "published_base_checkout_head": "96d92f845101394bb5a00bc8ba2e6bef00cc40bf",
+    "candidate_source_commit": "80137a8bf1beb48d476c7510f90ed5162be9f45f",
+    "injected_untracked_probe_script_git_blob": "85c5b9fee24a8b0a828f66b81e651204c828f910",
+    "script_blob_matched_local_candidate": true,
+    "python_version": "3.13.15"
+  },
+  "invocation": "python -E -B -S -m experimental.windows_rootdir_probe --run-disposable-temp-probes",
+  "scope": "synthetic-disposable-temp-only",
+  "cases": [
+    {
+      "test": "junction",
+      "execution": "EXECUTED",
+      "same_sid_ancestor_swap": true,
+      "original_directory_handle_identity_preserved": true,
+      "rooted_create_landed_in_pinned_directory": true,
+      "decoy_marker_created": false,
+      "qualification_status": "NOT_QUALIFIED",
+      "private_acl_qualified": false
+    },
+    {
+      "test": "symlink",
+      "execution": "EXECUTED",
+      "same_sid_ancestor_swap": true,
+      "original_directory_handle_identity_preserved": true,
+      "rooted_create_landed_in_pinned_directory": true,
+      "decoy_marker_created": false,
+      "qualification_status": "NOT_QUALIFIED",
+      "private_acl_qualified": false
+    }
+  ],
+  "post_probe_readback": {
+    "unremoved_temporary_probe_directories": 0,
+    "preexisting_127_0_0_1_port_8765_owner_pid": 2224,
+    "preexisting_listener_still_present": true,
+    "source_blob_rechecked": true
+  },
+  "qualification_status": "NOT_QUALIFIED",
+  "real_private_output_qualified": false,
+  "same_sid_acl_isolation_qualified": false,
+  "limitations": [
+    "The initial parent directory handle was opened using an unqualified path and ACL.",
+    "This tests deterministic rename/reparse substitution, not concurrent hostile ACL races.",
+    "Same-SID malicious code may retain full access to user-owned files; separate security identity is not established.",
+    "This evidence is an operator tool readback, not a signed host process attestation.",
+    "No real manuscript, private report, production Windows writer, or model runtime was exercised."
+  ]
+}

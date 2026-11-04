@@ -47,6 +47,83 @@ class FailingProvider:
 
 
 class CoreTests(unittest.TestCase):
+    def test_completed_review_exposes_sanitized_semantic_recurrence_warning(self):
+        request = {"schema_version": "aeonith.review.v1",
+                   "work": {"text": "At dusk the bell rang once."},
+                   "lenses": ["symbolic"]}
+
+        class OverconfidentProvider:
+            def review(self, payload):
+                return {
+                    "lens_reviews": [{"lens": "symbolic", "basis": "textual",
+                                      "analysis": "The bell is a recurring motif throughout the novel.",
+                                      "support": [{"source": "work", "quote": "the bell"}],
+                                      "limitations": []}],
+                    "synthesis": "A sustained pattern of bells is established.",
+                    "challenges": [], "uncertainties": [], "assessment": None,
+                }
+
+        result = critique(request, OverconfidentProvider())
+        self.assertEqual(result["status"], "completed")
+        triage = result["semantic_triage"]
+        self.assertEqual(triage["semantic_quality"], "UNASSESSED")
+        self.assertEqual(triage["classification"], "HEURISTIC_HUMAN_REVIEW_ONLY")
+        self.assertIn({"code": "possible_unfounded_recurrence",
+                       "path": "lens_reviews[0].analysis"}, triage["warnings"])
+        serialized = json.dumps(triage)
+        self.assertNotIn("bell", serialized)
+        self.assertNotIn("novel", serialized)
+
+    def test_cautious_or_generic_completed_review_is_not_called_semantically_verified(self):
+        request = {"schema_version": "aeonith.review.v1",
+                   "work": {"text": "At dusk the bell rang once."},
+                   "lenses": ["symbolic"]}
+
+        class AdjectiveProvider:
+            def __init__(self, analysis):
+                self.analysis = analysis
+
+            def review(self, payload):
+                return {
+                    "lens_reviews": [{"lens": "symbolic", "basis": "textual",
+                                      "analysis": self.analysis,
+                                      "support": [{"source": "work", "quote": "bell"}],
+                                      "limitations": []}],
+                    "synthesis": "One reading, not a proven conclusion.",
+                    "challenges": [], "uncertainties": [], "assessment": None,
+                }
+
+        for analysis in (
+            "This might become a recurring motif if later passages repeat it.",
+            "This is sublime, transcendent writing of immense genius.",
+        ):
+            with self.subTest(analysis=analysis):
+                result = critique(request, AdjectiveProvider(analysis))
+                self.assertEqual(result["status"], "completed")
+                self.assertEqual(result["semantic_triage"]["warnings"], [])
+                self.assertEqual(result["semantic_triage"]["semantic_quality"], "UNASSESSED")
+
+    def test_semantic_triage_out_of_scope_is_not_misrepresented_as_clean(self):
+        request = {"schema_version": "aeonith.review.v1",
+                   "work": {"text": "bell " * 2402}, "lenses": ["symbolic"]}
+
+        class LargeProvider:
+            def review(self, payload):
+                return {
+                    "lens_reviews": [{"lens": "symbolic", "basis": "textual",
+                                      "analysis": "This is a recurring motif throughout the book.",
+                                      "support": [{"source": "work", "quote": "bell"}],
+                                      "limitations": []}],
+                    "synthesis": "This is one model interpretation.",
+                }
+
+        result = critique(request, LargeProvider())
+        self.assertEqual(result["status"], "completed")
+        self.assertEqual(result["semantic_triage"]["classification"],
+                         "NOT_RUN_OUTSIDE_EXCERPT_SCOPE")
+        self.assertEqual(result["semantic_triage"]["semantic_quality"], "UNASSESSED")
+        self.assertEqual(result["semantic_triage"]["warnings"], [])
+
     def test_provider_receives_distinct_public_lens_guidance(self):
         class RecordingProvider(GroundedProvider):
             def review(self, payload):

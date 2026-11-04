@@ -347,6 +347,50 @@ class BlindAnnotationTests(unittest.TestCase):
 
 
 class CommandLineTests(unittest.TestCase):
+    @unittest.skipUnless(os.name == "posix", "POSIX descriptor-pinned private-output regression")
+    def test_blind_and_manifest_refuse_real_unrelated_git_checkout(self):
+        with tempfile.TemporaryDirectory() as path:
+            root = Path(path)
+            checkout = root / "unrelated-git-repo"
+            checkout.mkdir()
+            initialized = subprocess.run(["git", "init", "-q", str(checkout)],
+                                         capture_output=True, text=True, check=False)
+            if initialized.returncode:
+                self.skipTest("git executable unavailable")
+            for name, content in (("request.json", request()),
+                                  ("first.json", completed()),
+                                  ("second.json", completed())):
+                (root / name).write_text(json.dumps(content), encoding="utf-8")
+            script = Path(__file__).resolve().parents[1] / "evaluation" / "quality_eval.py"
+            base = [sys.executable, str(script)]
+            blind = base + ["blind", "--request", str(root / "request.json"),
+                            "--first", str(root / "first.json"),
+                            "--second", str(root / "second.json"),
+                            "--first-id", "incumbent", "--second-id", "challenger",
+                            "--display-out", str(root / "display.json"),
+                            "--key-out", str(checkout / "secret-key.json")]
+            result = subprocess.run(blind, capture_output=True, text=True, check=False)
+            self.assertEqual(result.returncode, 2, result.stderr)
+            self.assertFalse((checkout / "secret-key.json").exists())
+            self.assertFalse((root / "display.json").exists())
+            # Check the reverse ordering too: preflight both targets before
+            # writing even a safe private assignment key.
+            swapped = blind[:]
+            swapped[swapped.index("--display-out") + 1] = str(checkout / "display.json")
+            swapped[swapped.index("--key-out") + 1] = str(root / "orphan-key.json")
+            result = subprocess.run(swapped, capture_output=True, text=True, check=False)
+            self.assertEqual(result.returncode, 2, result.stderr)
+            self.assertFalse((checkout / "display.json").exists())
+            self.assertFalse((root / "orphan-key.json").exists())
+            manifest = base + ["manifest", "--request", str(root / "request.json"),
+                               "--review", str(root / "first.json"),
+                               "--provider-id", "local", "--model-id", "fixture",
+                               "--code-revision", "v1", "--prompt-revision", "v1",
+                               "--out", str(checkout / "private-manifest.json")]
+            result = subprocess.run(manifest, capture_output=True, text=True, check=False)
+            self.assertEqual(result.returncode, 2, result.stderr)
+            self.assertFalse((checkout / "private-manifest.json").exists())
+
     def test_cli_audit_and_separate_blind_files_are_executable(self):
         with tempfile.TemporaryDirectory() as path:
             root = Path(path)
@@ -368,6 +412,12 @@ class CommandLineTests(unittest.TestCase):
                            "--display-out", str(root / "display.json"),
                            "--key-out", str(root / "private_key.json")]
             result = subprocess.run(blind, capture_output=True, text=True, check=False)
+            if os.name == "nt":
+                self.assertEqual(result.returncode, 2, result.stderr)
+                self.assertIn("Windows private output ACL boundary", result.stderr)
+                self.assertFalse((root / "display.json").exists())
+                self.assertFalse((root / "private_key.json").exists())
+                return  # Windows ACL/handle-relative private writes remain unqualified.
             self.assertEqual(result.returncode, 0, result.stderr)
             display = json.loads((root / "display.json").read_text(encoding="utf-8"))
             if os.name == "posix":
@@ -534,6 +584,11 @@ class StudyAggregationTests(unittest.TestCase):
                                    "--annotation", str(root / "annotation.json"),
                                    "--out", str(root / "bound.json")],
                                   capture_output=True, text=True, check=False)
+            if os.name == "nt":
+                self.assertEqual(bind.returncode, 2, bind.stderr)
+                self.assertIn("Windows private output ACL boundary", bind.stderr)
+                self.assertFalse((root / "bound.json").exists())
+                return
             self.assertEqual(bind.returncode, 0, bind.stderr)
             bound = json.loads((root / "bound.json").read_text(encoding="utf-8"))
             self.assertEqual(bound["display_sha256"], digest(self.pair))

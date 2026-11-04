@@ -43,6 +43,7 @@ _RECURRENCE_CLAIM = re.compile(
 _EXTERNAL_CONTEXT_CLAIM = re.compile(
     r"\b(?:"
     r"(?:in|from|as\s+seen\s+in)\s+(?:an?\s+|the\s+)?(?:earlier|previous|later|subsequent)\s+(?:chapter|scene|section|act)s?"
+    r"|(?:in|from)\s+(?:the\s+)?(?:chapter|scene|section|act)\s+\d+"
     r"|(?:throughout|across)\s+(?:the|this)\s+(?:novel|book)"
     r"|(?:as|already)\s+(?:established|shown)\s+earlier"
     r")\b", re.IGNORECASE,
@@ -61,17 +62,38 @@ _SOURCE_EXTERNAL_CONTEXT = re.compile(
     r"\b(?:earlier|previous|later|subsequent)\s+(?:chapter|scene|section|act)s?\b|"
     r"\bchapter\s+\d+\b", re.IGNORECASE,
 )
+_SOURCE_QUOTED_PASSAGES = re.compile(
+    r'"[^"\n]*"|“[^”\n]*”|‘[^’\n]*’|(?<!\w)\'[^\'\n]*\'(?!\w)'
+)
+_NUMBERED_CONTEXT = re.compile(r"\b(chapter|scene|section|act)\s+(\d+)\b", re.IGNORECASE)
+_DIRECTIONAL_CONTEXT = re.compile(
+    r"\b(earlier|previous|later|subsequent)\s+(chapter|scene|section|act)s?\b",
+    re.IGNORECASE,
+)
 _NON_ASSERTION = re.compile(
     r"\b(?:no|not|never|without|unsupported|unproven|cannot|can't|couldn't|"
-    r"insufficient|absence|unclear|unjustified|speculative|premature|"
+    r"insufficient|absence|unclear|unjustified|speculative|plausible|premature|"
     r"hypothetical|hypothesis|may|might|could|possibly|possible|"
-    r"would\s+need|fails?\s+to\s+show|not\s+enough|rather\s+than)\b",
+    r"would\s+need|fails?\s+to\s+show|not\s+enough|only\s+if|rather\s+than)\b",
     re.IGNORECASE,
 )
 _CONTRAST_AFTER_CLAIM = re.compile(r"\b(?:though|although|however|nevertheless|but)\b", re.IGNORECASE)
 _EXPLICIT_SINGLE_INSTANCE = re.compile(
     r"\b(?:once|one\s+time|a\s+single\s+(?:time|instance|occasion))\b", re.IGNORECASE,
 )
+_PREDICATE_SUBJECT = re.compile(
+    r"\b(?:the|this|an?)\s+([A-Za-z]+(?:\s+[A-Za-z]+)?)\s+"
+    r"(?:is|are|becomes?|forms?|serves?\s+as)\s+(?:an?\s+|the\s+)?$",
+    re.IGNORECASE,
+)
+_OF_SUBJECT = re.compile(
+    r"\s+of\s+(?:an?\s+|the\s+)?([A-Za-z]+(?:\s+[A-Za-z]+)?)\b",
+    re.IGNORECASE,
+)
+_POSSIBLE_ANAPHORIC_REPEAT = re.compile(
+    r"\b(?:it|its|they|their|the\s+same)\b", re.IGNORECASE,
+)
+_INITIAL_CONDITIONAL = re.compile(r"^\s*(?:perhaps|if)\s+(?:the|this|an?)\b", re.IGNORECASE)
 
 
 def _text_of_work(request: dict[str, Any]) -> str:
@@ -131,8 +153,20 @@ def _cautious_or_quoted(prose: str, match: re.Match[str], excerpt: str) -> bool:
     left = max(prose.rfind(".", 0, match.start()),
                prose.rfind("?", 0, match.start()),
                prose.rfind("!", 0, match.start()),
+               prose.rfind(";", 0, match.start()),
                prose.rfind("\n", 0, match.start())) + 1
-    right_candidates = [prose.find(mark, match.end()) for mark in ".?!\n"]
+    # A hedge about the first half of a sentence is not a hedge about a
+    # distinct claim introduced after a contrast: "it may rain, but X is Y".
+    before = prose[left:match.start()]
+    contrast_before = list(_CONTRAST_AFTER_CLAIM.finditer(before))
+    if contrast_before:
+        left += contrast_before[-1].end()
+    # 'If the bell is ...' and 'Perhaps the bell is ...' are hypotheses,
+    # unlike 'If it rains, the bell is ...' (an independent second clause).
+    claim_prefix = prose[left:match.start()]
+    if "," not in claim_prefix and _INITIAL_CONDITIONAL.search(claim_prefix):
+        return True
+    right_candidates = [prose.find(mark, match.end()) for mark in ".?!;\n"]
     right = min((place for place in right_candidates if place >= 0), default=len(prose))
     clause = prose[max(left, match.start() - 90):min(right, match.end() + 90)]
     # A later hedge cannot retroactively make an earlier confident assertion
@@ -146,21 +180,28 @@ def _cautious_or_quoted(prose: str, match: re.Match[str], excerpt: str) -> bool:
 def _claim_explicitly_once(excerpt: str, prose: str, match: re.Match[str]) -> bool:
     """Spot one narrow mismatch: a named image appears *once*, another repeats.
 
-    This is deliberately not entity resolution. A warning requires a concrete
-    two-word subject after "motif of" and an explicit single-instance marker
-    in the same source sentence. In ambiguous cases we decline to flag.
+    This is deliberately not entity resolution. A warning requires a named
+    one- or two-word subject in either "motif of the bell" or "the bell is a
+    recurring motif", plus an explicit single-instance marker in the same
+    source sentence. In ambiguous cases we decline to flag.
     """
-    subject = re.match(
-        r"\s+of\s+(?:an?\s+|the\s+)?([A-Za-z]+)\s+([A-Za-z]+)\b",
-        prose[match.end():], re.IGNORECASE,
-    )
+    subject = _OF_SUBJECT.match(prose[match.end():])
+    if subject is None:
+        subject = _PREDICATE_SUBJECT.search(prose[max(0, match.start() - 100):match.start()])
     if subject is None:
         return False
-    phrase = f"{subject[1]} {subject[2]}".casefold()
-    if excerpt.casefold().count(phrase) != 1:
+    phrase = subject[1]
+    occurrence = re.compile(r"(?<!\w)" + re.escape(phrase) + r"(?!\w)", re.IGNORECASE)
+    if len(occurrence.findall(excerpt)) != 1:
         return False
-    for sentence in re.split(r"[.!?\n]+", excerpt):
-        if phrase not in sentence.casefold() or not _EXPLICIT_SINGLE_INSTANCE.search(sentence):
+    sentences = re.split(r"[.!?\n]+", excerpt)
+    # A later "it rang again every night" may refer to the named subject.
+    # Without entity resolution, decline to warn rather than assert absence.
+    if any(not occurrence.search(sentence) and _SOURCE_RECURRENCE.search(sentence)
+           and _POSSIBLE_ANAPHORIC_REPEAT.search(sentence) for sentence in sentences):
+        return False
+    for sentence in sentences:
+        if not occurrence.search(sentence) or not _EXPLICIT_SINGLE_INSTANCE.search(sentence):
             continue
         # An explicit repeat in that very sentence invalidates the shortcut.
         # 'Once ..., then again' is not evidence of only one appearance.
@@ -168,6 +209,34 @@ def _claim_explicitly_once(excerpt: str, prose: str, match: re.Match[str]) -> bo
         if not _SOURCE_RECURRENCE.search(without_once):
             return True
     return False
+
+
+def _source_supports_external_claim(excerpt: str, match: re.Match[str]) -> bool:
+    """A mentioned chapter does not license claims about *another* chapter."""
+    claim = match.group()
+    numbered = _NUMBERED_CONTEXT.search(claim)
+    if numbered is not None:
+        kind, number = numbered.groups()
+        for cited in _NUMBERED_CONTEXT.finditer(excerpt):
+            if cited.group(1).casefold() != kind.casefold() or cited.group(2) != number:
+                continue
+            before = excerpt[max(0, cited.start() - 70):cited.start()]
+            before = re.split(r"[.!?;\n]", before)[-1]
+            # 'There is no Chapter 27' is an explicit denial, not evidence
+            # of the referenced chapter. Another affirmative occurrence can
+            # still support the claim without global source-context guessing.
+            if not re.search(r"\b(?:no|without)\s+$", before, re.IGNORECASE):
+                return True
+        return False
+    directional = _DIRECTIONAL_CONTEXT.search(claim)
+    if directional is not None:
+        direction, kind = directional.groups()
+        same_direction = re.compile(r"\b" + re.escape(direction) + r"\s+"
+                                    + re.escape(kind) + r"s?\b", re.IGNORECASE)
+        return bool(same_direction.search(excerpt))
+    # A bare 'Chapter 1' cannot license 'as established earlier' or a claim
+    # about the entire novel; retain only an exact source-phrase exemption.
+    return claim.casefold() in excerpt.casefold()
 
 
 def audit_semantic_risks(request: dict[str, Any], review: dict[str, Any]) -> dict[str, Any]:
@@ -185,7 +254,10 @@ def audit_semantic_risks(request: dict[str, Any], review: dict[str, Any]) -> dic
     # evidence that a literary image recurs in the excerpt.
     source_recurrence = bool(_SOURCE_RECURRENCE.search(
         _QUOTED_METALINGUISTIC_LABEL.sub("", excerpt)))
-    source_context = bool(_SOURCE_EXTERNAL_CONTEXT.search(excerpt))
+    # Quoted dialogue about a 'later chapter' is not evidence that the
+    # unseen chapter's actual contents were supplied to this reviewer.
+    unquoted_excerpt = _SOURCE_QUOTED_PASSAGES.sub("", excerpt)
+    source_context = bool(_SOURCE_EXTERNAL_CONTEXT.search(unquoted_excerpt))
     prose_items = _candidate_prose(review)
     warnings: list[dict[str, str]] = []
     for path, prose in prose_items:
@@ -194,8 +266,9 @@ def audit_semantic_risks(request: dict[str, Any], review: dict[str, Any]) -> dic
                    and (not source_recurrence or _claim_explicitly_once(excerpt, prose, match))
                    for match in _RECURRENCE_CLAIM.finditer(prose)):
                 warnings.append({"code": "possible_unfounded_recurrence", "path": path})
-        if short and not source_context:
-            if any(not _cautious_or_quoted(prose, match, excerpt)
+        if short:
+            if any(not _source_supports_external_claim(unquoted_excerpt, match)
+                   and not _cautious_or_quoted(prose, match, excerpt)
                    for match in _EXTERNAL_CONTEXT_CLAIM.finditer(prose)):
                 warnings.append({"code": "possible_unseen_story_context", "path": path})
     counts = {

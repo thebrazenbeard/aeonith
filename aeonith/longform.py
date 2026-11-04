@@ -29,7 +29,7 @@ SEGMENT_CONTEXT = (
 )
 _MD_HEAD = re.compile(r"^#{1,2}[ \t]+([^\r\n]+)", re.MULTILINE)
 _PLAIN_HEAD = re.compile(
-    r"^(?:(?:chapter|part|book|section|act)\b[^\r\n]{0,200}|prologue|epilogue)[ \t]*\r?$",
+    r"^(?:(?:chapter|part|book|section|act)\b[^\r\n]{0,200}|canto[ \t]+(?:[IVXLCDM]+|[0-9]+)\b[^\r\n]{0,180}|prologue|epilogue)[ \t]*\r?$",
     re.IGNORECASE | re.MULTILINE,
 )
 
