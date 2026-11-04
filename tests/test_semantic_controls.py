@@ -124,6 +124,119 @@ class SemanticControlsTests(unittest.TestCase):
         self.assertEqual(report["semantic_quality"], "UNASSESSED")
         self.assertEqual(report["classification"], "HEURISTIC_HUMAN_REVIEW_ONLY")
 
+    def test_named_single_word_image_is_not_excused_by_unrelated_every(self):
+        request = _request("At dusk the bell rang once. Every window in the harbor was blue.")
+        review = _review("The bell is a recurring motif.")
+        report = subject.audit_semantic_risks(request, review)
+        self.assertIn("possible_unfounded_recurrence", _codes(report))
+        self.assertEqual(report["semantic_quality"], "UNASSESSED")
+
+    def test_named_two_word_image_is_not_excused_by_unrelated_again(self):
+        request = _request("She smiled again. A brass bell rang once.")
+        review = _review("The brass bell is a recurring motif.")
+        self.assertIn("possible_unfounded_recurrence",
+                      _codes(subject.audit_semantic_risks(request, review)))
+
+    def test_named_subject_with_anaphoric_repeat_is_not_overflagged(self):
+        request = _request("The bell rang once. It rang again every night afterward.")
+        review = _review("The bell is a recurring motif.")
+        self.assertNotIn("possible_unfounded_recurrence",
+                         _codes(subject.audit_semantic_risks(request, review)))
+
+    def test_possessive_anaphoric_chime_is_possible_recurrence(self):
+        request = _request("The bell rang once. Its chime returned again at dusk.")
+        review = _review("The bell is a recurring motif.")
+        self.assertNotIn("possible_unfounded_recurrence",
+                         _codes(subject.audit_semantic_risks(request, review)))
+
+    def test_quoted_later_chapter_in_source_does_not_license_model_claim(self):
+        request = _request('Mara read: "In a later chapter, this changes."')
+        review = _review("As established in a later chapter, Mara is revealed to be a ghost.")
+        self.assertIn("possible_unseen_story_context",
+                      _codes(subject.audit_semantic_risks(request, review)))
+
+    def test_unseen_numbered_chapter_claim_is_flagged(self):
+        review = _review("In Chapter 27, Mara's ghost returns to the harbor.")
+        self.assertIn("possible_unseen_story_context",
+                      _codes(subject.audit_semantic_risks(_request("Mara watched the harbor."), review)))
+
+    def test_different_numbered_chapter_does_not_license_invented_revelation(self):
+        request = _request("Chapter 1. Mara stood at the harbor.")
+        review = _review("In Chapter 27, Mara is revealed as a ghost.")
+        self.assertIn("possible_unseen_story_context",
+                      _codes(subject.audit_semantic_risks(request, review)))
+
+    def test_numbered_chapter_does_not_license_generic_earlier_claim(self):
+        request = _request("Chapter 1. Mara stood at the harbor.")
+        review = _review("As established earlier, Mara is a ghost.")
+        self.assertIn("possible_unseen_story_context",
+                      _codes(subject.audit_semantic_risks(request, review)))
+
+    def test_explicitly_denied_chapter_is_not_evidence_for_that_chapter(self):
+        request = _request("This novel has no Chapter 27. Mara waited.")
+        review = _review("In Chapter 27, Mara is revealed as a ghost.")
+        self.assertIn("possible_unseen_story_context",
+                      _codes(subject.audit_semantic_risks(request, review)))
+
+    def test_same_chapter_affirmed_elsewhere_survives_one_negated_reference(self):
+        request = _request("No Chapter 27 exists in that draft. In Chapter 27 of this draft, Mara waits.")
+        review = _review("In Chapter 27 of this draft, Mara waits.")
+        self.assertNotIn("possible_unseen_story_context",
+                         _codes(subject.audit_semantic_risks(request, review)))
+
+    def test_source_explicitly_names_numbered_chapter_without_flag(self):
+        request = _request("In Chapter 27, Mara returned to the harbor.")
+        review = _review("In Chapter 27, Mara returns to the harbor.")
+        self.assertNotIn("possible_unseen_story_context",
+                         _codes(subject.audit_semantic_risks(request, review)))
+
+    def test_unrelated_hedge_in_prior_clause_does_not_excuse_motif_claim(self):
+        request = _request("At dusk the bell rang once.")
+        review = _review("The weather may improve; the bell is a recurring motif throughout the novel.")
+        codes = _codes(subject.audit_semantic_risks(request, review))
+        self.assertIn("possible_unfounded_recurrence", codes)
+        self.assertIn("possible_unseen_story_context", codes)
+
+    def test_unrelated_hedge_before_contrast_does_not_excuse_motif_claim(self):
+        request = _request("At dusk the bell rang once.")
+        review = _review("The weather might improve, but the bell is a recurring motif.")
+        self.assertIn("possible_unfounded_recurrence",
+                      _codes(subject.audit_semantic_risks(request, review)))
+
+    def test_later_hedge_after_semicolon_does_not_retroactively_excuse_claim(self):
+        request = _request("At dusk the bell rang once.")
+        review = _review("The bell is a recurring motif; this may be too confident.")
+        self.assertIn("possible_unfounded_recurrence",
+                      _codes(subject.audit_semantic_risks(request, review)))
+
+    def test_actual_hedged_motif_claim_is_not_overflagged(self):
+        review = _review("The bell might become a recurring motif if another instance appears.")
+        self.assertNotIn("possible_unfounded_recurrence",
+                         _codes(subject.audit_semantic_risks(_request("One bell rang."), review)))
+
+    def test_plausible_motif_is_a_hedged_claim(self):
+        review = _review("It seems plausible that the bell is a recurring motif.")
+        self.assertNotIn("possible_unfounded_recurrence",
+                         _codes(subject.audit_semantic_risks(_request("The bell rang once."), review)))
+
+    def test_perhaps_motif_is_not_asserted_recurrence(self):
+        request = _request("The bell rang once. Every window was blue.")
+        review = _review("Perhaps the bell is a recurring motif.")
+        self.assertNotIn("possible_unfounded_recurrence",
+                         _codes(subject.audit_semantic_risks(request, review)))
+
+    def test_if_motif_in_later_drafts_is_a_conditional_suggestion(self):
+        request = _request("The bell rang once. Every window was blue.")
+        review = _review("If the bell is a recurring motif in later drafts, strengthen it now.")
+        self.assertNotIn("possible_unfounded_recurrence",
+                         _codes(subject.audit_semantic_risks(request, review)))
+
+    def test_unrelated_if_clause_does_not_hedge_motif_as_fact(self):
+        request = _request("The bell rang once. Every window was blue.")
+        review = _review("If it rains, the bell is a recurring motif.")
+        self.assertIn("possible_unfounded_recurrence",
+                      _codes(subject.audit_semantic_risks(request, review)))
+
     def test_named_image_appearing_once_then_again_is_not_overflagged(self):
         request = _request("A blue kite appeared once, then again every morning.")
         review = _review("The recurring motif of the blue kite joins these moments.")

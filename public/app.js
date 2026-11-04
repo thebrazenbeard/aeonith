@@ -5,6 +5,7 @@ const byId = (id) => document.getElementById(id);
 const form = byId("review-form");
 const titleInput = byId("work-title");
 const manuscriptInput = byId("manuscript");
+const contextInput = byId("story-context");
 const fileInput = byId("manuscript-file");
 const importStatusNode = byId("import-status");
 const tokenInput = byId("service-token");
@@ -22,9 +23,11 @@ const errorNode = byId("error");
 const resultsNode = byId("results");
 const emptyNode = byId("reading-empty");
 const countNode = byId("character-count");
+const contextCountNode = byId("context-character-count");
 const copyButton = byId("copy-result");
 const copyStatus = byId("copy-status");
 const MAX_MANUSCRIPT_CHARS = 12000;
+const MAX_CONTEXT_CHARS = 2000;
 const MAX_IMPORT_BYTES = 65536;
 const MAX_DOCX_BYTES = 2 * 1024 * 1024;
 const DOCX_PARSE_TIMEOUT_MS = 8000;
@@ -56,6 +59,10 @@ function configureLensCeiling(maxLenses) {
 
 lensInputs.forEach((input) => input.addEventListener("change", () => {
   configureLensCeiling(lensLimitKnown ? effectiveMaxLenses : null);
+  // A different critical question is a different review configuration,
+  // even when the manuscript itself is unchanged.
+  consentInput.checked = false;
+  updateDisplayedReviewProvenance();
 }));
 configureLensCeiling(null);
 
@@ -284,13 +291,17 @@ function resetResults() {
 
 function reviewedSourceLabel(source) {
   const title = source.title.trim() || "Untitled work";
-  return `${title} · ${source.manuscript.length.toLocaleString()} characters`;
+  const contextNote = source.context ? ` · context supplied (${source.context.length.toLocaleString()} characters)` : "";
+  return `${title} · ${source.manuscript.length.toLocaleString()} characters${contextNote}`;
 }
 
 function displayedReviewIsStale() {
+  const currentLenses = lensInputs.filter((input) => input.checked).map((input) => input.value);
   return displayedReviewSource !== null &&
     (displayedReviewSource.manuscript !== manuscriptInput.value ||
-     displayedReviewSource.title !== titleInput.value);
+     displayedReviewSource.title !== titleInput.value ||
+     displayedReviewSource.context !== contextInput.value ||
+     displayedReviewSource.lenses.join("\u0000") !== currentLenses.join("\u0000"));
 }
 
 function updateDisplayedReviewProvenance() {
@@ -299,8 +310,8 @@ function updateDisplayedReviewProvenance() {
   resultsNode.setAttribute("data-source-state", stale ? "earlier-version" : "current-version");
   copyButton.textContent = stale ? "Copy prior-version critique as text" : "Copy critique as text";
   statusNode.textContent = stale ?
-    `Earlier critique (${reviewedSourceLabel(displayedReviewSource)}). This reading does not apply to the current editor version.` :
-    "A critique was returned for the current editor version. It is model interpretation, not established literary fact.";
+    `Earlier critique (${reviewedSourceLabel(displayedReviewSource)}). This reading does not apply to the current editor input or selected lenses.` :
+    "A critique was returned for the current editor input and selected lenses. It is model interpretation, not established literary fact.";
 }
 
 function showError(message) {
@@ -334,14 +345,29 @@ function renderReview(review, source) {
       review.status !== "completed" || typeof review.synthesis !== "string" ||
       !Array.isArray(review.lens_reviews) || review.lens_reviews.length === 0 ||
       !source || typeof source.title !== "string" || typeof source.manuscript !== "string" ||
+      typeof source.context !== "string" || !Array.isArray(source.lenses) ||
       review.lens_reviews.some((item) => !item || typeof item.lens !== "string" ||
         typeof item.analysis !== "string" ||
         !Object.prototype.hasOwnProperty.call(lensLabels, item.lens))) {
     throw new Error("The service returned an incomplete critique; nothing was displayed.");
   }
 
+  // A completed HTTP response is not evidence that it answered the actual
+  // request. Reject missing, duplicated, substituted or extra critical lenses
+  // before resetResults() can erase an earlier valid critique. The backend
+  // also checks coverage, but old/malformed services must fail closed here.
+  const requestedLenses = new Set(source.lenses);
+  const returnedLenses = review.lens_reviews.map((item) => item.lens);
+  if (!source.lenses.length || requestedLenses.size !== source.lenses.length ||
+      returnedLenses.length !== requestedLenses.size ||
+      new Set(returnedLenses).size !== returnedLenses.length ||
+      returnedLenses.some((lens) => !requestedLenses.has(lens))) {
+    throw new Error("The service returned a critique with incomplete or unexpected lens coverage.");
+  }
+
   resetResults();
-  displayedReviewSource = { title: source.title, manuscript: source.manuscript };
+  displayedReviewSource = { title: source.title, manuscript: source.manuscript,
+                            context: source.context, lenses: [...source.lenses] };
   const sourceLabel = reviewedSourceLabel(displayedReviewSource);
   const textual = ["Aeonith — provisional literary critique", "Source: " + sourceLabel, "", "Overall synthesis", review.synthesis, ""];
   const provenance = review.provenance;
@@ -432,6 +458,12 @@ manuscriptInput.addEventListener("input", () => {
 });
 titleInput.addEventListener("input", () => {
   manuscriptRevision += 1;
+  consentInput.checked = false;
+  updateDisplayedReviewProvenance();
+});
+contextInput.addEventListener("input", () => {
+  manuscriptRevision += 1;
+  contextCountNode.textContent = `${contextInput.value.length.toLocaleString()} / ${MAX_CONTEXT_CHARS.toLocaleString()} characters`;
   consentInput.checked = false;
   updateDisplayedReviewProvenance();
 });
@@ -731,10 +763,12 @@ form.addEventListener("submit", async (event) => {
 
   const manuscript = manuscriptInput.value;
   const title = titleInput.value;
+  const context = contextInput.value;
   const lenses = Array.from(form.querySelectorAll('input[name="lenses"]:checked'), (input) => input.value);
   const token = tokenInput.value.trim();
   if (!manuscript.trim()) return showError("Paste a manuscript or excerpt before requesting criticism.");
   if (manuscript.length > MAX_MANUSCRIPT_CHARS) return showError("Submit an excerpt of 12,000 characters or fewer.");
+  if (context.length > MAX_CONTEXT_CHARS) return showError("Story context must contain 2,000 characters or fewer.");
   if (title.length > 500) return showError("The title must contain 500 characters or fewer.");
   if (!lenses.length) return showError("Select at least one critical lens.");
   if (lenses.length > MAX_LENSES) return showError("Choose no more than fourteen lenses for a review.");
@@ -744,11 +778,12 @@ form.addEventListener("submit", async (event) => {
   const payload = {
     schema_version: "aeonith.review.v1",
     work: { title, text: manuscript },
+    context,
     lenses
   };
   // Bind any eventual response to the text actually sent, not a newer editor
   // version entered while a slow local model was still generating.
-  const submittedSource = { title, manuscript };
+  const submittedSource = { title, manuscript, context, lenses: [...lenses] };
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), 120000);
   requestInFlight = true;
@@ -804,7 +839,7 @@ copyButton.addEventListener("click", async () => {
   if (!plainTextReview) return;
   try {
     const stale = displayedReviewIsStale();
-    const sourceNote = stale ? "PRIOR MANUSCRIPT VERSION — not the current editor text\n\n" : "";
+    const sourceNote = stale ? "PRIOR REVIEW VERSION — not the current editor input or selected lenses\n\n" : "";
     await navigator.clipboard.writeText(sourceNote + plainTextReview);
     copyStatus.textContent = stale ? "Prior-version critique copied; it does not match the current editor." :
       "Critique copied as plain text.";

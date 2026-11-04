@@ -58,6 +58,15 @@
             <p id="manuscript-hint" class="field-note">Submit up to 12,000 characters of writing you own or have permission to share. Longer pastes stay in the editor but cannot be submitted until shortened. For a whole manuscript, analyze bounded excerpts rather than assuming one review knows the entire book.</p>
           </div>
 
+          <div class="field">
+            <div class="field-heading">
+              <label for="story-context">Story context / continuity notes <span class="optional">optional</span></label>
+              <span id="context-character-count" class="counter" aria-live="off">0 / 2,000 characters</span>
+            </div>
+            <textarea id="story-context" name="context" rows="4" autocomplete="off" spellcheck="false" placeholder="What should this reading know about earlier events, characters, or your intention?" aria-describedby="context-hint context-character-count"></textarea>
+            <p id="context-hint" class="field-note">Up to 2,000 characters. These notes accompany this excerpt to the local model; they are not evidence that the model has read earlier chapters. They are not saved in browser storage. Change the notes to request a new reading.</p>
+          </div>
+
           <details class="lenses-control">
             <summary>Critical lenses <span class="summary-aside">One selected by default; fourteen available</span></summary>
             <fieldset>
@@ -95,7 +104,7 @@
 
           <label class="disclosure-control" for="disclosure">
             <input id="disclosure" type="checkbox" name="disclosure" required>
-            <span>I have permission to submit this writing for analysis by the model running on the Aeonith server.</span>
+            <span>I have permission to submit this writing and any optional story context for analysis by the model running on the Aeonith server.</span>
           </label>
           <p id="provider-privacy-note" class="field-note">This zero-cost setup is for a model running on your own hardware, with no paid inference API. The browser sends your writing to the Aeonith server, but does not save manuscripts, tokens, or critiques to browser storage. The server and local model still process your writing, so check their logging and retention settings before using confidential material.</p>
 
