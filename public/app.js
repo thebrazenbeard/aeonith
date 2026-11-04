@@ -83,7 +83,46 @@ const lensLabels = Object.freeze({
   comparative: "Comparative"
 });
 
+// This is a fixed-code advisory display. Provider-supplied paths, excerpts,
+// counts, limitations and labels are never copied into the browser results.
+const semanticAdvisoryLabels = Object.freeze({
+  possible_unfounded_recurrence: "Possible unsupported recurrence or motif claim; inspect the actual passage.",
+  possible_unseen_story_context: "Possible assertion about unseen story events or context; check the supplied excerpt."
+});
+
+function semanticAdvisoryMessages(triage) {
+  const caveat = "Semantic quality not assessed. Lexical heuristic warnings are not verification or literary judgment.";
+  if (triage == null) {
+    return [caveat, "This service response contains no semantic-triage report."];
+  }
+  if (!triage || typeof triage !== "object" || Array.isArray(triage) ||
+      triage.schema_version !== "aeonith.semantic_triage.v1" ||
+      triage.semantic_quality !== "UNASSESSED" ||
+      !Array.isArray(triage.warnings) || triage.warnings.length > 90) {
+    return [caveat, "Advisory metadata was unrecognized; no clean result can be inferred."];
+  }
+  if (triage.classification !== "HEURISTIC_HUMAN_REVIEW_ONLY") {
+    return [caveat, "The limited semantic heuristic did not run or could not be interpreted."];
+  }
+  const messages = [];
+  const seen = new Set();
+  let unrecognized = false;
+  for (const warning of triage.warnings) {
+    const code = warning && typeof warning === "object" && !Array.isArray(warning) ? warning.code : null;
+    if (typeof code === "string" && Object.prototype.hasOwnProperty.call(semanticAdvisoryLabels, code)) {
+      if (!seen.has(code)) messages.push(semanticAdvisoryLabels[code]);
+      seen.add(code);
+    } else {
+      unrecognized = true;
+    }
+  }
+  if (unrecognized) messages.push("Some advisory warning codes were unrecognized and were not displayed.");
+  if (!messages.length) messages.push("No lexical warnings were raised by this limited heuristic; this is not a quality pass.");
+  return [caveat, ...messages];
+}
+
 let plainTextReview = "";
+let displayedReviewSource = null;
 let requestInFlight = false;
 let manuscriptRevision = 0;
 let latestFileSelection = 0;
@@ -235,6 +274,7 @@ function element(tag, value, className) {
 
 function resetResults() {
   plainTextReview = "";
+  displayedReviewSource = null;
   resultsNode.hidden = true;
   emptyNode.hidden = false;
   copyStatus.textContent = "";
@@ -242,10 +282,33 @@ function resetResults() {
     .forEach((id) => byId(id).replaceChildren());
 }
 
+function reviewedSourceLabel(source) {
+  const title = source.title.trim() || "Untitled work";
+  return `${title} · ${source.manuscript.length.toLocaleString()} characters`;
+}
+
+function displayedReviewIsStale() {
+  return displayedReviewSource !== null &&
+    (displayedReviewSource.manuscript !== manuscriptInput.value ||
+     displayedReviewSource.title !== titleInput.value);
+}
+
+function updateDisplayedReviewProvenance() {
+  if (!displayedReviewSource || resultsNode.hidden) return;
+  const stale = displayedReviewIsStale();
+  resultsNode.setAttribute("data-source-state", stale ? "earlier-version" : "current-version");
+  copyButton.textContent = stale ? "Copy prior-version critique as text" : "Copy critique as text";
+  statusNode.textContent = stale ?
+    `Earlier critique (${reviewedSourceLabel(displayedReviewSource)}). This reading does not apply to the current editor version.` :
+    "A critique was returned for the current editor version. It is model interpretation, not established literary fact.";
+}
+
 function showError(message) {
   errorNode.textContent = message;
   errorNode.hidden = false;
-  statusNode.textContent = "No critique was generated.";
+  statusNode.textContent = displayedReviewSource && !resultsNode.hidden ?
+    "No new critique was generated. The previous critique remains below; check its source-version label." :
+    "No critique was generated.";
 }
 
 function clearError() {
@@ -266,16 +329,24 @@ function renderList(target, heading, values, className) {
   return [heading, ...entries, ""];
 }
 
-function renderReview(review) {
+function renderReview(review, source) {
   if (!review || review.schema_version !== "aeonith.review.v1" ||
       review.status !== "completed" || typeof review.synthesis !== "string" ||
-      !Array.isArray(review.lens_reviews) || review.lens_reviews.length === 0) {
+      !Array.isArray(review.lens_reviews) || review.lens_reviews.length === 0 ||
+      !source || typeof source.title !== "string" || typeof source.manuscript !== "string" ||
+      review.lens_reviews.some((item) => !item || typeof item.lens !== "string" ||
+        typeof item.analysis !== "string" ||
+        !Object.prototype.hasOwnProperty.call(lensLabels, item.lens))) {
     throw new Error("The service returned an incomplete critique; nothing was displayed.");
   }
 
   resetResults();
-  const textual = ["Aeonith — provisional literary critique", "", "Overall synthesis", review.synthesis, ""];
+  displayedReviewSource = { title: source.title, manuscript: source.manuscript };
+  const sourceLabel = reviewedSourceLabel(displayedReviewSource);
+  const textual = ["Aeonith — provisional literary critique", "Source: " + sourceLabel, "", "Overall synthesis", review.synthesis, ""];
   const provenance = review.provenance;
+  byId("result-provenance").append(element("p", "Reviewed source: " + sourceLabel));
+  byId("result-provenance").append(element("p", "Semantic quality not assessed; advisory warnings are not verification."));
   if (provenance && typeof provenance.provider_name === "string" && provenance.provider_name) {
     byId("result-provenance").append(element("p", "Model provider: " + provenance.provider_name + ". Interpretations are not formal verification."));
   } else {
@@ -288,10 +359,6 @@ function renderReview(review) {
 
   const sectionTarget = byId("lens-results");
   review.lens_reviews.forEach((item, index) => {
-    if (!item || typeof item.lens !== "string" || typeof item.analysis !== "string" ||
-        !Object.prototype.hasOwnProperty.call(lensLabels, item.lens)) {
-      throw new Error("The service returned a malformed lens analysis; nothing was displayed.");
-    }
     const label = lensLabels[item.lens];
     const section = element("article", undefined, "result-section");
     section.append(element("h4", `${index + 1}. ${label}`));
@@ -324,6 +391,8 @@ function renderReview(review) {
   });
 
   textual.push(...renderList(byId("result-uncertainties"), "Uncertainties", review.uncertainties));
+  textual.push(...renderList(byId("result-uncertainties"), "Semantic triage — advisory only",
+    semanticAdvisoryMessages(review.semantic_triage)));
   if (Array.isArray(review.challenges)) {
     textual.push(...renderList(byId("result-challenges"), "Questions worth testing",
       review.challenges.map((entry) => (entry && typeof entry.text === "string" ? entry.text : ""))));
@@ -331,7 +400,7 @@ function renderReview(review) {
   plainTextReview = textual.join("\n");
   resultsNode.hidden = false;
   emptyNode.hidden = true;
-  statusNode.textContent = "A critique was returned. It reflects model interpretation, not established literary fact.";
+  updateDisplayedReviewProvenance();
   resultsNode.focus();
 }
 
@@ -359,8 +428,13 @@ manuscriptInput.addEventListener("input", () => {
   countNode.textContent = `${size.toLocaleString()} / ${MAX_MANUSCRIPT_CHARS.toLocaleString()} characters`;
   // Disclosure applies to this particular writing, not future edits.
   consentInput.checked = false;
+  updateDisplayedReviewProvenance();
 });
-titleInput.addEventListener("input", () => { consentInput.checked = false; });
+titleInput.addEventListener("input", () => {
+  manuscriptRevision += 1;
+  consentInput.checked = false;
+  updateDisplayedReviewProvenance();
+});
 
 function extractDocxInWorker(buffer) {
   // An untrusted compressed document is never parsed on the UI thread or
@@ -636,9 +710,8 @@ fileInput.addEventListener("change", async () => {
     }
     manuscriptInput.value = text;
     manuscriptInput.dispatchEvent(new Event("input", { bubbles: true }));
-    resetResults();
     clearError();
-    statusNode.textContent = "Imported text is ready for a new critique.";
+    if (resultsNode.hidden) statusNode.textContent = "Imported text is ready for a new critique.";
     importStatusNode.textContent = `Imported ${file.name} into the editor (${text.length.toLocaleString()} characters).`;
     manuscriptInput.focus();
   } catch (error) {
@@ -655,7 +728,6 @@ form.addEventListener("submit", async (event) => {
   // another provider request while the first is still in flight.
   if (requestInFlight) return;
   clearError();
-  resetResults();
 
   const manuscript = manuscriptInput.value;
   const title = titleInput.value;
@@ -674,6 +746,9 @@ form.addEventListener("submit", async (event) => {
     work: { title, text: manuscript },
     lenses
   };
+  // Bind any eventual response to the text actually sent, not a newer editor
+  // version entered while a slow local model was still generating.
+  const submittedSource = { title, manuscript };
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), 120000);
   requestInFlight = true;
@@ -705,8 +780,7 @@ form.addEventListener("submit", async (event) => {
       return showError(requestError(response.status, data));
     }
     if (!data || data.status !== "completed") return showError(requestError(503, data));
-    try { renderReview(data); } catch {
-      resetResults();
+    try { renderReview(data, submittedSource); } catch {
       showError("The service returned an incomplete or malformed critique. Nothing was displayed.");
     }
   } catch (error) {
@@ -729,8 +803,11 @@ copyButton.addEventListener("click", async () => {
   copyStatus.textContent = "";
   if (!plainTextReview) return;
   try {
-    await navigator.clipboard.writeText(plainTextReview);
-    copyStatus.textContent = "Critique copied as plain text.";
+    const stale = displayedReviewIsStale();
+    const sourceNote = stale ? "PRIOR MANUSCRIPT VERSION — not the current editor text\n\n" : "";
+    await navigator.clipboard.writeText(sourceNote + plainTextReview);
+    copyStatus.textContent = stale ? "Prior-version critique copied; it does not match the current editor." :
+      "Critique copied as plain text.";
   } catch {
     copyStatus.textContent = "Copying is unavailable in this browser. Select the visible text manually.";
   }

@@ -73,24 +73,24 @@ extracts those exact cases from that document. It does not use benchmark data
 to fine-tune a model or infer a literary truth score.
 
 ```bash
+# First create ../aeonith-private OUTSIDE the checkout with access restricted
+# to your account. This workflow's private-output guard rejects paths in Git.
 # Offline: creates a new source-grounded 3-case × 2-candidate × 2-repeat plan.
 python -m evaluation.literary_gate plan \
   --candidate incumbent --candidate challenger --phase screen \
-  --out screen-plan.json
+  --out ../aeonith-private/screen-plan.json
 
-# First create ../aeonith-private OUTSIDE the checkout with access restricted
-# to your account (on Windows, restrict the directory ACL explicitly).
-# Only on an owner-qualified machine with an already-running local model:
+# Only on an owner-qualified native Linux machine with an already-running local model:
 # Explicit --host-qualified is the operator's assertion, NOT an automated check.
 python -m evaluation.literary_gate run \
-  --plan screen-plan.json --candidate incumbent --model your-local-model-name \
+  --plan ../aeonith-private/screen-plan.json --candidate incumbent --model your-local-model-name \
   --url http://127.0.0.1:5001/v1/chat/completions \
   --lane production --host-qualified --out ../aeonith-private/incumbent.jsonl
 # Repeat run with the other candidate and its own local model/runner.
 
 # Offline: every scheduled slot counts even when its attempt failed or is missing.
 python -m evaluation.literary_gate account \
-  --plan screen-plan.json --first ../aeonith-private/incumbent.jsonl \
+  --plan ../aeonith-private/screen-plan.json --first ../aeonith-private/incumbent.jsonl \
   --second ../aeonith-private/challenger.jsonl --out ../aeonith-private/attrition.json
 
 # Offline: only structurally valid paired responses become blind displays.
@@ -98,7 +98,7 @@ python -m evaluation.literary_gate account \
 # critique prose are quarantined, with counts retained in the denominator.
 # Keep the assignment key in a different access-controlled directory.
 python -m evaluation.literary_gate blind \
-  --plan screen-plan.json --first ../aeonith-private/incumbent.jsonl \
+  --plan ../aeonith-private/screen-plan.json --first ../aeonith-private/incumbent.jsonl \
   --second ../aeonith-private/challenger.jsonl --seed study-seed-v1 \
   --out ../aeonith-private/reviewer-displays.json \
   --key-out ../aeonith-private/private-assignment-keys.json
