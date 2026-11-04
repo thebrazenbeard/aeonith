@@ -7,3 +7,5 @@ wheelhouse/
 build/
 .pytest_cache/
 .coverage
+config.bat
+node_modules
