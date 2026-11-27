@@ -59,9 +59,10 @@ def main(argv: list[str] | None = None) -> int:
     try:
         request = make_request(_read_text(args.input), title=args.title)
         serialized = json.dumps(request, ensure_ascii=False, separators=(",", ":")) + "\n"
-        if len(serialized.encode("utf-8")) > MAX_OUTPUT_BYTES:
+        payload = serialized.encode("utf-8")
+        if len(payload) > MAX_OUTPUT_BYTES:
             raise TextInputError("review request exceeds CLI's 1 MB limit")
-        sys.stdout.write(serialized)
+        sys.stdout.buffer.write(payload)
     except (OSError, TextInputError, UnicodeError):
         print("Could not prepare Aeonith request: invalid UTF-8 or input limits", file=sys.stderr)
         return 2
